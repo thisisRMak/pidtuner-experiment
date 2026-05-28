@@ -1,0 +1,337 @@
+"""Closed-loop simulation and performance metrics.
+
+The PID is implemented in parallel form with:
+  - Conditional-integration anti-windup (integral only accumulates when
+    the unsaturated command is in [u_min, u_max]).
+  - First-order derivative filter with bandwidth N/Td (default N = 10):
+    the pure D term is replaced by Kd*s / (1 + (Kd/(N*Kp))*s). Without
+    this, a step setpoint hits the controller with an infinite derivative
+    and the response is dominated by the actuator spike rather than the
+    PID design.
+  - Closed-loop stability check via the characteristic equation roots
+    of 1 + C(s)*G(s) (for plants without dead time; for plants with
+    dead time we approximate L with a 2nd-order Pade and check that).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from plant import TransferFunction, poly_mul, poly_add
+from tune import PIDGains
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PID controller object
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class PIDState:
+    integral: float = 0.0
+    d_filt: float = 0.0
+    prev_pv: float = 0.0
+
+
+def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=10.0):
+    """One PID timestep with anti-windup + derivative filter.
+
+    Derivative is applied to -pv (not to error) to avoid the "derivative
+    kick" on setpoint changes — a standard practice in process control.
+    """
+    e = sp - pv
+    # Filtered derivative of -pv (avoids derivative kick on SP step)
+    # tau_d = Td/N is the filter time constant; with parallel-form Kd = Kp*Td,
+    # tau_d = Kd/(N*Kp). Guard against Kp=0.
+    if abs(gains.Kp) > 1e-12 and abs(gains.Kd) > 1e-12 and N > 0:
+        tau_d = gains.Kd / (N * abs(gains.Kp))
+    else:
+        tau_d = 0.0
+    if tau_d > 0:
+        alpha = dt / (tau_d + dt)  # first-order LPF coefficient
+        dpv = (pv - state.prev_pv) / dt if dt > 0 else 0.0
+        state.d_filt = state.d_filt + alpha * (dpv - state.d_filt)
+        d_term = -gains.Kd * state.d_filt
+    else:
+        # Unfiltered: derivative of error (still kicks on SP step)
+        de = (e - (sp - state.prev_pv)) / dt if dt > 0 else 0.0
+        d_term = gains.Kd * de
+
+    trial_int = state.integral + e * dt
+    u_unsat = gains.Kp * e + gains.Ki * trial_int + d_term
+    # Conditional-integration anti-windup
+    if u_min <= u_unsat <= u_max:
+        state.integral = trial_int
+    u = float(np.clip(u_unsat, u_min, u_max))
+    state.prev_pv = pv
+    return u
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Closed-loop stability check
+# ─────────────────────────────────────────────────────────────────────────────
+# Uses a 2nd-order Pade approximation for the dead time to form a finite-
+# dimensional characteristic polynomial. The check is conservative —
+# Pade can fail to flag instabilities at very high frequencies — but in
+# practice it catches the cases that matter for this app.
+
+def _pade_2nd(L):
+    """2nd-order Pade for exp(-Ls): (12 - 6Ls + L²s²) / (12 + 6Ls + L²s²)."""
+    if L <= 0:
+        return np.array([1.0]), np.array([1.0])
+    num = np.array([L * L, -6.0 * L, 12.0])
+    den = np.array([L * L, 6.0 * L, 12.0])
+    return num, den
+
+
+def closed_loop_poles(plant, gains):
+    """Roots of  s*den_G + num_G * (Kd*s² + Kp*s + Ki) = 0,
+    with dead time approximated by 2nd-order Pade.
+
+    The characteristic polynomial of the unity-feedback loop is:
+        1 + C(s) * G(s) * e^(-Ls) = 0
+    Multiplied out:
+        s * den_G * den_pade + num_G * num_pade * (Kd*s² + Kp*s + Ki) = 0
+    """
+    nC = np.array([gains.Kd, gains.Kp, gains.Ki])  # Kd*s² + Kp*s + Ki
+    dC = np.array([1.0, 0.0])                       # s
+    nP, dP = _pade_2nd(plant.L)
+    # 1 + (nC/dC) * (num/den) * (nP/dP) = 0
+    # => dC*den*dP + nC*num*nP = 0
+    char = poly_add(
+        poly_mul(poly_mul(dC, plant.den), dP),
+        poly_mul(poly_mul(nC, plant.num), nP),
+    )
+    return np.roots(char)
+
+
+def is_closed_loop_stable(plant, gains):
+    poles = closed_loop_poles(plant, gains)
+    if len(poles) == 0:
+        return True
+    return bool(np.all(np.real(poles) < -1e-9))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Closed-loop simulation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class ClosedLoopResult:
+    t: np.ndarray
+    sp: np.ndarray
+    y: np.ndarray
+    u: np.ndarray
+    e: np.ndarray
+    stable: bool
+    metrics: dict
+    sp_kind: str = "step"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Setpoint waveform generators
+# ─────────────────────────────────────────────────────────────────────────────
+# Step:    sp(t) = A for t > 0
+# Ramp:    sp(t) = (A/t_end) * t — finishes at amplitude A at the end
+# Pulse:   sp(t) = A for t in [t_end/4, t_end/2], 0 elsewhere
+# Custom:  pass your own sp array to simulate_closed_loop directly
+
+def make_setpoint(t, kind, amplitude=1.0):
+    kind = kind.lower()
+    sp = np.zeros_like(t, dtype=float)
+    if kind == "step":
+        sp[:] = amplitude
+        sp[0] = 0.0  # discrete jump at t=0+
+    elif kind == "ramp":
+        # Linear ramp from 0 to amplitude over the full duration
+        t_end = float(t[-1]) if len(t) else 1.0
+        if t_end > 0:
+            sp[:] = amplitude * (t / t_end)
+        else:
+            sp[:] = 0.0
+    elif kind == "pulse":
+        t_end = float(t[-1]) if len(t) else 1.0
+        mask = (t >= 0.25 * t_end) & (t <= 0.50 * t_end)
+        sp[mask] = amplitude
+    else:
+        raise ValueError(f"unknown setpoint kind: {kind!r}")
+    return sp
+
+
+def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
+                         setpoint_kind="step", sp_array=None,
+                         u_min=-1e6, u_max=1e6, N=10.0, use_d_filter=True):
+    """Simulate the unity-feedback loop with PID controller.
+
+    Parameters
+    ----------
+    plant         : TransferFunction
+    gains         : PIDGains
+    t_end         : final time (None → auto from plant dynamics)
+    setpoint      : amplitude for step/ramp/pulse generators
+    setpoint_kind : 'step' | 'ramp' | 'pulse'  (ignored if sp_array given)
+    sp_array      : if provided, override the generator and use this array
+    """
+    dt = plant.auto_dt()
+    if t_end is None:
+        # Pick duration from the slower of (open-loop slow mode, dead time)
+        poles = plant.poles()
+        real_neg = np.real(poles)[np.real(poles) < -1e-9]
+        slow = 1.0 / np.min(np.abs(real_neg)) if len(real_neg) else 10.0
+        t_end = max(15.0 * slow + 5.0 * plant.L, 20.0)
+
+    t = np.arange(0.0, t_end + dt, dt)
+
+    if sp_array is not None:
+        sp = np.asarray(sp_array, dtype=float)
+        if len(sp) != len(t):
+            raise ValueError(
+                f"sp_array length {len(sp)} doesn't match time vector "
+                f"length {len(t)} (dt={dt:g}, t_end={t_end:g})"
+            )
+        kind = "custom"
+    else:
+        sp = make_setpoint(t, setpoint_kind, amplitude=float(setpoint))
+        kind = setpoint_kind
+
+    # Discretize plant
+    Ad, Bd, C, D = plant.discretize(dt)
+    nx = Ad.shape[0]
+    Bd_flat = Bd.flatten() if nx else np.zeros(0)
+    d_scalar = float(np.atleast_2d(D).flatten()[0])
+    delay = int(round(plant.L / dt))
+
+    # PID state
+    state = PIDState()
+    if not use_d_filter:
+        N_eff = 0.0
+    else:
+        N_eff = N
+
+    x = np.zeros(nx)
+    y = np.zeros(len(t))
+    u = np.zeros(len(t))
+
+    for i in range(1, len(t)):
+        u[i] = pid_step(gains, state, sp[i], y[i - 1], dt, u_min, u_max, N=N_eff)
+        j = i - 1 - delay
+        u_eff = u[j] if j >= 0 else 0.0
+        if nx:
+            x = Ad @ x + Bd_flat * u_eff
+            y[i] = float((C @ x).item()) + d_scalar * u_eff
+        else:
+            y[i] = d_scalar * u_eff
+
+    e = sp - y
+
+    stable = is_closed_loop_stable(plant, gains)
+    # Also flag clearly divergent simulations
+    if not np.all(np.isfinite(y)) or np.max(np.abs(y)) > 1e6:
+        stable = False
+
+    m = compute_metrics(t, sp, y, e, u, sp_kind=kind)
+    return ClosedLoopResult(t=t, sp=sp, y=y, u=u, e=e,
+                            stable=stable, metrics=m, sp_kind=kind)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Performance metrics
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_metrics(t, sp, y, e, u, sp_kind="step"):
+    """Compute classic step-response metrics, plus kind-aware extras.
+
+    Always computed:
+      - IAE          : ∫|e| dt   (lower = better)
+      - ITAE         : ∫ t·|e| dt   (penalizes late error)
+      - |u|_peak, u_rms : control effort
+
+    Step (sp tends to a constant final value):
+      - Overshoot %, Rise (10–90%), Settling (2%)
+
+    Ramp (sp = const·t):
+      - ss_error     : tracking error e(t) approached at large t.
+                       For a type-1 (one integrator) loop this is finite
+                       and equals (ramp slope)/Kv. For type-2+ it tends
+                       to zero.
+
+    Pulse (returns to 0 after a window):
+      - peak_error   : max |e| during the pulse (analog of overshoot)
+    """
+    base = {
+        "IAE": float("inf"), "ITAE": float("inf"),
+        "u_peak": float("inf"), "u_rms": float("inf"),
+        "unstable": True, "sp_kind": sp_kind,
+    }
+    if not np.all(np.isfinite(y)) or not np.all(np.isfinite(u)):
+        return base
+
+    iae = float(np.trapezoid(np.abs(e), t))
+    itae = float(np.trapezoid(np.abs(e) * t, t))
+    out = {
+        "IAE": iae, "ITAE": itae,
+        "u_peak": float(np.max(np.abs(u))),
+        "u_rms": float(np.sqrt(np.mean(u ** 2))),
+        "unstable": False,
+        "sp_kind": sp_kind,
+    }
+
+    if sp_kind == "step":
+        final = float(sp[-1])
+        if abs(final) > 1e-9:
+            out["Overshoot"] = max(0.0,
+                                   (float(np.max(y)) - final) / abs(final) * 100.0)
+        else:
+            out["Overshoot"] = 0.0
+
+        if abs(final) > 1e-9:
+            try:
+                t10_mask = (np.sign(final) * y) >= (0.10 * final)
+                t90_mask = (np.sign(final) * y) >= (0.90 * final)
+                i10 = int(np.argmax(t10_mask)) if t10_mask.any() else -1
+                i90 = int(np.argmax(t90_mask)) if t90_mask.any() else -1
+                out["Rise"] = (float(t[i90] - t[i10])
+                                if i10 >= 0 and i90 > i10 else float("nan"))
+            except Exception:
+                out["Rise"] = float("nan")
+        else:
+            out["Rise"] = float("nan")
+
+        band = 0.02 * abs(final) if abs(final) > 1e-9 else 0.02
+        out_of_band = np.where(np.abs(y - final) > band)[0]
+        out["Settling"] = float(t[out_of_band[-1]]) if len(out_of_band) else float(t[0])
+
+    elif sp_kind == "ramp":
+        # Steady-state error: average over the last 10% of the trace.
+        n_tail = max(1, int(0.1 * len(e)))
+        out["ss_error"] = float(np.mean(e[-n_tail:]))
+        out["max_error"] = float(np.max(np.abs(e)))
+
+    elif sp_kind == "pulse":
+        out["peak_error"] = float(np.max(np.abs(e)))
+        # Residual after pulse ends — how well controller returns to 0
+        n_tail = max(1, int(0.1 * len(y)))
+        out["final_residual"] = float(np.mean(np.abs(y[-n_tail:])))
+
+    return out
+
+
+def format_metrics(m):
+    if m.get("unstable"):
+        return "UNSTABLE (diverging response)"
+    common = (f"IAE = {m['IAE']:.3g},  ITAE = {m['ITAE']:.3g}\n"
+              f"|u|_peak = {m['u_peak']:.3g},  u_rms = {m['u_rms']:.3g}")
+    kind = m.get("sp_kind", "step")
+    if kind == "step":
+        rise_str = (f"{m['Rise']:.3g}" if np.isfinite(m.get("Rise", np.nan)) else "—")
+        return (f"Overshoot = {m['Overshoot']:.2f} %,  "
+                f"Rise (10→90%) = {rise_str} s,  "
+                f"Settle (2%) = {m['Settling']:.3g} s\n" + common)
+    if kind == "ramp":
+        return (f"ss tracking error = {m['ss_error']:.4g},  "
+                f"max |e| = {m['max_error']:.4g}\n" + common)
+    if kind == "pulse":
+        return (f"peak |e| = {m['peak_error']:.4g},  "
+                f"residual after pulse = {m['final_residual']:.4g}\n" + common)
+    return common

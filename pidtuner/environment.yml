@@ -1,0 +1,19 @@
+# Conda environment for the PID Tuner.
+#
+# Create:    conda env create -f environment.yml
+# Activate:  conda activate pidtuner
+# Run app:   python app.py
+# Run tests: python test_pid_tuner.py
+#
+# Tkinter is bundled with conda's Python build on all platforms — no
+# separate install needed (unlike system Python on Linux, where you'd
+# need apt install python3-tk).
+
+name: pidtuner
+channels:
+  - defaults
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - matplotlib
