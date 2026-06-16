@@ -1,10 +1,9 @@
 name: Build desktop executables
 
-# IMPORTANT: this file must live at  REPO/.github/workflows/build.yml
-# (repo root). The application code lives in the REPO/pidtuner/ subfolder, so
-# every build/test/package step runs with working-directory: pidtuner, and the
-# finished .zip is written up to the repo root so the upload/release steps
-# (which are root-relative) can find it.
+# Location: this file MUST live at  REPO/.github/workflows/build.yml  (repo root).
+# Application code is in REPO/pidtuner/ (build steps use working-directory: pidtuner);
+# documentation PDF is committed at REPO/docs/PIDTuner_Methods_Reference.pdf and
+# attached to the Release by the separate `docs` job below.
 
 on:
   push:
@@ -13,11 +12,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write            # needed to create/attach Releases on tags
+  contents: write              # needed to create/attach Releases on tags
 
 defaults:
   run:
-    working-directory: pidtuner   # all `run:` steps execute inside pidtuner/
+    working-directory: pidtuner   # affects `run:` steps only (not `uses:` actions)
 
 jobs:
   build:
@@ -29,16 +28,14 @@ jobs:
         include:
           - os: windows-latest
             asset: PIDTuner-windows.zip
-          - os: macos-13          # Intel
-            asset: PIDTuner-macos-intel.zip
-          - os: macos-14          # Apple Silicon
+          - os: macos-14            # Apple Silicon (arm64)
             asset: PIDTuner-macos-arm64.zip
-          - os: ubuntu-22.04
+          - os: ubuntu-22.04        # GLIBC 2.35 floor for broad Linux compat
             asset: PIDTuner-linux.zip
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4         # clones to repo root (GITHUB_WORKSPACE)
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -83,11 +80,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}       # root-relative; the zip was written there
-          retention-days: 30
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
 
       - name: Attach to Release (tags only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset }}
+
+  docs:
+    name: Attach documentation
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Attach PDF to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: docs/PIDTuner_Methods_Reference.pdf

@@ -170,7 +170,16 @@ class PIDTunerApp:
     def __init__(self, root):
         self.root = root
         root.title("PID Tuner — ENGR105")
-        root.geometry("1450x880")
+        # Size relative to the actual screen (not a fixed default) so it opens
+        # appropriately large on any monitor. Capped width for ultrawides;
+        # centered horizontally and placed near the top.
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        w = min(int(sw * 0.88), 2400)
+        h = int(sh * 0.88)
+        x = max((sw - w) // 2, 0)
+        y = max((sh - h) // 6, 0)
+        root.geometry(f"{w}x{h}+{x}+{y}")
+        root.minsize(1100, 700)
 
         # Session state
         self.tuned = []            # list of TunedEntry
@@ -538,7 +547,7 @@ class PIDTunerApp:
         list_frame = ttk.Frame(rf)
         list_frame.pack(fill="both", expand=True)
 
-        self.tuned_canvas = tk.Canvas(list_frame, height=160, highlightthickness=0)
+        self.tuned_canvas = tk.Canvas(list_frame, height=360, highlightthickness=0)
         scroll = ttk.Scrollbar(list_frame, orient="vertical",
                                command=self.tuned_canvas.yview)
         self.tuned_canvas.configure(yscrollcommand=scroll.set)
@@ -555,8 +564,12 @@ class PIDTunerApp:
         # Buttons
         btn_frame = ttk.Frame(rf)
         btn_frame.pack(fill="x", pady=(4, 0))
+        ttk.Button(btn_frame, text="Select all",
+                   command=self.select_all_tuned).pack(side="left")
+        ttk.Button(btn_frame, text="Deselect all",
+                   command=self.deselect_all_tuned).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Clear all",
-                   command=self.clear_tuned).pack(side="left")
+                   command=self.clear_tuned).pack(side="left", padx=(12, 0))
         ttk.Button(btn_frame, text="Remove unchecked",
                    command=self.remove_unchecked).pack(side="left", padx=4)
 
@@ -1050,6 +1063,19 @@ class PIDTunerApp:
     def _toggle_entry(self, entry, var):
         entry.enabled = var.get()
         self._refresh_open_tabs()
+
+    def _set_all_enabled(self, value):
+        for e in self.tuned:
+            e.enabled = value
+            if getattr(e, "_cb_var", None) is not None:
+                e._cb_var.set(value)      # sync the visible checkbox
+        self._refresh_open_tabs()
+
+    def select_all_tuned(self):
+        self._set_all_enabled(True)
+
+    def deselect_all_tuned(self):
+        self._set_all_enabled(False)
 
     def clear_tuned(self):
         self.tuned.clear()
