@@ -29,9 +29,11 @@ jobs:
         include:
           - os: windows-latest
             asset: PIDTuner-windows.zip
-          - os: macos-latest
-            asset: PIDTuner-macos.zip
-          - os: ubuntu-latest
+          - os: macos-13          # Intel
+            asset: PIDTuner-macos-intel.zip
+          - os: macos-14          # Apple Silicon
+            asset: PIDTuner-macos-arm64.zip
+          - os: ubuntu-22.04
             asset: PIDTuner-linux.zip
 
     steps:
