@@ -42,6 +42,11 @@ from tune import (
     tune_pole_cancellation, select_slowest_stable_poles,
     tune_zn_method_1, tune_zn_method_2,
     tune_amigo, tune_simc, tune_boyd,
+    tune_cohen_coon, tune_chr, tune_tyreus_luyben,
+)
+from compare import (
+    compare_all_methods, metric_row, normalize_column,
+    TABLE_METRICS, METRIC_DIRECTION,
 )
 from simulate import simulate_closed_loop, format_metrics
 
@@ -53,23 +58,108 @@ METHODS = [
     "4. AMIGO (FOPDT)",
     "5. SIMC (FOPDT)",
     "6. Boyd (convex-concave)",
+    "7. Cohen–Coon (FOPDT)",
+    "8. Chien–Hrones–Reswick (FOPDT)",
+    "9. Tyreus–Luyben (ultimate gain)",
 ]
 
 # Color palette for overlay plotting — distinguishable, colorblind-friendly
 PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-           "#ff7f0e", "#17becf", "#8c564b", "#e377c2"]
+           "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
+           "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
 
 
 class TunedEntry:
     """One tuned controller, kept in the session for overlay plotting."""
 
-    def __init__(self, label, gains, result, sim):
+    def __init__(self, label, gains, result=None, sim=None):
         self.label = label       # short string for legend
         self.gains = gains       # PIDGains
-        self.result = result     # TuningResult (full metadata)
-        self.sim = sim           # ClosedLoopResult
+        self.result = result     # TuningResult (full metadata) or None
+        self.sim = sim           # ClosedLoopResult or None
         self.color = None        # assigned at plot time
         self.enabled = True      # checkbox state in the tuned list
+        self.mrow = None         # cached comparison metric row (compare.metric_row)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A ttk.Notebook whose tabs each carry an "×" close button.
+# Standard recipe: a custom "close" element + layout, with runtime-drawn images.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ClosableNotebook(ttk.Notebook):
+    _style_ready = False
+    _imgs = {}
+
+    def __init__(self, master=None, on_closed=None, **kw):
+        if not ClosableNotebook._style_ready:
+            self._build_style()
+            ClosableNotebook._style_ready = True
+        kw["style"] = "Closable.TNotebook"
+        super().__init__(master, **kw)
+        self._on_closed = on_closed
+        self._pressed_index = None
+        self.bind("<ButtonPress-1>", self._on_press, True)
+        self.bind("<ButtonRelease-1>", self._on_release, True)
+
+    @classmethod
+    def _make_x(cls, name, color):
+        img = tk.PhotoImage(name, width=14, height=14)
+        img.blank()  # fully transparent
+        for i in range(3, 11):
+            for w in (-1, 0, 1):
+                img.put(color, (i + w, i))
+                img.put(color, (i + w, 13 - i))
+        cls._imgs[name] = img  # keep a reference alive
+        return img
+
+    @classmethod
+    def _build_style(cls):
+        cls._make_x("ctab_close", "#888888")
+        cls._make_x("ctab_close_active", "#d62728")
+        style = ttk.Style()
+        try:
+            style.element_create(
+                "ctab.close", "image", "ctab_close",
+                ("active", "ctab_close_active"), border=6, sticky="")
+        except tk.TclError:
+            pass  # already created in a prior instance
+        style.layout("Closable.TNotebook", [
+            ("Closable.TNotebook.client", {"sticky": "nswe"})])
+        style.layout("Closable.TNotebook.Tab", [
+            ("Closable.TNotebook.tab", {"sticky": "nswe", "children": [
+                ("Closable.TNotebook.padding", {
+                    "side": "top", "sticky": "nswe", "children": [
+                        ("Closable.TNotebook.label", {"side": "left", "sticky": ""}),
+                        ("ctab.close", {"side": "left", "sticky": ""}),
+                    ]})
+            ]})
+        ])
+
+    def _on_press(self, event):
+        elem = self.identify(event.x, event.y)
+        if "close" in elem:
+            try:
+                self._pressed_index = self.index("@%d,%d" % (event.x, event.y))
+            except tk.TclError:
+                self._pressed_index = None
+            self.state(["pressed"])
+            return "break"
+
+    def _on_release(self, event):
+        if not self.instate(["pressed"]):
+            return
+        elem = self.identify(event.x, event.y)
+        try:
+            index = self.index("@%d,%d" % (event.x, event.y))
+        except tk.TclError:
+            index = None
+        if "close" in elem and index is not None and index == self._pressed_index:
+            self.forget(index)
+            if self._on_closed:
+                self._on_closed()
+        self.state(["!pressed"])
+        self._pressed_index = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,28 +227,36 @@ class PIDTunerApp:
         left_canvas.bind_all("<Button-5>", _on_mousewheel)
 
         self._build_plant_frame(left)
+        self._build_compare_frame(left)
         self._build_method_frame(left)
         self._build_sim_frame(left)
         self._build_results_frame(left)
 
-        # === Right column: plots =============================================
+        # === Right column: tabbed output (empty until first tune/compare) ====
         right = ttk.Frame(main)
         right.pack(side="left", fill="both", expand=True)
 
-        self.fig = Figure(figsize=(9, 8), dpi=100)
-        self.ax_y = self.fig.add_subplot(311)
-        self.ax_u = self.fig.add_subplot(312, sharex=self.ax_y)
-        self.ax_e = self.fig.add_subplot(313, sharex=self.ax_y)
-        self.ax_y.set_ylabel("PV / SP")
-        self.ax_u.set_ylabel("control u(t)")
-        self.ax_e.set_ylabel("error e(t)")
-        self.ax_e.set_xlabel("time (s)")
-        for ax in (self.ax_y, self.ax_u, self.ax_e):
-            ax.grid(True, alpha=0.3)
-        self.fig.tight_layout()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right)
+        topbar = ttk.Frame(right)
+        topbar.pack(fill="x")
+        ttk.Label(topbar, text="Output", font=("TkDefaultFont", 10, "bold")
+                  ).pack(side="left", padx=4, pady=2)
+        ttk.Button(topbar, text="Close all tabs",
+                   command=self._close_all_tabs).pack(side="right", padx=2)
+
+        self.right_nb = ClosableNotebook(right, on_closed=self._reconcile_tabs)
+        self.right_nb.pack(fill="both", expand=True)
+
+        self.right_hint = ttk.Label(
+            right, foreground="#888", anchor="center",
+            text="Tune a method (or Compare all methods) to populate plots, "
+                 "heatmap, and radar.")
+        self.right_hint.pack(fill="x", pady=6)
+
+        # Tab handles (None when the tab is closed / not yet created)
+        self.plots_tab = None
+        self.heatmap_tab = None
+        self.radar_tab = None
+        self.fig = self.ax_y = self.ax_u = self.ax_e = self.canvas = None
 
         # === Status bar ======================================================
         self.status = tk.StringVar(value="Ready. Define a plant, pick a method, tune.")
@@ -218,8 +316,20 @@ class PIDTunerApp:
         self.plant_info.pack(anchor="w", pady=(4, 0))
 
     # ── method frame ────────────────────────────────────────────────────────
+    def _build_compare_frame(self, parent):
+        cf = ttk.LabelFrame(parent, text="Compare all methods", padding=6)
+        cf.pack(fill="x", pady=6)
+        ttk.Button(cf, text="⊞  Compare all methods",
+                   command=self.on_compare_all).pack(fill="x")
+        ttk.Label(cf,
+                  text="Tunes every applicable method at once and overlays them "
+                       "on the plots, plus a heatmap and radar. Each appears in "
+                       "the session list below — untick any to declutter.",
+                  foreground="#666", justify="left", wraplength=420,
+                  font=("TkDefaultFont", 8)).pack(anchor="w", pady=(3, 0))
+
     def _build_method_frame(self, parent):
-        mf = ttk.LabelFrame(parent, text="Tuning method", padding=6)
+        mf = ttk.LabelFrame(parent, text="Tune one method at a time", padding=6)
         mf.pack(fill="x", pady=6)
 
         ttk.Label(mf, text="Method").pack(anchor="w")
@@ -310,6 +420,59 @@ class PIDTunerApp:
         ttk.Label(self.boyd_frame,
                   text="Smaller Ms/Mt → more robust, less aggressive.\n"
                        "Typical range 1.2 – 2.0.",
+                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
+                  ).pack(anchor="w", pady=(2, 0))
+
+        # ── Cohen–Coon args ─────────────────────────────────────────────────
+        self.cc_frame = ttk.Frame(self.args_frame)
+        ttk.Label(self.cc_frame,
+                  text="Reaction-curve rules with a dead-time correction.\n"
+                       "Better than ZN-I on delay-dominant plants.",
+                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
+                  ).pack(anchor="w")
+        self.cc_step = tk.StringVar(value="1.0")
+        self.cc_noise = tk.StringVar(value="0.0")
+        self._labeled_entry(self.cc_frame, "step amplitude", self.cc_step, width=12)
+        self._labeled_entry(self.cc_frame, "noise σ", self.cc_noise, width=12)
+
+        # ── CHR args ────────────────────────────────────────────────────────
+        self.chr_frame = ttk.Frame(self.args_frame)
+        ttk.Label(self.chr_frame, text="Design intent:").pack(anchor="w")
+        self.chr_response = tk.StringVar(value="setpoint")
+        ttk.Radiobutton(self.chr_frame, text="Setpoint tracking (servo)",
+                        variable=self.chr_response, value="setpoint").pack(anchor="w")
+        ttk.Radiobutton(self.chr_frame, text="Load rejection (regulator)",
+                        variable=self.chr_response, value="load").pack(anchor="w")
+        ttk.Label(self.chr_frame, text="Overshoot target:").pack(anchor="w", pady=(4, 0))
+        self.chr_overshoot = tk.StringVar(value="0")
+        ttk.Radiobutton(self.chr_frame, text="0% (aperiodic, most damped)",
+                        variable=self.chr_overshoot, value="0").pack(anchor="w")
+        ttk.Radiobutton(self.chr_frame, text="20% (quicker, some overshoot)",
+                        variable=self.chr_overshoot, value="20").pack(anchor="w")
+        ttk.Label(self.chr_frame,
+                  text="Note: the 0%/20% target is for the nominal FOPDT model;\n"
+                       "realized overshoot on the true plant may differ.",
+                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
+                  ).pack(anchor="w", pady=(2, 0))
+
+        # ── Tyreus–Luyben args ──────────────────────────────────────────────
+        self.tl_frame = ttk.Frame(self.args_frame)
+        ttk.Label(self.tl_frame, text="How to obtain Ku, Pu:").pack(anchor="w")
+        self.tl_source = tk.StringVar(value="bode")
+        ttk.Radiobutton(self.tl_frame, text="Analytical (Bode crossover of −180°)",
+                        variable=self.tl_source, value="bode").pack(anchor="w")
+        ttk.Radiobutton(self.tl_frame, text="Simulated relay-feedback test",
+                        variable=self.tl_source, value="relay").pack(anchor="w")
+        self.tl_relay_h = tk.StringVar(value="1.0")
+        self.tl_relay_T = tk.StringVar(value="80.0")
+        self._labeled_entry(self.tl_frame, "relay h", self.tl_relay_h, width=12)
+        self._labeled_entry(self.tl_frame, "relay duration", self.tl_relay_T, width=12)
+        self.tl_pi = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.tl_frame, text="PI only (no derivative)",
+                        variable=self.tl_pi).pack(anchor="w", pady=(2, 0))
+        ttk.Label(self.tl_frame,
+                  text="Conservative cousin of ZN-II: larger margins, less\n"
+                       "overshoot. Already detuned — no 'Halve gains' needed.",
                   foreground="#666", justify="left", font=("TkDefaultFont", 8)
                   ).pack(anchor="w", pady=(2, 0))
 
@@ -413,7 +576,8 @@ class PIDTunerApp:
 
     def _on_method_change(self):
         for frame in (self.pc_frame, self.zn1_frame, self.zn2_frame,
-                      self.amigo_frame, self.simc_frame, self.boyd_frame):
+                      self.amigo_frame, self.simc_frame, self.boyd_frame,
+                      self.cc_frame, self.chr_frame, self.tl_frame):
             frame.pack_forget()
         m = self.method_var.get()
         if m.startswith("1."):
@@ -430,6 +594,12 @@ class PIDTunerApp:
             self.simc_frame.pack(fill="x")
         elif m.startswith("6."):
             self.boyd_frame.pack(fill="x")
+        elif m.startswith("7."):
+            self.cc_frame.pack(fill="x")
+        elif m.startswith("8."):
+            self.chr_frame.pack(fill="x")
+        elif m.startswith("9."):
+            self.tl_frame.pack(fill="x")
 
     def _update_pc_state(self):
         enabled = self.pc_mode.get() == "manual"
@@ -507,6 +677,12 @@ class PIDTunerApp:
                 result = self._tune_simc(plant)
             elif method.startswith("6."):
                 result = self._tune_boyd(plant)
+            elif method.startswith("7."):
+                result = self._tune_cohen_coon(plant)
+            elif method.startswith("8."):
+                result = self._tune_chr(plant)
+            elif method.startswith("9."):
+                result = self._tune_tyreus_luyben(plant)
             else:
                 raise RuntimeError(f"unknown method {method}")
         except Exception as exc:
@@ -528,10 +704,11 @@ class PIDTunerApp:
         label = self._next_label(method, halved=self.halve_gains_var.get())
         entry = TunedEntry(label=label, gains=result.gains,
                            result=result, sim=sim)
+        entry.mrow = metric_row(plant, label, result.gains)
         self.tuned.append(entry)
         self._refresh_tuned_list()
         self._show_last_result(result, sim)
-        self._redraw_plots()
+        self._open_all_tabs_and_draw()
         self.status.set(f"Tuned: {label}  ({len(self.tuned)} in session)")
 
     # ── method-specific tune handlers ──────────────────────────────────────
@@ -617,6 +794,203 @@ class PIDTunerApp:
             seed = None
         return tune_boyd(plant, Ms=Ms, Mt=Mt, seed_gains=seed)
 
+    def _tune_cohen_coon(self, plant):
+        step = float(self.cc_step.get())
+        noise = float(self.cc_noise.get())
+        _, _, _, _, fopdt = run_step_test(plant, step_amp=step,
+                                          noise_sigma=noise, seed=0)
+        self.identified = fopdt
+        return tune_cohen_coon(fopdt)
+
+    def _tune_chr(self, plant):
+        _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
+                                          noise_sigma=0.0, seed=0)
+        self.identified = fopdt
+        return tune_chr(fopdt,
+                        response=self.chr_response.get(),
+                        overshoot=int(self.chr_overshoot.get()))
+
+    def _tune_tyreus_luyben(self, plant):
+        if self.tl_source.get() == "bode":
+            Ku, Pu, _ = find_ultimate_gain(plant)
+        else:
+            h = float(self.tl_relay_h.get())
+            T = float(self.tl_relay_T.get())
+            Ku, Pu, _, _, _ = run_relay_test(plant, t_max=T, h=h)
+        return tune_tyreus_luyben(Ku, Pu, use_derivative=not self.tl_pi.get())
+
+    # ── compare all methods ─────────────────────────────────────────────────
+    def on_compare_all(self):
+        try:
+            plant = self._build_plant()
+        except Exception as exc:
+            messagebox.showerror("Plant error", str(exc))
+            return
+        self.status.set("Comparing all methods…")
+        self.root.update_idletasks()
+        try:
+            rows = compare_all_methods(plant)
+        except Exception as exc:
+            messagebox.showerror("Comparison failed", str(exc))
+            self.status.set("Ready.")
+            return
+
+        # Replace the session with one entry per method, simulated with the
+        # user's current setpoint/limit settings so the overlay is comparable.
+        self.tuned.clear()
+        n_ok = 0
+        for row in rows:
+            gains = row.get("gains")
+            if gains is None:        # method failed to tune — skip the overlay
+                continue
+            try:
+                sim = self._run_closed_loop(plant, gains)
+            except Exception:
+                continue
+            entry = TunedEntry(label=row["name"], gains=gains,
+                               result=None, sim=sim)
+            entry.mrow = row
+            self.tuned.append(entry)
+            n_ok += 1
+
+        self._refresh_tuned_list()
+        self._open_all_tabs_and_draw()
+        self.status.set(f"Compared {n_ok} methods. Untick any in the session "
+                        f"list to declutter.")
+
+    @staticmethod
+    def _heat_color(v):
+        """Normalized goodness v∈[0,1] (1=best) → red→yellow→green hex."""
+        if v is None or not np.isfinite(v):
+            return "#cccccc"
+        v = max(0.0, min(1.0, float(v)))
+        # red (215,48,39) → yellow (255,255,191) → green (26,152,80)
+        if v < 0.5:
+            f = v / 0.5
+            r = 215 + f * (255 - 215)
+            g = 48 + f * (255 - 48)
+            b = 39 + f * (191 - 39)
+        else:
+            f = (v - 0.5) / 0.5
+            r = 255 + f * (26 - 255)
+            g = 255 + f * (152 - 255)
+            b = 191 + f * (80 - 191)
+        return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
+
+    # ── heatmap table ───────────────────────────────────────────────────────
+    _METRIC_LABELS = {
+        "OS%": "OS %", "ts": "tₛ (2%)", "IAE": "IAE\n(track)",
+        "IAE_load": "IAE\n(load)", "Ms": "Mₛ", "Mt": "Mₜ", "u_tv": "TV(u)",
+    }
+
+    def _build_heatmap_table(self, parent, rows):
+        # Footnote pinned to the bottom first so it always shows.
+        ttk.Label(parent, padding=(8, 4), foreground="#555",
+                  text="Mₛ robust band ≈ [1.4, 2.0].  TV(u) = control-signal "
+                       "total variation (smoothness).  IAE(load) from a unit "
+                       "load step at the plant input.").pack(side="bottom",
+                                                             fill="x")
+        # 12 methods × 8 columns fits without scrolling — grid fills the tab.
+        grid = ttk.Frame(parent, padding=(6, 6))
+        grid.pack(fill="both", expand=True)
+
+        metrics = TABLE_METRICS
+        hdr_font = ("TkDefaultFont", 9, "bold")
+        tk.Label(grid, text="Method", font=hdr_font, anchor="w",
+                 padx=8, pady=4).grid(row=0, column=0, sticky="nsew")
+        for c, m in enumerate(metrics, start=1):
+            tk.Label(grid, text=self._METRIC_LABELS.get(m, m), font=hdr_font,
+                     padx=8, pady=4, justify="center").grid(row=0, column=c,
+                                                            sticky="nsew")
+
+        norm = {}
+        for m in metrics:
+            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
+                   for r in rows]
+            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
+
+        for i, r in enumerate(rows):
+            rr = i + 1
+            stable = r.get("stable")
+            name_bg = "#ffffff" if stable else "#dddddd"
+            tk.Label(grid, text=r["name"], anchor="w", padx=8, pady=3,
+                     bg=name_bg).grid(row=rr, column=0, sticky="nsew")
+            if not stable:
+                tk.Label(grid, text=f"— {r.get('error', 'failed')} —",
+                         anchor="w", padx=8, pady=3, bg=name_bg, fg="#a00"
+                         ).grid(row=rr, column=1, columnspan=len(metrics),
+                                sticky="nsew")
+                continue
+            for c, m in enumerate(metrics, start=1):
+                val = r.get(m, float("nan"))
+                color = self._heat_color(norm[m][i])
+                txt = f"{val:.3g}" if np.isfinite(val) else "—"
+                tk.Label(grid, text=txt, padx=8, pady=3, bg=color,
+                         anchor="center").grid(row=rr, column=c, sticky="nsew")
+
+        grid.columnconfigure(0, weight=3, minsize=140)
+        for c in range(1, len(metrics) + 1):
+            grid.columnconfigure(c, weight=2, minsize=70)
+        for rr in range(len(rows) + 1):
+            grid.rowconfigure(rr, weight=1)
+
+    # ── radar chart ─────────────────────────────────────────────────────────
+    def _build_radar_tab(self, parent, rows):
+        stable = [r for r in rows if r.get("stable")]
+        if not stable:
+            ttk.Label(parent, text="No stable methods to plot.",
+                      padding=20).pack()
+            return
+
+        # Six axes, each normalized so OUTER = better.
+        axes_spec = [
+            ("Track\n(IAE)", "IAE", -1),
+            ("Load rej.\n(IAE)", "IAE_load", -1),
+            ("Robust\n(Mₛ)", "Ms", -1),
+            ("Low OS\n(OS%)", "OS%", -1),
+            ("Speed\n(tₛ)", "ts", -1),
+            ("Smooth\n(TV)", "u_tv", -1),
+        ]
+        labels = [a[0] for a in axes_spec]
+        goodness = []  # list per-axis of normalized arrays (1=best)
+        for _, key, direction in axes_spec:
+            col = [r.get(key, float("inf")) for r in stable]
+            goodness.append(normalize_column(col, direction=direction))
+        goodness = np.array(goodness)  # shape (n_axes, n_methods)
+
+        n_ax = len(axes_spec)
+        angles = np.linspace(0, 2 * np.pi, n_ax, endpoint=False).tolist()
+        angles += angles[:1]
+
+        fig = Figure(figsize=(7.2, 6.4), dpi=100)
+        ax = fig.add_subplot(111, polar=True)
+        ax.set_theta_offset(np.pi / 2)
+        ax.set_theta_direction(-1)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+        ax.set_yticklabels(["", "", "", ""])
+        ax.set_rlabel_position(0)
+
+        cmap = matplotlib.colormaps.get_cmap("tab20")
+        for j, r in enumerate(stable):
+            vals = goodness[:, j].tolist()
+            vals += vals[:1]
+            color = cmap(j % 20)
+            ax.plot(angles, vals, lw=1.6, color=color, label=r["name"])
+            ax.fill(angles, vals, color=color, alpha=0.06)
+
+        ax.set_title("Each axis normalized so outer = best across methods",
+                     fontsize=10, pad=18)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.10),
+                  fontsize=8, framealpha=0.9)
+        fig.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=parent)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(canvas, parent)
+
     # ── closed-loop sim ────────────────────────────────────────────────────
     def _run_closed_loop(self, plant, gains):
         try:
@@ -675,17 +1049,17 @@ class PIDTunerApp:
 
     def _toggle_entry(self, entry, var):
         entry.enabled = var.get()
-        self._redraw_plots()
+        self._refresh_open_tabs()
 
     def clear_tuned(self):
         self.tuned.clear()
         self._refresh_tuned_list()
-        self._redraw_plots()
+        self._refresh_open_tabs()
 
     def remove_unchecked(self):
         self.tuned = [e for e in self.tuned if e.enabled]
         self._refresh_tuned_list()
-        self._redraw_plots()
+        self._refresh_open_tabs()
 
     # ── last-result display ────────────────────────────────────────────────
     def _show_last_result(self, result, sim):
@@ -703,8 +1077,95 @@ class PIDTunerApp:
         parts.append("Metrics:  " + format_metrics(sim.metrics))
         self.last_lbl.config(text="\n".join(parts))
 
-    # ── plotting ───────────────────────────────────────────────────────────
-    def _redraw_plots(self):
+    # ── tabbed output management ────────────────────────────────────────────
+    def _session_rows(self):
+        """Metric rows for the enabled session entries (for heatmap/radar)."""
+        rows = []
+        for e in self.tuned:
+            if not e.enabled:
+                continue
+            row = getattr(e, "mrow", None)
+            if row is None:
+                row = {"name": e.label, "stable": False, "error": "no metrics"}
+            rows.append(row)
+        return rows
+
+    def _ensure_plots_tab(self):
+        if self.plots_tab is not None and self.plots_tab.winfo_exists():
+            return
+        frame = ttk.Frame(self.right_nb)
+        self.right_nb.add(frame, text="Response  ")
+        self.fig = Figure(figsize=(9, 8), dpi=100)
+        self.ax_y = self.fig.add_subplot(311)
+        self.ax_u = self.fig.add_subplot(312, sharex=self.ax_y)
+        self.ax_e = self.fig.add_subplot(313, sharex=self.ax_y)
+        for ax in (self.ax_y, self.ax_u, self.ax_e):
+            ax.grid(True, alpha=0.3)
+        self.fig.tight_layout()
+        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, frame)
+        self.plots_tab = frame
+
+    def _ensure_heatmap_tab(self):
+        if self.heatmap_tab is not None and self.heatmap_tab.winfo_exists():
+            return
+        frame = ttk.Frame(self.right_nb)
+        self.right_nb.add(frame, text="Heatmap  ")
+        self.heatmap_tab = frame
+
+    def _ensure_radar_tab(self):
+        if self.radar_tab is not None and self.radar_tab.winfo_exists():
+            return
+        frame = ttk.Frame(self.right_nb)
+        self.right_nb.add(frame, text="Radar  ")
+        self.radar_tab = frame
+
+    def _reconcile_tabs(self):
+        """After a tab is closed, drop references to tabs no longer present."""
+        present = set(self.right_nb.tabs())
+        def gone(w):
+            return w is None or str(w) not in present
+        if gone(self.plots_tab):
+            self.plots_tab = None
+            self.fig = self.ax_y = self.ax_u = self.ax_e = self.canvas = None
+        if gone(self.heatmap_tab):
+            self.heatmap_tab = None
+        if gone(self.radar_tab):
+            self.radar_tab = None
+        self._update_right_hint()
+
+    def _close_all_tabs(self):
+        for tab in list(self.right_nb.tabs()):
+            self.right_nb.forget(tab)
+        self.plots_tab = self.heatmap_tab = self.radar_tab = None
+        self.fig = self.ax_y = self.ax_u = self.ax_e = self.canvas = None
+        self._update_right_hint()
+
+    def _update_right_hint(self):
+        if self.right_nb.tabs():
+            self.right_hint.pack_forget()
+        else:
+            self.right_hint.pack(fill="x", pady=6)
+
+    def _open_all_tabs_and_draw(self):
+        """Create the three tabs if missing, then draw all of them."""
+        self._ensure_plots_tab()
+        self._ensure_heatmap_tab()
+        self._ensure_radar_tab()
+        self._update_right_hint()
+        self._refresh_open_tabs()
+
+    def _refresh_open_tabs(self):
+        """Redraw whichever tabs are currently open (don't reopen closed ones)."""
+        self._draw_plots_tab()
+        self._draw_heatmap_tab()
+        self._draw_radar_tab()
+
+    # ── plots tab ───────────────────────────────────────────────────────────
+    def _draw_plots_tab(self):
+        if self.plots_tab is None or self.canvas is None:
+            return
         self.ax_y.clear()
         self.ax_u.clear()
         self.ax_e.clear()
@@ -715,14 +1176,13 @@ class PIDTunerApp:
         self.ax_e.set_ylabel("error e(t)")
         self.ax_e.set_xlabel("time (s)")
 
-        active = [e for e in self.tuned if e.enabled]
+        active = [e for e in self.tuned if e.enabled and e.sim is not None]
         if not active:
-            self.ax_y.set_title("No tuned controllers yet — pick a method and tune.")
+            self.ax_y.set_title("No tuned controllers shown — tune a method "
+                                "or tick one in the session list.")
             self.canvas.draw()
             return
 
-        # Setpoint traces: one per unique sp_kind in the active set, drawn
-        # in grey-dashed so they don't compete with the PV traces.
         seen_kinds = set()
         for entry in active:
             kind = entry.sim.sp_kind
@@ -730,8 +1190,6 @@ class PIDTunerApp:
                 continue
             seen_kinds.add(kind)
             kind_label = f"setpoint ({kind})" if len(active) > 1 else "setpoint"
-            # Use the longest sim of this kind so the trace covers the
-            # full overlay time axis.
             same_kind = [e for e in active if e.sim.sp_kind == kind]
             longest = max(same_kind, key=lambda e: len(e.sim.t))
             self.ax_y.plot(longest.sim.t, longest.sim.sp, "--",
@@ -750,7 +1208,6 @@ class PIDTunerApp:
                            linewidth=1.2, label=entry.label)
 
         self.ax_y.legend(loc="lower right", bbox_to_anchor=(1.02, 1.0), fontsize=8)
-        # Reasonable y-axis on PV for stable plots
         stable_ys = [e.sim.y for e in active if not e.sim.metrics.get("unstable")]
         if stable_ys:
             max_sp = max(np.max(np.abs(e.sim.sp)) for e in active)
@@ -758,6 +1215,33 @@ class PIDTunerApp:
 
         self.fig.tight_layout()
         self.canvas.draw()
+
+    # ── heatmap tab ─────────────────────────────────────────────────────────
+    def _draw_heatmap_tab(self):
+        if self.heatmap_tab is None or not self.heatmap_tab.winfo_exists():
+            return
+        for child in self.heatmap_tab.winfo_children():
+            child.destroy()
+        rows = self._session_rows()
+        if not rows:
+            ttk.Label(self.heatmap_tab, padding=20, foreground="#888",
+                      text="Tune methods to compare them here.").pack()
+            return
+        self._build_heatmap_table(self.heatmap_tab, rows)
+
+    # ── radar tab ───────────────────────────────────────────────────────────
+    def _draw_radar_tab(self):
+        if self.radar_tab is None or not self.radar_tab.winfo_exists():
+            return
+        for child in self.radar_tab.winfo_children():
+            child.destroy()
+        rows = self._session_rows()
+        if not any(r.get("stable") for r in rows):
+            ttk.Label(self.radar_tab, padding=20, foreground="#888",
+                      text="Tune at least one stable method to see the radar.").pack()
+            return
+        self._build_radar_tab(self.radar_tab, rows)
+
 
 
 def main():

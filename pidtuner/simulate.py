@@ -161,7 +161,8 @@ def make_setpoint(t, kind, amplitude=1.0):
 
 def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                          setpoint_kind="step", sp_array=None,
-                         u_min=-1e6, u_max=1e6, N=10.0, use_d_filter=True):
+                         u_min=-1e6, u_max=1e6, N=10.0, use_d_filter=True,
+                         load_step=None, load_step_time=0.0):
     """Simulate the unity-feedback loop with PID controller.
 
     Parameters
@@ -172,6 +173,10 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
     setpoint      : amplitude for step/ramp/pulse generators
     setpoint_kind : 'step' | 'ramp' | 'pulse'  (ignored if sp_array given)
     sp_array      : if provided, override the generator and use this array
+    load_step     : if not None, a constant disturbance of this amplitude is
+                    injected at the *plant input* for t >= load_step_time.
+                    Use with setpoint=0 for a pure load-rejection test.
+    load_step_time: time at which the load disturbance switches on.
     """
     dt = plant.auto_dt()
     if t_end is None:
@@ -217,6 +222,9 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
         u[i] = pid_step(gains, state, sp[i], y[i - 1], dt, u_min, u_max, N=N_eff)
         j = i - 1 - delay
         u_eff = u[j] if j >= 0 else 0.0
+        # Load disturbance enters at the plant input (after the controller).
+        if load_step is not None and t[i] >= load_step_time:
+            u_eff = u_eff + float(load_step)
         if nx:
             x = Ad @ x + Bd_flat * u_eff
             y[i] = float((C @ x).item()) + d_scalar * u_eff
@@ -261,7 +269,7 @@ def compute_metrics(t, sp, y, e, u, sp_kind="step"):
     """
     base = {
         "IAE": float("inf"), "ITAE": float("inf"),
-        "u_peak": float("inf"), "u_rms": float("inf"),
+        "u_peak": float("inf"), "u_rms": float("inf"), "u_tv": float("inf"),
         "unstable": True, "sp_kind": sp_kind,
     }
     if not np.all(np.isfinite(y)) or not np.all(np.isfinite(u)):
@@ -273,6 +281,7 @@ def compute_metrics(t, sp, y, e, u, sp_kind="step"):
         "IAE": iae, "ITAE": itae,
         "u_peak": float(np.max(np.abs(u))),
         "u_rms": float(np.sqrt(np.mean(u ** 2))),
+        "u_tv": float(np.sum(np.abs(np.diff(u)))),  # total variation (smoothness)
         "unstable": False,
         "sp_kind": sp_kind,
     }

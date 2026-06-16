@@ -33,10 +33,15 @@ from tune import (
     tune_pole_cancellation, select_slowest_stable_poles,
     tune_zn_method_1, tune_zn_method_2,
     tune_amigo, tune_simc, tune_boyd,
+    tune_cohen_coon, tune_chr, tune_tyreus_luyben,
 )
 from simulate import (
     simulate_closed_loop, format_metrics, make_setpoint,
     is_closed_loop_stable, compute_metrics,
+)
+from compare import (
+    robustness_metrics, load_rejection_metrics, compare_all_methods,
+    normalize_column,
 )
 
 
@@ -342,10 +347,107 @@ class TestTuningMethods(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# New tuning methods: Cohen–Coon, CHR, Tyreus–Luyben
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNewTuningMethods(unittest.TestCase):
+    def setUp(self):
+        self.plant = benchmark_plant()
+        # Exact FOPDT for closed-form formula checks
+        self.f = FOPDT(K=2.0, tau=5.0, L=1.0)
+
+    # 7. Cohen–Coon
+    def test_cohen_coon_formulas(self):
+        """CC PID: Kp=(1/K)(τ/L)(4/3+L/4τ), Ti=L(32+6r)/(13+8r), Td=4L/(11+2r), r=L/τ."""
+        f = self.f
+        r = f.L / f.tau
+        Kp = (1.0 / f.K) * (f.tau / f.L) * (4.0 / 3.0 + r / 4.0)
+        Ti = f.L * (32.0 + 6.0 * r) / (13.0 + 8.0 * r)
+        Td = 4.0 * f.L / (11.0 + 2.0 * r)
+        res = tune_cohen_coon(f)
+        self.assertAlmostEqual(res.gains.Kp, Kp, places=6)
+        self.assertAlmostEqual(res.gains.Ki, Kp / Ti, places=6)
+        self.assertAlmostEqual(res.gains.Kd, Kp * Td, places=6)
+
+    def test_cohen_coon_runs_on_benchmark(self):
+        _, _, _, _, fopdt = run_step_test(self.plant)
+        res = tune_cohen_coon(fopdt)
+        sim = simulate_closed_loop(self.plant, res.gains, setpoint=1.0)
+        self.assertFalse(sim.metrics["unstable"])
+
+    def test_cohen_coon_refuses_degenerate(self):
+        with self.assertRaises(ValueError):
+            tune_cohen_coon(FOPDT(K=0.0, tau=5.0, L=1.0))
+
+    # 8. Chien–Hrones–Reswick
+    def test_chr_setpoint_0_formulas(self):
+        """CHR servo 0%: Kp=0.6τ/(KL), Ti=τ, Td=0.5L."""
+        f = self.f
+        res = tune_chr(f, response="setpoint", overshoot=0)
+        Kp = 0.6 * f.tau / (f.K * f.L)
+        self.assertAlmostEqual(res.gains.Kp, Kp, places=6)
+        self.assertAlmostEqual(res.gains.Ki, Kp / f.tau, places=6)
+        self.assertAlmostEqual(res.gains.Kd, Kp * 0.5 * f.L, places=6)
+
+    def test_chr_load_20_formulas(self):
+        """CHR regulator 20%: Kp=1.2τ/(KL), Ti=2L, Td=0.42L."""
+        f = self.f
+        res = tune_chr(f, response="load", overshoot=20)
+        Kp = 1.2 * f.tau / (f.K * f.L)
+        self.assertAlmostEqual(res.gains.Kp, Kp, places=6)
+        self.assertAlmostEqual(res.gains.Ki, Kp / (2.0 * f.L), places=6)
+        self.assertAlmostEqual(res.gains.Kd, Kp * 0.42 * f.L, places=6)
+
+    def test_chr_all_four_variants_stable(self):
+        _, _, _, _, fopdt = run_step_test(self.plant)
+        for response in ("setpoint", "load"):
+            for overshoot in (0, 20):
+                res = tune_chr(fopdt, response=response, overshoot=overshoot)
+                sim = simulate_closed_loop(self.plant, res.gains, setpoint=1.0)
+                self.assertFalse(sim.metrics["unstable"],
+                                 f"{response} {overshoot}% went unstable")
+
+    def test_chr_rejects_bad_variant(self):
+        with self.assertRaises(ValueError):
+            tune_chr(self.f, response="servo", overshoot=0)
+        with self.assertRaises(ValueError):
+            tune_chr(self.f, response="setpoint", overshoot=50)
+
+    # 9. Tyreus–Luyben
+    def test_tyreus_luyben_pid_formulas(self):
+        """T-L PID: Kp=Ku/2.2, Ti=2.2Pu, Td=Pu/6.3."""
+        Ku, Pu = 1.5, 4.0
+        res = tune_tyreus_luyben(Ku, Pu)
+        self.assertAlmostEqual(res.gains.Kp, Ku / 2.2, places=6)
+        self.assertAlmostEqual(res.gains.Ki, (Ku / 2.2) / (2.2 * Pu), places=6)
+        self.assertAlmostEqual(res.gains.Kd, (Ku / 2.2) * (Pu / 6.3), places=6)
+
+    def test_tyreus_luyben_pi_has_no_derivative(self):
+        """T-L PI: Kp=Ku/3.2, Ti=2.2Pu, Kd=0."""
+        Ku, Pu = 1.5, 4.0
+        res = tune_tyreus_luyben(Ku, Pu, use_derivative=False)
+        self.assertAlmostEqual(res.gains.Kp, Ku / 3.2, places=6)
+        self.assertEqual(res.gains.Kd, 0.0)
+
+    def test_tyreus_luyben_more_conservative_than_zn2(self):
+        """T-L should have a smaller Kp than ZN-II for the same Ku, Pu."""
+        Ku, Pu = 1.5, 4.0
+        tl = tune_tyreus_luyben(Ku, Pu)
+        zn = tune_zn_method_2(Ku, Pu)
+        self.assertLess(tl.gains.Kp, zn.gains.Kp)
+
+    def test_tyreus_luyben_runs_on_benchmark(self):
+        Ku, Pu, _ = find_ultimate_gain(self.plant)
+        res = tune_tyreus_luyben(Ku, Pu)
+        sim = simulate_closed_loop(self.plant, res.gains, setpoint=1.0)
+        self.assertFalse(sim.metrics["unstable"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Closed-loop simulation with three setpoint kinds
 # ─────────────────────────────────────────────────────────────────────────────
 # Every method that tunes the benchmark plant should produce a *stable*
-# closed loop. We test all six methods × three setpoint waveforms.
+# closed loop. We test all methods × three setpoint waveforms.
 
 class TestClosedLoopAllSetpoints(unittest.TestCase):
     """For each method, simulate the closed loop on step, ramp, and pulse."""
@@ -548,6 +650,77 @@ class TestSetpointWaveforms(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Comparison data layer: robustness, load rejection, compare_all_methods
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestComparisonLayer(unittest.TestCase):
+    def setUp(self):
+        self.plant = benchmark_plant()
+        _, _, _, _, self.fopdt = run_step_test(self.plant)
+
+    def test_robustness_keys_and_ranges(self):
+        g = tune_simc(self.fopdt).gains
+        r = robustness_metrics(self.plant, g)
+        for k in ("Ms", "Mt", "GM_dB", "PM_deg"):
+            self.assertIn(k, r)
+        # Ms is always >= 1 for a real loop; sane upper sanity bound
+        self.assertGreaterEqual(r["Ms"], 1.0 - 1e-6)
+        self.assertLess(r["Ms"], 100.0)
+
+    def test_aggressive_has_higher_Ms_than_robust(self):
+        """ZN-II (aggressive) should have a larger Ms than SIMC (smooth)."""
+        Ku, Pu, _ = find_ultimate_gain(self.plant)
+        ms_zn2 = robustness_metrics(self.plant, tune_zn_method_2(Ku, Pu).gains)["Ms"]
+        ms_simc = robustness_metrics(self.plant, tune_simc(self.fopdt).gains)["Ms"]
+        self.assertGreater(ms_zn2, ms_simc)
+
+    def test_load_rejection_finite_and_positive(self):
+        g = tune_zn_method_1(self.fopdt).gains
+        r = load_rejection_metrics(self.plant, g)
+        self.assertTrue(np.isfinite(r["IAE_load"]))
+        self.assertGreater(r["IAE_load"], 0.0)
+
+    def test_zn1_rejects_load_better_than_pole_cancel(self):
+        """ZN-I is a load-rejection design; pole-cancellation is not.
+        ZN-I should achieve a much lower load IAE on the benchmark."""
+        zn1 = tune_zn_method_1(self.fopdt).gains
+        p1, p2 = select_slowest_stable_poles(self.plant)
+        Kd = 1.0 / abs(self.plant.dc_gain())
+        pc = tune_pole_cancellation(self.plant, p1, p2, Kd=Kd).gains
+        iae_zn1 = load_rejection_metrics(self.plant, zn1)["IAE_load"]
+        iae_pc = load_rejection_metrics(self.plant, pc)["IAE_load"]
+        self.assertLess(iae_zn1, iae_pc)
+
+    def test_compare_all_methods_rows(self):
+        rows = compare_all_methods(self.plant)
+        # Every method family should appear
+        names = {r["name"] for r in rows}
+        for expect in ("ZN-I", "ZN-II", "AMIGO", "SIMC", "Boyd",
+                       "Cohen–Coon", "Tyreus–Luyben"):
+            self.assertIn(expect, names)
+        # Stable rows carry all the table metrics
+        for r in rows:
+            if r["stable"]:
+                for m in ("OS%", "ts", "IAE", "IAE_load", "Ms", "Mt", "u_tv"):
+                    self.assertIn(m, r)
+
+    def test_load_step_does_not_break_setpoint_sim(self):
+        """A sim with no load_step must match the old behaviour exactly."""
+        g = tune_simc(self.fopdt).gains
+        a = simulate_closed_loop(self.plant, g, setpoint=1.0)
+        b = simulate_closed_loop(self.plant, g, setpoint=1.0, load_step=None)
+        np.testing.assert_allclose(a.y, b.y)
+
+    def test_normalize_column_best_is_one(self):
+        # Lower-is-better: the smallest value should map to 1.0
+        vals = [3.0, 1.0, 2.0, float("inf")]
+        out = normalize_column(vals, direction=-1)
+        self.assertAlmostEqual(out[1], 1.0, places=6)   # smallest → best
+        self.assertAlmostEqual(out[0], 0.0, places=6)   # largest finite → worst
+        self.assertAlmostEqual(out[3], 0.0, places=6)   # inf → worst
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Edge cases
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -614,6 +787,12 @@ def _run_with_summary():
             ("AMIGO",                   tune_amigo(fopdt)),
             ("SIMC",                    tune_simc(fopdt)),
             ("Boyd (Ms=Mt=1.4)",        tune_boyd(plant, 1.4, 1.4, seed_gains=seed)),
+            ("Cohen-Coon",              tune_cohen_coon(fopdt)),
+            ("CHR setpoint 0%",         tune_chr(fopdt, "setpoint", 0)),
+            ("CHR setpoint 20%",        tune_chr(fopdt, "setpoint", 20)),
+            ("CHR load 0%",             tune_chr(fopdt, "load", 0)),
+            ("CHR load 20%",            tune_chr(fopdt, "load", 20)),
+            ("Tyreus-Luyben",           tune_tyreus_luyben(Ku, Pu)),
         ]
         for kind in ("step", "ramp", "pulse"):
             print(f"\n  --- {kind.upper()} setpoint ---")

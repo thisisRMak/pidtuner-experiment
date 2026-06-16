@@ -432,3 +432,140 @@ def tune_boyd(plant, Ms=1.4, Mt=1.4, seed_gains=None,
                f"|T|∞ ≤ {Mt:g} via linearized convex-concave iteration. "
                f"Operates on the true plant frequency response."),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Cohen–Coon  (1953)
+# ─────────────────────────────────────────────────────────────────────────────
+# Open-loop reaction-curve rules, like ZN-I but using both tau and L explicitly
+# (ZN-I collapses them into the single slope R = A/tau). Derived to give a
+# quarter-amplitude-decay load response, with an explicit dead-time correction
+# that makes them noticeably better than ZN-I on dead-time-dominant plants
+# (large L/tau). For FOPDT G(s) = A*exp(-Ls)/(tau*s + 1), the PID row is
+#   Kp = (1/A)(tau/L)(4/3 + L/(4 tau))
+#   Ti = L (32 + 6 L/tau) / (13 + 8 L/tau)
+#   Td = 4 L / (11 + 2 L/tau)
+# Reference: Cohen & Coon, Trans. ASME 75, 827-834 (1953).
+
+def tune_cohen_coon(fopdt):
+    """Cohen–Coon PID from a fitted FOPDT."""
+    L = max(fopdt.L, 1e-6)
+    A = fopdt.K
+    if abs(A) < 1e-12 or fopdt.tau == 0:
+        raise ValueError("Cohen–Coon needs non-zero A and tau from the FOPDT fit.")
+    tau = max(fopdt.tau, 1e-9)
+    r = L / tau  # fractional dead time
+
+    Kp = (1.0 / A) * (tau / L) * (4.0 / 3.0 + r / 4.0)
+    Ti = L * (32.0 + 6.0 * r) / (13.0 + 8.0 * r)
+    Td = 4.0 * L / (11.0 + 2.0 * r)
+    gains = PIDGains.from_textbook(Kp, Ti=Ti, Td=Td)
+    return TuningResult(
+        method="Cohen–Coon",
+        gains=gains,
+        fopdt=fopdt,
+        notes=("Cohen–Coon reaction-curve rules (1953). Like ZN-I but uses "
+               "tau and L separately, with a dead-time correction that helps "
+               "on delay-dominant plants (large L/tau). Targets quarter-decay "
+               "load response; can be aggressive on setpoint tracking."),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Chien–Hrones–Reswick  (CHR, 1952)
+# ─────────────────────────────────────────────────────────────────────────────
+# A refinement of ZN-I that lets the user choose (a) whether the loop is tuned
+# for setpoint tracking ("servo") or load-disturbance rejection ("regulator"),
+# and (b) a "quickest response with 0% overshoot" vs "quickest with 20%
+# overshoot" damping target. Four PID rows result, all driven by the FOPDT fit.
+# Reference: Chien, Hrones & Reswick, Trans. ASME 74, 175-185 (1952).
+#
+# PID rows (K, tau, L from the FOPDT fit):
+#   setpoint  0%:  Kp = 0.60 tau/(K L),  Ti = tau,    Td = 0.50 L
+#   setpoint 20%:  Kp = 0.95 tau/(K L),  Ti = 1.40 tau, Td = 0.47 L
+#   load      0%:  Kp = 0.95 tau/(K L),  Ti = 2.40 L,  Td = 0.42 L
+#   load     20%:  Kp = 1.20 tau/(K L),  Ti = 2.00 L,  Td = 0.42 L
+
+_CHR_PID_TABLE = {
+    # (response, overshoot_pct): (Kp_coef, Ti_expr, Td_coef)
+    #   Kp = Kp_coef * tau/(K L);  Ti per expr;  Td = Td_coef * L
+    ("setpoint", 0):  (0.60, ("tau", 1.00), 0.50),
+    ("setpoint", 20): (0.95, ("tau", 1.40), 0.47),
+    ("load", 0):      (0.95, ("L",   2.40), 0.42),
+    ("load", 20):     (1.20, ("L",   2.00), 0.42),
+}
+
+
+def tune_chr(fopdt, response="setpoint", overshoot=0):
+    """Chien–Hrones–Reswick PID from a fitted FOPDT.
+
+    response  : "setpoint" (servo / tracking) or "load" (regulator / rejection)
+    overshoot : 0 or 20  (the design's damping target, in percent)
+    """
+    response = response.lower()
+    overshoot = int(overshoot)
+    key = (response, overshoot)
+    if key not in _CHR_PID_TABLE:
+        raise ValueError(
+            f"CHR: unknown variant {key}. response must be 'setpoint' or "
+            f"'load'; overshoot must be 0 or 20.")
+    L = max(fopdt.L, 1e-6)
+    A = fopdt.K
+    if abs(A) < 1e-12 or fopdt.tau == 0:
+        raise ValueError("CHR needs non-zero A and tau from the FOPDT fit.")
+    tau = max(fopdt.tau, 1e-9)
+
+    Kp_coef, (Ti_base, Ti_coef), Td_coef = _CHR_PID_TABLE[key]
+    Kp = Kp_coef * tau / (A * L)
+    Ti = Ti_coef * (tau if Ti_base == "tau" else L)
+    Td = Td_coef * L
+    gains = PIDGains.from_textbook(Kp, Ti=Ti, Td=Td)
+    pretty_resp = "setpoint tracking" if response == "setpoint" else "load rejection"
+    return TuningResult(
+        method=f"CHR ({response} {overshoot}%)",
+        gains=gains,
+        fopdt=fopdt,
+        free_param={"response": response, "overshoot": overshoot},
+        notes=(f"Chien–Hrones–Reswick (1952), tuned for {pretty_resp} with a "
+               f"{overshoot}% overshoot target. Unlike ZN-I, CHR uses tau and "
+               f"L separately and lets you pick servo vs. regulator behaviour."),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Tyreus–Luyben  (Luyben & Luyben, 1997)
+# ─────────────────────────────────────────────────────────────────────────────
+# The ultimate-gain rule popularized in Luyben & Luyben, "Essentials of Process
+# Control" (McGraw-Hill, 1997). Like ZN-II it works from (Ku, Pu), but it is
+# deliberately more conservative: a smaller proportional gain and a much longer
+# integral time give larger stability margins and far less oscillation than ZN,
+# at the cost of slower response. Well-suited to the long-dead-time / integrating
+# loops common in process control.
+#   PID:  Kp = Ku/2.2,  Ti = 2.2 Pu,  Td = Pu/6.3
+#   PI :  Kp = Ku/3.2,  Ti = 2.2 Pu
+# Reference: Tyreus & Luyben, Ind. Eng. Chem. Res. 31, 2625-2628 (1992); also
+# Luyben & Luyben (1997).
+
+def tune_tyreus_luyben(Ku, Pu, use_derivative=True):
+    """Tyreus–Luyben from the ultimate gain/period."""
+    if use_derivative:
+        Kp = Ku / 2.2
+        Ti = 2.2 * Pu
+        Td = Pu / 6.3
+        struct = "PID"
+    else:
+        Kp = Ku / 3.2
+        Ti = 2.2 * Pu
+        Td = 0.0
+        struct = "PI"
+    gains = PIDGains.from_textbook(Kp, Ti=Ti, Td=Td)
+    return TuningResult(
+        method="Tyreus–Luyben" + ("" if use_derivative else " (PI)"),
+        gains=gains,
+        Ku=float(Ku),
+        Pu=float(Pu),
+        notes=(f"Tyreus–Luyben {struct} (Luyben & Luyben, 1997). "
+               f"Ku = {Ku:.4g}, Pu = {Pu:.4g} s. A conservative ultimate-gain "
+               f"rule: larger margins and far less overshoot than ZN-II, but "
+               f"slower. No 'halve gains' needed — it is already detuned."),
+    )

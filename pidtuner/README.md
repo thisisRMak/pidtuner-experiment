@@ -1,6 +1,6 @@
 # PID Tuner — ENGR105
 
-A Tkinter desktop app for tuning PID controllers using six methods taught
+A Tkinter desktop app for tuning PID controllers using nine methods taught
 in the course, with overlay comparison of multiple tunings against the
 same plant.
 
@@ -65,7 +65,7 @@ Plant input — two tabs:
 
 Both forms accept an optional dead time `L` for `G(s) · exp(-Ls)`.
 
-Tuning methods (six):
+Tuning methods (nine):
 
 1. **Stable pole cancellation** — the "quick and dirty" method from
    class (HO PS4). The PID's two zeros are placed on top of two
@@ -95,6 +95,21 @@ Tuning methods (six):
    linearized LP that iterates to convergence. Operates on the true
    plant frequency response (not an FOPDT proxy), so it handles
    higher-order plants naturally.
+
+7. **Cohen–Coon** — reaction-curve rules (1953) from the FOPDT fit.
+   Like ZN-I but uses τ and L separately, with a dead-time correction
+   that improves on ZN-I for delay-dominant plants (large L/τ). Targets
+   a quarter-decay load response.
+
+8. **Chien–Hrones–Reswick (CHR)** — 1952 refinement of ZN-I from the
+   FOPDT fit, with a selector for setpoint-tracking (servo) vs.
+   load-rejection (regulator) and a 0% vs. 20% overshoot target — four
+   PID variants in all.
+
+9. **Tyreus–Luyben** — the conservative ultimate-gain rule from Luyben
+   & Luyben, *Essentials of Process Control* (1997). Same Ku, Pu inputs
+   as ZN-II (Bode crossover or relay test) but far more damped; a PI
+   variant is available. Already detuned, so no "halve gains" needed.
 
 **"Halve gains" toggle** (between method args and the Tune button):
 applies the PEI9e recommendation — divide Kp, Ki, Kd by 2 after
@@ -135,16 +150,42 @@ Overlay plotting:
   `[UNSTABLE]` in the legend rather than silently producing a
   diverging trace.
 
+Compare all methods:
+- The **Compare all methods** button (above the single-method box) tunes
+  every applicable method on the current plant at once, overlays them all
+  on the response plots, and lists each in the session overlay — untick
+  any to declutter.
+- Output appears in the right pane as closable tabs (each with an "×",
+  plus a **Close all tabs** button); the pane is empty until the first
+  tune or comparison:
+  - **Response** — the three stacked plots (PV/SP, u(t), e(t)) overlaying
+    every shown method.
+  - **Heatmap** — one row per method; columns for setpoint overshoot,
+    settling time, tracking IAE, load-rejection IAE, maximum sensitivity
+    Ms, complementary sensitivity Mt, and control-signal total variation
+    TV(u). Every metric is lower-is-better, so each column is colored
+    green (best) → red (worst).
+  - **Radar** — each method as a polygon over six normalized axes
+    (tracking, load rejection, robustness, low overshoot, speed,
+    smoothness), scaled so the outer edge is best.
+- A single **Tune & simulate** also populates all three tabs (heatmap and
+  radar then reflect whatever is in the session). The metrics live in
+  `compare.py`; Ms/Mt come from the loop frequency response L = C·P, and
+  the load-rejection IAE from a unit step injected at the plant input.
+
 ## File layout
 
 | File | Role |
 |------|------|
 | `plant.py` | Transfer-function parser (symbolic + MATLAB), simulation, frequency response, stability |
 | `identify.py` | FOPDT step-fit, relay test, Bode-crossover ultimate gain |
-| `tune.py` | Six tuning methods + `halve_gains` post-processor |
-| `simulate.py` | Closed-loop PID simulation (anti-windup + D-filter), setpoint waveforms (step/ramp/pulse), performance metrics |
-| `app.py` | Tkinter UI and method dispatch |
-| `test_pid_tuner.py` | unittest suite — 72 tests, no Tkinter dependency, includes a benchmark summary table |
+| `tune.py` | Nine tuning methods + `halve_gains` post-processor |
+| `simulate.py` | Closed-loop PID simulation (anti-windup + D-filter), setpoint waveforms (step/ramp/pulse), load-disturbance injection, performance metrics |
+| `compare.py` | Cross-method comparison: robustness metrics (Ms, Mt, gain/phase margin), load-rejection IAE, and the `compare_all_methods` driver |
+| `app.py` | Tkinter UI, method dispatch, and the Compare-all-methods window (heatmap table + radar) |
+| `test_pid_tuner.py` | unittest suite — 90 tests, no Tkinter dependency, includes a benchmark summary table |
+| `pidtuner.spec` | PyInstaller spec for building a standalone executable |
+| `.github/workflows/build.yml` | GitHub Actions: builds Windows/macOS/Linux executables on every tag |
 
 Each module is independent and can be imported and used from a script
 or notebook without the UI:
