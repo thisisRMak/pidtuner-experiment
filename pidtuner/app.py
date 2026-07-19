@@ -459,11 +459,14 @@ class PIDTunerApp:
             self.pc_pole_info.config(text=f"(plant invalid: {exc})")
 
     # ── plant build / cache ────────────────────────────────────────────────
-    def _build_plant(self):
+    def _read_L_field(self):
         try:
-            L = float(self.L_var.get())
+            return float(self.L_var.get())
         except (ValueError, tk.TclError):
-            L = 0.0
+            return 0.0
+
+    def _build_plant(self):
+        L = self._read_L_field()
         idx = self.plant_nb.index(self.plant_nb.select())
         if idx == 0:
             return TransferFunction.parse(self.tf_expr.get(), L=L)
@@ -477,10 +480,14 @@ class PIDTunerApp:
             return
         try:
             plant = self._build_plant()
-            self.plant_info.config(
-                text=f"{plant.pretty()}\n{plant.latex_summary()}",
-                foreground="#0a5",
-            )
+            info = f"{plant.pretty()}\n{plant.latex_summary()}"
+            # The L field itself contributed nothing (<=0), so a nonzero
+            # plant.L must have been parsed out of the expression text —
+            # confirm the detection back to the user, same as TransferFunction
+            # .parse would combine/reject the two sources.
+            if plant.L > 0 and self._read_L_field() <= 0:
+                info += f"\n✓ Detected time delay L={plant.L:g}s from expression."
+            self.plant_info.config(text=info, foreground="#0a5")
             if hasattr(self, "pc_pole_info"):
                 self._update_pole_info()
         except Exception as exc:
@@ -535,7 +542,8 @@ class PIDTunerApp:
         label = self._next_label(method, halved=self.halve_gains_var.get())
         entry = TunedEntry(label=label, gains=result.gains,
                            result=result, sim=sim)
-        entry.mrow = metric_row(plant, label, result.gains, black_box=result.black_box)
+        entry.mrow = metric_row(plant, label, result.gains,
+                                black_box=result.black_box, fopdt=result.fopdt)
         self.tuned.append(entry)
         self._refresh_tuned_list()
         self._show_last_result(result, sim)

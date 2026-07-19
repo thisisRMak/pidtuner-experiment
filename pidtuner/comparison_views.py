@@ -10,12 +10,16 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk,
 )
-from compare import TABLE_METRICS, METRIC_DIRECTION, normalize_column
+from compare import METRIC_TIERS, RADAR_METRICS, METRIC_DIRECTION, normalize_column
 from widgets import add_tooltip
 
+# Plain ASCII only — Tkinter's default label font on this platform doesn't
+# render the Unicode subscript block (e.g. "tₛ" silently drops the "s").
 _METRIC_LABELS = {
-    "OS%": "OS %", "ts": "tₛ (2%)", "IAE": "IAE\n(track)",
-    "IAE_load": "IAE\n(load)", "Ms": "Mₛ", "Mt": "Mₜ", "u_tv": "TV(u)",
+    "OS%": "OS %", "ts": "ts", "Rise": "Rise\n(10-90%)",
+    "IAE": "IAE\n(track)", "IAE_load": "IAE\n(load)",
+    "ISU": "ISU\n(effort)",
+    "Ms": "Ms", "Mt": "Mt", "u_tv": "TV(u)",
 }
 
 _BLACK_BOX_TOOLTIP = (
@@ -31,6 +35,21 @@ def _add_black_box_badge(cell, bg):
                       font=("TkDefaultFont", 7, "bold"), padx=2, pady=0)
     badge.pack(side="right", padx=(4, 6))
     add_tooltip(badge, _BLACK_BOX_TOOLTIP)
+    return badge
+
+
+def _add_delay_badge(cell, row):
+    """A small 'L' tag with a hover tooltip, packed into a name cell —
+    shown only when a fitted/known FOPDT model behind this row's gains
+    carries a *significant* delay (row['has_time_delay'] is True; see
+    identify._check_delay_significant for the significance judgment)."""
+    delay_L = row.get("delay_L")
+    badge = tk.Label(cell, text=" L ", bg="#a6621a", fg="#ffffff",
+                      font=("TkDefaultFont", 7, "bold"), padx=2, pady=0)
+    badge.pack(side="right", padx=(4, 2))
+    tooltip = (f"Time delay detected: L={delay_L:.3g}s. {row.get('delay_reason', '')}"
+               if delay_L is not None else "Time delay detected.")
+    add_tooltip(badge, tooltip)
     return badge
 
 
@@ -54,7 +73,14 @@ def _heat_color(v):
 
 
 def draw_heatmap_tab(parent, rows):
-    """Render the heatmap table view on parent frame/tab."""
+    """Render the heatmap table view on parent frame/tab.
+
+    Methods run across the columns (one per tuning method), metrics run
+    down the rows, grouped and ordered by priority tier (see
+    compare.METRIC_TIERS: P0 first, then P2, ...). Colour is still computed
+    per metric across methods — only the grid orientation is transposed
+    relative to the old methods-as-rows layout.
+    """
     for child in parent.winfo_children():
         child.destroy()
     if not rows:
@@ -64,117 +90,138 @@ def draw_heatmap_tab(parent, rows):
 
     # Footnote pinned to the bottom first so it always shows.
     ttk.Label(parent, padding=(8, 4), foreground="#555",
-              text="Mₛ robust band ≈ [1.4, 2.0].  TV(u) = control-signal "
-                   "total variation (smoothness).  IAE(load) from a unit "
-                   "load step at the plant input.").pack(side="bottom",
-                                                         fill="x")
-    # 12 methods × 8 columns fits without scrolling — grid fills the tab.
+              text="ts = 2% settling time.  Ms robust band ~ [1.4, 2.0].  "
+                   "TV(u) = control-signal total variation (smoothness).  "
+                   "ISU = integral of u^2 dt, control effort.  IAE(load) "
+                   "from a unit load step at the plant input.").pack(
+                  side="bottom", fill="x")
+    # Methods as columns (9 base tuning methods fit without scrolling),
+    # metrics as rows grouped by tier — grid fills the tab.
     grid = ttk.Frame(parent, padding=(6, 6))
     grid.pack(fill="both", expand=True)
 
-    metrics = TABLE_METRICS
+    n_methods = len(rows)
     hdr_font = ("TkDefaultFont", 9, "bold")
-    tk.Label(grid, text="Method", font=hdr_font, anchor="w",
+    tk.Label(grid, text="Metric", font=hdr_font, anchor="w",
              padx=8, pady=4).grid(row=0, column=0, sticky="nsew")
-    for c, m in enumerate(metrics, start=1):
-        tk.Label(grid, text=_METRIC_LABELS.get(m, m), font=hdr_font,
-                 padx=8, pady=4, justify="center").grid(row=0, column=c,
-                                                        sticky="nsew")
 
-    norm = {}
-    for m in metrics:
-        col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
-               for r in rows]
-        norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
-
-    for i, r in enumerate(rows):
-        rr = i + 1
+    for c, r in enumerate(rows, start=1):
         stable = r.get("stable")
         name_bg = "#ffffff" if stable else "#dddddd"
         name_cell = tk.Frame(grid, bg=name_bg)
-        name_cell.grid(row=rr, column=0, sticky="nsew")
-        tk.Label(name_cell, text=r["name"], anchor="w", padx=8, pady=3,
-                 bg=name_bg).pack(side="left", fill="x", expand=True)
+        name_cell.grid(row=0, column=c, sticky="nsew")
+        tk.Label(name_cell, text=r["name"], font=hdr_font, anchor="w",
+                 padx=8, pady=4, bg=name_bg, wraplength=90, justify="left"
+                 ).pack(side="left", fill="x", expand=True)
         if r.get("black_box"):
             _add_black_box_badge(name_cell, name_bg)
+        if r.get("has_time_delay"):
+            _add_delay_badge(name_cell, r)
         if not stable:
-            tk.Label(grid, text=f"— {r.get('error', 'failed')} —",
-                     anchor="w", padx=8, pady=3, bg=name_bg, fg="#a00"
-                     ).grid(row=rr, column=1, columnspan=len(metrics),
-                            sticky="nsew")
-            continue
-        for c, m in enumerate(metrics, start=1):
-            val = r.get(m, float("nan"))
-            color = _heat_color(norm[m][i])
-            txt = f"{val:.3g}" if np.isfinite(val) else "—"
-            tk.Label(grid, text=txt, padx=8, pady=3, bg=color,
-                     anchor="center").grid(row=rr, column=c, sticky="nsew")
+            warn = tk.Label(name_cell, text="⚠", bg=name_bg, fg="#a00")
+            warn.pack(side="right", padx=(0, 4))
+            add_tooltip(warn, r.get("error", "failed"))
+
+    # Normalize each metric across methods (same computation as before,
+    # just no longer tied to a fixed column index).
+    norm = {}
+    for _, metrics in METRIC_TIERS:
+        for m in metrics:
+            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
+                   for r in rows]
+            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
+
+    rr = 1
+    for tier_name, metrics in METRIC_TIERS:
+        tk.Label(grid, text=tier_name, font=hdr_font, anchor="w",
+                 padx=8, pady=2, bg="#e5e5e5"
+                 ).grid(row=rr, column=0, columnspan=n_methods + 1,
+                        sticky="nsew")
+        rr += 1
+        for m in metrics:
+            tk.Label(grid, text=_METRIC_LABELS.get(m, m), anchor="w",
+                     padx=8, pady=3, justify="left"
+                     ).grid(row=rr, column=0, sticky="nsew")
+            for c, r in enumerate(rows, start=1):
+                if not r.get("stable"):
+                    tk.Label(grid, text="—", padx=8, pady=3, bg="#dddddd",
+                             anchor="center").grid(row=rr, column=c,
+                                                   sticky="nsew")
+                    continue
+                val = r.get(m, float("nan"))
+                color = _heat_color(norm[m][c - 1])
+                txt = f"{val:.3g}" if np.isfinite(val) else "—"
+                tk.Label(grid, text=txt, padx=8, pady=3, bg=color,
+                         anchor="center").grid(row=rr, column=c,
+                                               sticky="nsew")
+            rr += 1
 
     grid.columnconfigure(0, weight=3, minsize=140)
-    for c in range(1, len(metrics) + 1):
-        grid.columnconfigure(c, weight=2, minsize=70)
-    for rr in range(len(rows) + 1):
-        grid.rowconfigure(rr, weight=1)
+    for c in range(1, n_methods + 1):
+        grid.columnconfigure(c, weight=2, minsize=80)
+    for i in range(rr):
+        grid.rowconfigure(i, weight=1)
 
 
 def draw_radar_tab(parent, rows):
-    """Render the radar chart view on parent frame/tab."""
+    """Render the radar chart view on parent frame/tab.
+
+    Methods are the spokes — every row gets an axis, including unstable
+    ones (they simply read 0 on every metric line, same convention as the
+    heatmap's greyed-out columns). Each P0/P1 metric (compare.RADAR_METRICS)
+    is its own polygon across those spokes — the transpose of the old
+    layout, which put metrics on the spokes and one polygon per method.
+    """
     for child in parent.winfo_children():
         child.destroy()
+    if not rows:
+        ttk.Label(parent, padding=20, foreground="#888",
+                  text="Tune methods to compare them here.").pack()
+        return
     if not any(r.get("stable") for r in rows):
         ttk.Label(parent, padding=20, foreground="#888",
                   text="Tune at least one stable method to see the radar.").pack()
         return
 
-    stable = [r for r in rows if r.get("stable")]
-    if not stable:
-        ttk.Label(parent, text="No stable methods to plot.",
-                  padding=20).pack()
-        return
+    metrics = RADAR_METRICS
+    labels = [r["name"] + (" [BB]" if r.get("black_box") else "")
+              + (" [L]" if r.get("has_time_delay") else "") for r in rows]
 
-    # Six axes, each normalized so OUTER = better.
-    axes_spec = [
-        ("Track\n(IAE)", "IAE", -1),
-        ("Load rej.\n(IAE)", "IAE_load", -1),
-        ("Robust\n(Mₛ)", "Ms", -1),
-        ("Low OS\n(OS%)", "OS%", -1),
-        ("Speed\n(tₛ)", "ts", -1),
-        ("Smooth\n(TV)", "u_tv", -1),
-    ]
-    labels = [a[0] for a in axes_spec]
-    goodness = []  # list per-axis of normalized arrays (1=best)
-    for _, key, direction in axes_spec:
-        col = [r.get(key, float("inf")) for r in stable]
-        goodness.append(normalize_column(col, direction=direction))
-    goodness = np.array(goodness)  # shape (n_axes, n_methods)
+    goodness = []  # list per-metric of normalized arrays (1=best), across methods
+    for m in metrics:
+        col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
+               for r in rows]
+        goodness.append(normalize_column(col, direction=METRIC_DIRECTION[m]))
+    goodness = np.array(goodness)  # shape (n_metrics, n_methods)
 
-    n_ax = len(axes_spec)
+    n_ax = len(rows)
     angles = np.linspace(0, 2 * np.pi, n_ax, endpoint=False).tolist()
     angles += angles[:1]
 
-    fig = Figure(figsize=(7.2, 6.4), dpi=100)
+    fig = Figure(figsize=(7.6, 6.4), dpi=100)
     ax = fig.add_subplot(111, polar=True)
     ax.set_theta_offset(np.pi / 2)
     ax.set_theta_direction(-1)
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_xticklabels(labels, fontsize=8)
     ax.set_ylim(0, 1)
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
     ax.set_yticklabels(["", "", "", ""])
     ax.set_rlabel_position(0)
 
-    cmap = matplotlib.colormaps.get_cmap("tab20")
-    for j, r in enumerate(stable):
-        vals = goodness[:, j].tolist()
+    cmap = matplotlib.colormaps.get_cmap("tab10")
+    for i, m in enumerate(metrics):
+        vals = goodness[i].tolist()
         vals += vals[:1]
-        color = cmap(j % 20)
-        label = r["name"] + (" [BB]" if r.get("black_box") else "")
+        color = cmap(i % 10)
+        label = _METRIC_LABELS.get(m, m).replace("\n", " ")
         ax.plot(angles, vals, lw=1.6, color=color, label=label)
         ax.fill(angles, vals, color=color, alpha=0.06)
 
-    ax.set_title("Each axis normalized so outer = best across methods",
+    ax.set_title("Each metric normalized so outer = better across methods\n"
+                 "(P0 + P1 metrics; unstable methods read 0 on every axis)",
                  fontsize=10, pad=18)
-    ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.10),
+    ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.10),
               fontsize=8, framealpha=0.9)
     fig.tight_layout()
 

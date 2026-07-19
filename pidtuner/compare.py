@@ -10,6 +10,7 @@ Metrics per method
 Tracking (unit setpoint step):
     OS%      overshoot
     ts       2% settling time
+    Rise     10->90% rise time
     IAE      integral |error|
 Disturbance rejection (unit load step at the plant input, setpoint = 0):
     IAE_load integral |output deviation|
@@ -21,6 +22,7 @@ Robustness (loop frequency response L = C·P):
 Effort / smoothness (from the tracking sim):
     u_tv     total variation of u(t)  (lower = smoother)
     u_peak   peak |u|
+    ISU      integral of u^2 dt  (control effort/energy, P1 metric)
 
 Lower is better for every metric above, which makes a uniform red→green
 heatmap and a "bigger polygon = better" radar both straightforward.
@@ -130,11 +132,24 @@ def load_rejection_metrics(plant, gains, t_end=None):
 
 # Direction of "good" for each metric: -1 means lower is better (all of ours).
 METRIC_DIRECTION = {
-    "OS%": -1, "ts": -1, "IAE": -1, "IAE_load": -1,
+    "OS%": -1, "ts": -1, "Rise": -1, "IAE": -1, "IAE_load": -1, "ISU": -1,
     "Ms": -1, "Mt": -1, "u_tv": -1, "u_peak": -1,
 }
-# The metric columns shown in the comparison table, in order.
-TABLE_METRICS = ["OS%", "ts", "IAE", "IAE_load", "Ms", "Mt", "u_tv"]
+# The metric rows shown in the comparison table, grouped and ordered by
+# priority tier (P0 = must-have step-response metrics; P1 = tracking/load
+# rejection plus control-effort integral; P2 would hold peak-of-u/rate-limit/
+# margins once those land too). Tiers with no computed metric are simply
+# omitted rather than shown empty.
+METRIC_TIERS = [
+    ("P0", ["Rise", "ts", "OS%"]),
+    ("P1", ["IAE", "IAE_load", "ISU"]),
+    ("P2", ["Ms", "Mt", "u_tv"]),
+]
+# Flattened, same order — for callers that just want the metric list.
+TABLE_METRICS = [m for _, ms in METRIC_TIERS for m in ms]
+# P0 + P1 only — the radar/spider chart is limited to these (methods are its
+# spokes; each of these metrics gets its own polygon across the spokes).
+RADAR_METRICS = [m for tier, ms in METRIC_TIERS if tier in ("P0", "P1") for m in ms]
 
 
 def _safe(fn, *a, **k):
@@ -144,40 +159,51 @@ def _safe(fn, *a, **k):
         return ("__error__", str(exc))
 
 
-def metric_row(plant, name, gains, black_box=False):
+def metric_row(plant, name, gains, black_box=False, fopdt=None):
     """Compute one comparison row for an arbitrary (name, gains) pair.
 
     Returns a dict shaped exactly like a row of compare_all_methods:
-        {name, gains, stable, error, black_box, OS%, ts, IAE, IAE_load, Ms,
-         Mt, GM_dB, PM_deg, u_tv, u_peak}
+        {name, gains, stable, error, black_box, has_time_delay, delay_L,
+         delay_reason, OS%, ts, Rise, IAE, IAE_load, ISU, Ms, Mt, GM_dB,
+         PM_deg, u_tv, u_peak}
     Unstable / failed tunings come back with stable=False and an error string
     so the UI can grey them out. `black_box` is provenance only (whether the
     gains came from an identified surrogate rather than the true plant) —
     it never changes how this row is computed, since scoring always needs
-    the real plant regardless of how the gains were derived.
+    the real plant regardless of how the gains were derived. `fopdt`, when
+    given (the FOPDT model — ground-truth or identified — behind this
+    method's tuning, if any), supplies the has_time_delay/delay_L/
+    delay_reason provenance the same way; it never affects scoring either.
     """
+    delay_fields = {
+        "has_time_delay": bool(fopdt.delay_detected) if fopdt is not None else None,
+        "delay_L": float(fopdt.L) if fopdt is not None else None,
+        "delay_reason": fopdt.delay_reason if fopdt is not None else None,
+    }
     if gains is None:
         return {"name": name, "gains": None, "stable": False,
-                "error": "no gains", "black_box": black_box}
+                "error": "no gains", "black_box": black_box, **delay_fields}
     try:
         track = simulate_closed_loop(plant, gains, setpoint=1.0,
                                      setpoint_kind="step",
                                      u_min=-1e6, u_max=1e6)
     except Exception as exc:               # noqa: BLE001
         return {"name": name, "gains": gains, "stable": False,
-                "error": f"sim failed: {exc}", "black_box": black_box}
+                "error": f"sim failed: {exc}", "black_box": black_box, **delay_fields}
     if track.metrics.get("unstable", True) or not track.stable:
         return {"name": name, "gains": gains, "stable": False,
-                "error": "closed loop unstable", "black_box": black_box}
+                "error": "closed loop unstable", "black_box": black_box, **delay_fields}
     load = load_rejection_metrics(plant, gains)
     rob = robustness_metrics(plant, gains)
     return {
         "name": name, "gains": gains, "stable": True, "error": None,
-        "black_box": black_box,
+        "black_box": black_box, **delay_fields,
         "OS%": track.metrics.get("Overshoot", float("nan")),
         "ts": track.metrics.get("Settling", float("nan")),
+        "Rise": track.metrics.get("Rise", float("nan")),
         "IAE": track.metrics.get("IAE", float("nan")),
         "IAE_load": load["IAE_load"],
+        "ISU": track.metrics.get("ISU", float("nan")),
         "Ms": rob["Ms"], "Mt": rob["Mt"],
         "GM_dB": rob["GM_dB"], "PM_deg": rob["PM_deg"],
         "u_tv": track.metrics.get("u_tv", float("nan")),
@@ -244,9 +270,11 @@ def compare_all_methods(plant, include_variants=True):
     for name, res in entries:
         if isinstance(res, tuple) and res and res[0] == "__error__":
             rows.append({"name": name, "stable": False, "error": res[1],
-                         "gains": None, "black_box": False})
+                         "gains": None, "black_box": False,
+                         "has_time_delay": None, "delay_L": None, "delay_reason": None})
             continue
-        rows.append(metric_row(plant, name, res.gains, black_box=res.black_box))
+        rows.append(metric_row(plant, name, res.gains, black_box=res.black_box,
+                                fopdt=res.fopdt))
     return rows
 
 

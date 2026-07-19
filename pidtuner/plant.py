@@ -51,13 +51,21 @@ def poly_trim(p):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _Rat:
-    """Rational function num/den, polynomials in descending powers of s."""
+    """Rational function num/den, polynomials in descending powers of s,
+    plus an accumulated time-delay exponent (delay > 0 means a factor of
+    exp(-delay*s) has been multiplied in — see the exp(...) grammar rule
+    below). delay is tracked separately from num/den because it cannot be
+    represented as a rational polynomial; it can only ever appear as a
+    multiplicative factor of the whole expression (__add__/__sub__ reject
+    it), matching TransferFunction's single lumped-delay representation.
+    """
 
-    __slots__ = ("num", "den")
+    __slots__ = ("num", "den", "delay")
 
-    def __init__(self, num, den):
+    def __init__(self, num, den, delay=0.0):
         self.num = np.asarray(num, dtype=float).ravel()
         self.den = np.asarray(den, dtype=float).ravel()
+        self.delay = float(delay)
 
     @classmethod
     def const(cls, c): return cls([float(c)], [1.0])
@@ -65,9 +73,15 @@ class _Rat:
     @classmethod
     def s(cls): return cls([1.0, 0.0], [1.0])
 
-    def __neg__(self): return _Rat(-self.num, self.den)
+    def __neg__(self): return _Rat(-self.num, self.den, self.delay)
 
     def __add__(self, o):
+        if self.delay != 0.0 or o.delay != 0.0:
+            raise ValueError(
+                "a time-delay term (exp(...)) can only appear as a "
+                "multiplicative factor of the whole expression, not added "
+                "or subtracted"
+            )
         return _Rat(
             poly_add(poly_mul(self.num, o.den), poly_mul(o.num, self.den)),
             poly_mul(self.den, o.den),
@@ -76,12 +90,14 @@ class _Rat:
     def __sub__(self, o): return self + (-o)
 
     def __mul__(self, o):
-        return _Rat(poly_mul(self.num, o.num), poly_mul(self.den, o.den))
+        return _Rat(poly_mul(self.num, o.num), poly_mul(self.den, o.den),
+                     self.delay + o.delay)
 
     def __truediv__(self, o):
         if not np.any(np.abs(o.num) > 1e-12):
             raise ValueError("division by zero in transfer-function expression")
-        return _Rat(poly_mul(self.num, o.den), poly_mul(self.den, o.num))
+        return _Rat(poly_mul(self.num, o.den), poly_mul(self.den, o.num),
+                     self.delay - o.delay)
 
     def __pow__(self, n):
         if not isinstance(n, int) or n < 0:
@@ -90,6 +106,43 @@ class _Rat:
         for _ in range(n):
             out = out * self
         return out
+
+
+def _exp_arg_to_delay(rat):
+    """Validate that `rat` (the parsed argument of exp(...)) is a pure,
+    causal delay exponent of the form -L*s (L >= 0), and return L.
+
+    Only this restricted form is supported: exp(...) models a lumped input
+    dead time, not a general exponential of a rational function of s.
+    """
+    if rat.delay != 0.0:
+        raise ValueError("exp(...) argument cannot itself contain a time-delay term")
+    if len(rat.den) != 1:
+        raise ValueError(
+            "exp(...) argument must be a simple expression like '-2.5*s', "
+            "not a rational function"
+        )
+    num = rat.num / rat.den[0]
+    if len(num) == 1:
+        a, b = 0.0, float(num[0])
+    elif len(num) == 2:
+        a, b = float(num[0]), float(num[1])
+    else:
+        raise ValueError(
+            "exp(...) argument must be linear in s (e.g. 'exp(-2.5*s)'), "
+            "got a higher-order polynomial"
+        )
+    if abs(b) > 1e-9:
+        raise ValueError(
+            "exp(...) argument must have no constant term — only pure "
+            "delay terms like 'exp(-2.5*s)' are supported"
+        )
+    if a > 1e-9:
+        raise ValueError(
+            "exp(...) argument must have a non-positive coefficient of s "
+            "— a predictive/non-causal term like 'exp(2*s)' is not supported"
+        )
+    return -a
 
 
 def _tokenize(text):
@@ -104,13 +157,18 @@ def _tokenize(text):
             j = i
             while j < n and (text[j].isdigit() or text[j] == "."):
                 j += 1
-            # scientific notation
+            # scientific notation — only commit to consuming 'e'/'E' if a
+            # valid exponent (optional sign + at least one digit) follows;
+            # otherwise leave it alone (e.g. "5exp(...)" must tokenize as
+            # NUM(5) then FUNC(exp), not fail parsing "5e" as a bad float).
             if j < n and text[j] in "eE":
-                j += 1
-                if j < n and text[j] in "+-":
-                    j += 1
-                while j < n and text[j].isdigit():
-                    j += 1
+                k = j + 1
+                if k < n and text[k] in "+-":
+                    k += 1
+                if k < n and text[k].isdigit():
+                    while k < n and text[k].isdigit():
+                        k += 1
+                    j = k
             tokens.append(("NUM", float(text[i:j])))
             i = j
         elif c.isalpha():
@@ -118,11 +176,15 @@ def _tokenize(text):
             while j < n and text[j].isalpha():
                 j += 1
             sym = text[i:j].lower()
-            if sym != "s":
+            if sym == "s":
+                tokens.append(("S", None))
+            elif sym == "exp":
+                tokens.append(("FUNC", "exp"))
+            else:
                 raise ValueError(
-                    f"unknown symbol {text[i:j]!r}; only the Laplace variable 's' is allowed"
+                    f"unknown symbol {text[i:j]!r}; only the Laplace variable "
+                    f"'s' and 'exp(...)' (for a time-delay term) are allowed"
                 )
-            tokens.append(("S", None))
             i = j
         elif text[i:i + 2] == "**":
             tokens.append(("OP", "^"))
@@ -147,7 +209,10 @@ class _Parser:
         term   : factor (('*'|'/'|implicit) factor)*
         factor : ('+'|'-') factor | power
         power  : atom ('^' factor)?
-        atom   : NUM | 's' | '(' expr ')'
+        atom   : NUM | 's' | '(' expr ')' | 'exp' '(' expr ')'
+    'exp(...)' is restricted to a pure causal delay exponent -L*s (see
+    _exp_arg_to_delay); the result carries no num/den contribution, only an
+    accumulated _Rat.delay, and can only be combined multiplicatively.
     """
 
     def __init__(self, tokens):
@@ -187,8 +252,8 @@ class _Parser:
                 self._eat()
                 right = self._factor()
                 left = left * right if val == "*" else left / right
-            elif tag in ("NUM", "S", "LP"):
-                # Implicit multiplication: "10s", "(s+1)(s+2)", "2(s+1)"
+            elif tag in ("NUM", "S", "LP", "FUNC"):
+                # Implicit multiplication: "10s", "(s+1)(s+2)", "2(s+1)", "2exp(-s)"
                 right = self._factor()
                 left = left * right
             else:
@@ -231,6 +296,16 @@ class _Parser:
             if tag2 != "RP":
                 raise ValueError("missing ')'")
             return inner
+        if tag == "FUNC":
+            tag2, _ = self._eat()
+            if tag2 != "LP":
+                raise ValueError(f"expected '(' after {val}")
+            inner = self._expr()
+            tag3, _ = self._eat()
+            if tag3 != "RP":
+                raise ValueError("missing ')'")
+            L = _exp_arg_to_delay(inner)
+            return _Rat([1.0], [1.0], delay=L)
         raise ValueError(f"unexpected token {tag!r}")
 
 
@@ -276,7 +351,13 @@ class TransferFunction:
 
     @classmethod
     def parse(cls, text, L=0.0):
-        """Parse a symbolic expression like '1000/((s+1)(10s+1))'."""
+        """Parse a symbolic expression like '1000/((s+1)(10s+1))'.
+
+        The expression may itself carry a dead-time factor, e.g.
+        '5*exp(-3*s)/(s+1)' — the delay implied by any exp(...) term is
+        combined with the separate `L` kwarg. Specifying delay in both
+        places at once is rejected as ambiguous.
+        """
         text = text.strip()
         if not text:
             raise ValueError("empty transfer-function expression")
@@ -285,7 +366,21 @@ class TransferFunction:
         text = re.sub(r"^\s*G\s*=\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"^\s*=\s*", "", text)
         rat = _Parser(_tokenize(text)).parse()
-        return cls(num=rat.num, den=rat.den, L=L)
+        expr_L = rat.delay
+        if expr_L < -1e-9:
+            raise ValueError(
+                f"expression implies a negative (predictive/non-causal) time "
+                f"delay L={expr_L:g}s — check for division by an exp(...) term"
+            )
+        expr_L = max(expr_L, 0.0)
+        if expr_L > 1e-9 and L > 1e-9:
+            raise ValueError(
+                f"time delay specified twice: the expression implies "
+                f"L={expr_L:g}s via exp(...), and L={L:g}s was also passed "
+                f"separately — specify the delay in only one place"
+            )
+        total_L = expr_L if expr_L > 1e-9 else L
+        return cls(num=rat.num, den=rat.den, L=total_L)
 
     @classmethod
     def from_coeffs(cls, num, den, L=0.0, gain=1.0):
@@ -399,4 +494,6 @@ class TransferFunction:
             parts.append(f"{integ} integrator(s)")
         if unstable:
             parts.append(f"{unstable} UNSTABLE pole(s)")
+        if self.L > 0:
+            parts.append(f"time delay L={self.L:g}s")
         return ", ".join(parts)

@@ -94,6 +94,8 @@ def main():
             "model": {
                 "fopdt": (model.fopdt.pretty() if model.fopdt else None),
                 "fopdt_reason": model.fopdt_reason,
+                "delay_detected": (model.fopdt.delay_detected if model.fopdt else None),
+                "delay_reason": (model.fopdt.delay_reason if model.fopdt else None),
                 "sopdt": (model.sopdt.pretty() if model.sopdt else None),
                 "sopdt_reason": model.sopdt_reason,
                 "Ku": model.Ku, "Pu": model.Pu, "ku_pu_source": model.ku_pu_source,
@@ -105,6 +107,9 @@ def main():
     else:
         print("=== Black-box identification ===")
         print(f"FOPDT: {model.fopdt.pretty() if model.fopdt else 'unavailable — ' + str(model.fopdt_reason)}")
+        if model.fopdt is not None:
+            verdict = "YES" if model.fopdt.delay_detected else "no"
+            print(f"Time delay detected: {verdict} — {model.fopdt.delay_reason}")
         print(f"SOPDT: {model.sopdt.pretty() if model.sopdt else 'unavailable — ' + str(model.sopdt_reason)}")
         if model.Ku is not None:
             print(f"Ku, Pu: {model.Ku:.6g}, {model.Pu:.6g}  (source: {model.ku_pu_source})")

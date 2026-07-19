@@ -254,6 +254,7 @@ def compute_metrics(t, sp, y, e, u, sp_kind="step"):
       - IAE          : ∫|e| dt   (lower = better)
       - ITAE         : ∫ t·|e| dt   (penalizes late error)
       - |u|_peak, u_rms : control effort
+      - ISU          : ∫ u² dt   (control effort / energy, P1 metric)
 
     Step (sp tends to a constant final value):
       - Overshoot %, Rise (10–90%), Settling (2%)
@@ -270,6 +271,7 @@ def compute_metrics(t, sp, y, e, u, sp_kind="step"):
     base = {
         "IAE": float("inf"), "ITAE": float("inf"),
         "u_peak": float("inf"), "u_rms": float("inf"), "u_tv": float("inf"),
+        "ISU": float("inf"),
         "unstable": True, "sp_kind": sp_kind,
     }
     if not np.all(np.isfinite(y)) or not np.all(np.isfinite(u)):
@@ -282,6 +284,7 @@ def compute_metrics(t, sp, y, e, u, sp_kind="step"):
         "u_peak": float(np.max(np.abs(u))),
         "u_rms": float(np.sqrt(np.mean(u ** 2))),
         "u_tv": float(np.sum(np.abs(np.diff(u)))),  # total variation (smoothness)
+        "ISU": float(np.trapezoid(u ** 2, t)),       # control effort/energy
         "unstable": False,
         "sp_kind": sp_kind,
     }
@@ -330,7 +333,8 @@ def format_metrics(m):
     if m.get("unstable"):
         return "UNSTABLE (diverging response)"
     common = (f"IAE = {m['IAE']:.3g},  ITAE = {m['ITAE']:.3g}\n"
-              f"|u|_peak = {m['u_peak']:.3g},  u_rms = {m['u_rms']:.3g}")
+              f"|u|_peak = {m['u_peak']:.3g},  u_rms = {m['u_rms']:.3g},  "
+              f"ISU (control effort) = {m['ISU']:.3g}")
     kind = m.get("sp_kind", "step")
     if kind == "step":
         rise_str = (f"{m['Rise']:.3g}" if np.isfinite(m.get("Rise", np.nan)) else "—")

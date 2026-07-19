@@ -32,11 +32,20 @@ from signal_source import SignalGenerator
 
 @dataclass
 class FOPDT:
-    """First-order plus dead time:  G(s) = K * exp(-Ls) / (tau*s + 1)."""
+    """First-order plus dead time:  G(s) = K * exp(-Ls) / (tau*s + 1).
+
+    delay_detected/delay_reason record a significance judgment on L, not
+    just the raw fitted number — see _check_delay_significant. Both default
+    to a conservative "yes, taken at face value" for FOPDT instances built
+    directly (e.g. from a known ground-truth plant) rather than fit from
+    noisy data, where no such judgment is meaningful.
+    """
 
     K: float
     tau: float
     L: float
+    delay_detected: bool = True
+    delay_reason: str = ""
 
     def to_tf(self):
         return TransferFunction.fopdt(self.K, self.tau, self.L)
@@ -73,7 +82,8 @@ def fit_fopdt_from_step(t, y, u_step):
 
     if abs(delta) < 1e-9:
         # No discernible response — fall back to a placeholder
-        return FOPDT(K=0.0, tau=1.0, L=0.0)
+        return FOPDT(K=0.0, tau=1.0, L=0.0, delay_detected=False,
+                     delay_reason="no discernible response")
 
     def first_crossing(frac):
         target = y0 + frac * delta
@@ -95,7 +105,11 @@ def fit_fopdt_from_step(t, y, u_step):
     t_632 = first_crossing(0.632)
     tau = max(1.5 * (t_632 - t_283), 1e-3)
     L = max(t_632 - tau, 0.0)
-    return FOPDT(K=K, tau=tau, L=L)
+    fopdt = FOPDT(K=K, tau=tau, L=L)
+    dt = float(t[1] - t[0]) if len(t) > 1 else 0.0
+    fopdt.delay_detected, fopdt.delay_reason = _check_delay_significant(
+        t, y, fopdt, u_step, dt)
+    return fopdt
 
 
 def run_step_test(plant, t_max=None, step_amp=1.0, noise_sigma=0.0, seed=None):
@@ -149,6 +163,52 @@ def _fopdt_step_response(t, K, tau, L, u_step, y0):
     mask = shifted >= 0
     resp[mask] = 1.0 - np.exp(-shifted[mask] / max(tau, 1e-9))
     return y0 + K * u_step * resp
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Delay significance check — is the fitted L a real feature of the data, or
+# just fit noise?  The 28.3%/63.2% method above always returns *some* L>=0,
+# even for a genuinely delay-free plant (measurement noise / discretization
+# nudge the two crossing times apart). Compare residual SSE against an
+# L=0 baseline (K fixed, tau refit) — the same "does the extra parameter
+# earn its keep" idiom fit_sopdt_from_step already uses against its FOPDT
+# baseline below — rather than reporting a spurious small L as "detected."
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fit_tau_only(t, y, K, u_step, y0, tau0):
+    """Least-squares tau fit with L fixed at 0 — the no-delay baseline."""
+    def residuals(x):
+        return _fopdt_step_response(t, K, x[0], 0.0, u_step, y0) - y
+    res = least_squares(residuals, [max(tau0, 1e-6)], bounds=([1e-9], [np.inf]))
+    return float(res.x[0])
+
+
+def _check_delay_significant(t, y, fopdt, u_step, dt, min_improvement=0.05):
+    """Return (delay_detected, reason) for a fitted FOPDT model.
+
+    A delay is only reported as "detected" if it's both resolvable at the
+    sample rate (L >= 1.5*dt) and meaningfully improves the fit over the
+    best L=0 model (relative SSE reduction >= min_improvement).
+    """
+    if fopdt.L <= 0:
+        return False, "no delay was fitted"
+    if dt > 0 and fopdt.L < 1.5 * dt:
+        return False, f"fitted L={fopdt.L:.3g}s is below sample resolution (dt={dt:.3g}s)"
+
+    y0 = float(y[0])
+    tau0 = _fit_tau_only(t, y, fopdt.K, u_step, y0, fopdt.tau)
+    sse_free = float(np.sum(
+        (_fopdt_step_response(t, fopdt.K, fopdt.tau, fopdt.L, u_step, y0) - y) ** 2))
+    sse_L0 = float(np.sum(
+        (_fopdt_step_response(t, fopdt.K, tau0, 0.0, u_step, y0) - y) ** 2))
+
+    if sse_L0 < 1e-12:
+        return False, "no discernible response to compare against"
+    improvement = (sse_L0 - sse_free) / sse_L0
+    if improvement < min_improvement:
+        return False, (f"allowing a delay only improves fit by {improvement:.1%} "
+                        "over an L=0 model — not significant")
+    return True, f"L={fopdt.L:.3g}s improves fit by {improvement:.1%} over an L=0 model"
 
 
 def _sopdt_step_response(t, K, tau1, tau2, L, u_step, y0):

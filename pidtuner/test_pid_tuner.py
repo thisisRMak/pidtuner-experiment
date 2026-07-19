@@ -122,6 +122,41 @@ class TestPlantParsing(unittest.TestCase):
         tf = TransferFunction.parse("1/(s+1)", L=2.5)
         self.assertAlmostEqual(tf.L, 2.5)
 
+    def test_dead_time_in_expression(self):
+        tf = TransferFunction.parse("exp(-2*s)/(s+1)")
+        self.assertAlmostEqual(tf.L, 2.0)
+        np.testing.assert_allclose(tf.num, [1.0])
+        np.testing.assert_allclose(tf.den, [1.0, 1.0])
+
+    def test_dead_time_in_expression_with_gain_and_implicit_mult(self):
+        tf = TransferFunction.parse("5exp(-1.5*s)/(s+1)")
+        self.assertAlmostEqual(tf.L, 1.5)
+        np.testing.assert_allclose(tf.num, [5.0])
+
+    def test_dead_time_multiple_exp_factors_accumulate(self):
+        tf = TransferFunction.parse("exp(-1*s)*exp(-2*s)/(s+1)")
+        self.assertAlmostEqual(tf.L, 3.0)
+
+    def test_dead_time_expression_plus_L_kwarg_conflict_rejected(self):
+        with self.assertRaises(ValueError):
+            TransferFunction.parse("exp(-2*s)/(s+1)", L=1.0)
+
+    def test_dead_time_added_rejected(self):
+        with self.assertRaises(ValueError):
+            TransferFunction.parse("exp(-2*s) + 1")
+
+    def test_dead_time_noncausal_rejected(self):
+        with self.assertRaises(ValueError):
+            TransferFunction.parse("exp(2*s)/(s+1)")
+
+    def test_dead_time_constant_offset_rejected(self):
+        with self.assertRaises(ValueError):
+            TransferFunction.parse("exp(-s-1)/(s+1)")
+
+    def test_dead_time_division_noncausal_rejected(self):
+        with self.assertRaises(ValueError):
+            TransferFunction.parse("exp(-1*s)/exp(-3*s)/(s+1)")
+
     def test_poles_correct(self):
         tf = benchmark_plant()
         poles = sorted(tf.poles().real)
@@ -178,6 +213,23 @@ class TestIdentification(unittest.TestCase):
         _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
                                           noise_sigma=0.05, seed=42)
         self.assertAlmostEqual(fopdt.K, 2.0, delta=0.2)
+
+    def test_step_fit_flags_delay_detected_for_delayed_plant(self):
+        plant = fopdt_plant()  # K=2, tau=5, L=1 — clear, resolvable delay
+        _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0)
+        self.assertTrue(fopdt.delay_detected)
+        self.assertIn("improves fit", fopdt.delay_reason)
+
+    def test_step_fit_flags_no_delay_for_first_order_plant(self):
+        plant = TransferFunction.parse("1/(s+1)")  # pure first-order, no delay
+        _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0)
+        self.assertFalse(fopdt.delay_detected)
+
+    def test_step_fit_flags_no_delay_with_noise_on_first_order_plant(self):
+        plant = TransferFunction.parse("1/(s+1)")
+        _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
+                                          noise_sigma=0.01, seed=7)
+        self.assertFalse(fopdt.delay_detected)
 
     def test_relay_test_finds_oscillation(self):
         plant = benchmark_plant()
@@ -946,6 +998,17 @@ class TestBlackBox(unittest.TestCase):
                 self.assertAlmostEqual(d_row.result.gains.Kp, f_row.result.gains.Kp, places=9)
                 self.assertAlmostEqual(d_row.result.gains.Ki, f_row.result.gains.Ki, places=9)
                 self.assertAlmostEqual(d_row.result.gains.Kd, f_row.result.gains.Kd, places=9)
+
+    def test_identify_flags_delay_detected_for_delayed_plant(self):
+        step_sig, _ = self._signals()  # benchmark_plant has L=0.5
+        model = identify_from_signals(step_signal=step_sig, relay_signal=None)
+        self.assertTrue(model.fopdt.delay_detected)
+
+    def test_identify_flags_no_delay_for_delay_free_plant(self):
+        plant = TransferFunction.parse("1/(s+1)")
+        step_sig = SignalGenerator(plant).step_test(step_amp=1.0)
+        model = identify_from_signals(step_signal=step_sig, relay_signal=None)
+        self.assertFalse(model.fopdt.delay_detected)
 
     def test_no_relay_signal_falls_back_to_surrogate_bode(self):
         step_sig, _ = self._signals()
