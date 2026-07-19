@@ -28,25 +28,25 @@ import numpy as np
 
 import matplotlib
 matplotlib.use("TkAgg")
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import (
-    FigureCanvasTkAgg, NavigationToolbar2Tk,
-)
 
 from plant import TransferFunction, parse_coeff_list
 from identify import (
     run_step_test, run_relay_test, find_ultimate_gain, FOPDT,
 )
-from tune import (
+from widgets import ClosableNotebook
+from tune import select_slowest_stable_poles
+from tuning_methods import (
     PIDGains, TuningResult, halve_gains,
-    tune_pole_cancellation, select_slowest_stable_poles,
-    tune_zn_method_1, tune_zn_method_2,
-    tune_amigo, tune_simc, tune_boyd,
-    tune_cohen_coon, tune_chr, tune_tyreus_luyben,
+    StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
+    Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
-from compare import (
-    compare_all_methods, metric_row, normalize_column,
-    TABLE_METRICS, METRIC_DIRECTION,
+from compare import compare_all_methods, metric_row
+from comparison_views import draw_heatmap_tab, draw_radar_tab
+from response_plotting import create_response_figure, draw_response_tab
+from parameter_panels import (
+    build_pole_cancel_panel, build_zn1_panel, build_zn2_panel,
+    build_amigo_panel, build_simc_panel, build_boyd_panel,
+    build_cohen_coon_panel, build_chr_panel, build_tyreus_luyben_panel,
 )
 from simulate import simulate_closed_loop, format_metrics
 
@@ -80,86 +80,6 @@ class TunedEntry:
         self.color = None        # assigned at plot time
         self.enabled = True      # checkbox state in the tuned list
         self.mrow = None         # cached comparison metric row (compare.metric_row)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# A ttk.Notebook whose tabs each carry an "×" close button.
-# Standard recipe: a custom "close" element + layout, with runtime-drawn images.
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ClosableNotebook(ttk.Notebook):
-    _style_ready = False
-    _imgs = {}
-
-    def __init__(self, master=None, on_closed=None, **kw):
-        if not ClosableNotebook._style_ready:
-            self._build_style()
-            ClosableNotebook._style_ready = True
-        kw["style"] = "Closable.TNotebook"
-        super().__init__(master, **kw)
-        self._on_closed = on_closed
-        self._pressed_index = None
-        self.bind("<ButtonPress-1>", self._on_press, True)
-        self.bind("<ButtonRelease-1>", self._on_release, True)
-
-    @classmethod
-    def _make_x(cls, name, color):
-        img = tk.PhotoImage(name, width=14, height=14)
-        img.blank()  # fully transparent
-        for i in range(3, 11):
-            for w in (-1, 0, 1):
-                img.put(color, (i + w, i))
-                img.put(color, (i + w, 13 - i))
-        cls._imgs[name] = img  # keep a reference alive
-        return img
-
-    @classmethod
-    def _build_style(cls):
-        cls._make_x("ctab_close", "#888888")
-        cls._make_x("ctab_close_active", "#d62728")
-        style = ttk.Style()
-        try:
-            style.element_create(
-                "ctab.close", "image", "ctab_close",
-                ("active", "ctab_close_active"), border=6, sticky="")
-        except tk.TclError:
-            pass  # already created in a prior instance
-        style.layout("Closable.TNotebook", [
-            ("Closable.TNotebook.client", {"sticky": "nswe"})])
-        style.layout("Closable.TNotebook.Tab", [
-            ("Closable.TNotebook.tab", {"sticky": "nswe", "children": [
-                ("Closable.TNotebook.padding", {
-                    "side": "top", "sticky": "nswe", "children": [
-                        ("Closable.TNotebook.label", {"side": "left", "sticky": ""}),
-                        ("ctab.close", {"side": "left", "sticky": ""}),
-                    ]})
-            ]})
-        ])
-
-    def _on_press(self, event):
-        elem = self.identify(event.x, event.y)
-        if "close" in elem:
-            try:
-                self._pressed_index = self.index("@%d,%d" % (event.x, event.y))
-            except tk.TclError:
-                self._pressed_index = None
-            self.state(["pressed"])
-            return "break"
-
-    def _on_release(self, event):
-        if not self.instate(["pressed"]):
-            return
-        elem = self.identify(event.x, event.y)
-        try:
-            index = self.index("@%d,%d" % (event.x, event.y))
-        except tk.TclError:
-            index = None
-        if "close" in elem and index is not None and index == self._pressed_index:
-            self.forget(index)
-            if self._on_closed:
-                self._on_closed()
-        self.state(["!pressed"])
-        self._pressed_index = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -351,139 +271,37 @@ class PIDTunerApp:
         self.args_frame = ttk.Frame(mf)
         self.args_frame.pack(fill="x")
 
-        # ── Pole-cancellation args ─────────────────────────────────────────
-        self.pc_frame = ttk.Frame(self.args_frame)
-        ttk.Label(self.pc_frame, text="Cancel poles at s = −p₁, s = −p₂").pack(anchor="w")
-        self.pc_mode = tk.StringVar(value="auto")
-        ttk.Radiobutton(self.pc_frame, text="Auto (two slowest stable poles)",
-                        variable=self.pc_mode, value="auto",
-                        command=self._update_pc_state).pack(anchor="w")
-        ttk.Radiobutton(self.pc_frame, text="Manual",
-                        variable=self.pc_mode, value="manual",
-                        command=self._update_pc_state).pack(anchor="w")
-        self.pc_p1 = tk.StringVar(value="0.1")
-        self.pc_p2 = tk.StringVar(value="1.0")
-        self.pc_p1_entry = self._labeled_entry(self.pc_frame, "p₁ (positive)", self.pc_p1, width=12)
-        self.pc_p2_entry = self._labeled_entry(self.pc_frame, "p₂ (positive)", self.pc_p2, width=12)
-        self.pc_kd = tk.StringVar(value="1.0")
-        self._labeled_entry(self.pc_frame, "Kd (free)", self.pc_kd, width=12)
-        self.pc_pole_info = ttk.Label(self.pc_frame, text="", foreground="#06a",
-                                       wraplength=380, justify="left",
-                                       font=("TkDefaultFont", 8))
-        self.pc_pole_info.pack(anchor="w", pady=(4, 0))
+        self.pc_frame, pc = build_pole_cancel_panel(
+            self.args_frame, self._labeled_entry, self._update_pc_state)
+        (self.pc_mode, self.pc_p1, self.pc_p2, self.pc_kd,
+         self.pc_p1_entry, self.pc_p2_entry, self.pc_pole_info) = (
+            pc.mode, pc.p1, pc.p2, pc.kd, pc.p1_entry, pc.p2_entry, pc.pole_info)
 
-        # ── ZN-I args ───────────────────────────────────────────────────────
-        self.zn1_frame = ttk.Frame(self.args_frame)
-        self.zn1_step = tk.StringVar(value="1.0")
-        self.zn1_noise = tk.StringVar(value="0.0")
-        self._labeled_entry(self.zn1_frame, "step amplitude", self.zn1_step, width=12)
-        self._labeled_entry(self.zn1_frame, "noise σ", self.zn1_noise, width=12)
-        ttk.Label(self.zn1_frame,
-                  text="ZN-I is aggressive for tracking — tick 'Halve gains'\n"
-                       "in Tuning method for the PEi9e recommendation.",
-                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w", pady=(2, 0))
+        self.zn1_frame, zn1 = build_zn1_panel(self.args_frame, self._labeled_entry)
+        self.zn1_step, self.zn1_noise = zn1.step, zn1.noise
 
-        # ── ZN-II args ──────────────────────────────────────────────────────
-        self.zn2_frame = ttk.Frame(self.args_frame)
-        ttk.Label(self.zn2_frame, text="How to obtain Ku, Pu:").pack(anchor="w")
-        self.zn2_source = tk.StringVar(value="bode")
-        ttk.Radiobutton(self.zn2_frame, text="Analytical (Bode crossover of −180°)",
-                        variable=self.zn2_source, value="bode").pack(anchor="w")
-        ttk.Radiobutton(self.zn2_frame, text="Simulated relay-feedback test",
-                        variable=self.zn2_source, value="relay").pack(anchor="w")
-        self.zn2_relay_h = tk.StringVar(value="1.0")
-        self.zn2_relay_T = tk.StringVar(value="80.0")
-        self._labeled_entry(self.zn2_frame, "relay h", self.zn2_relay_h, width=12)
-        self._labeled_entry(self.zn2_frame, "relay duration", self.zn2_relay_T, width=12)
-        ttk.Label(self.zn2_frame,
-                  text="Like ZN-I, tick 'Halve gains' for tracking.",
-                  foreground="#666", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w", pady=(2, 0))
+        self.zn2_frame, zn2 = build_zn2_panel(self.args_frame, self._labeled_entry)
+        self.zn2_source, self.zn2_relay_h, self.zn2_relay_T = (
+            zn2.source, zn2.relay_h, zn2.relay_T)
 
-        # ── AMIGO args ──────────────────────────────────────────────────────
-        self.amigo_frame = ttk.Frame(self.args_frame)
-        self.amigo_integrating = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.amigo_frame,
-                        text="Use integrating form (G = A·exp(−Ls)/s)",
-                        variable=self.amigo_integrating).pack(anchor="w")
+        self.amigo_frame, amigo = build_amigo_panel(self.args_frame)
+        self.amigo_integrating = amigo.integrating
 
-        # ── SIMC args ───────────────────────────────────────────────────────
-        self.simc_frame = ttk.Frame(self.args_frame)
-        self.simc_tau_c = tk.StringVar(value="")
-        self.simc_tau2 = tk.StringVar(value="")
-        ttk.Label(self.simc_frame,
-                  text="τc — closed-loop time constant (blank = use L)").pack(anchor="w")
-        self._labeled_entry(self.simc_frame, "τc", self.simc_tau_c, width=12)
-        ttk.Label(self.simc_frame,
-                  text="τ₂ — 2nd time constant for PID (blank = PI only)",
-                  font=("TkDefaultFont", 8), foreground="#666").pack(anchor="w")
-        self._labeled_entry(self.simc_frame, "τ₂", self.simc_tau2, width=12)
+        self.simc_frame, simc = build_simc_panel(self.args_frame, self._labeled_entry)
+        self.simc_tau_c, self.simc_tau2 = simc.tau_c, simc.tau2
 
-        # ── Boyd args ───────────────────────────────────────────────────────
-        self.boyd_frame = ttk.Frame(self.args_frame)
-        self.boyd_Ms = tk.StringVar(value="1.4")
-        self.boyd_Mt = tk.StringVar(value="1.4")
-        self._labeled_entry(self.boyd_frame, "Ms (sens. bound)", self.boyd_Ms, width=12)
-        self._labeled_entry(self.boyd_frame, "Mt (comp.sens. bound)", self.boyd_Mt, width=12)
-        ttk.Label(self.boyd_frame,
-                  text="Smaller Ms/Mt → more robust, less aggressive.\n"
-                       "Typical range 1.2 – 2.0.",
-                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w", pady=(2, 0))
+        self.boyd_frame, boyd = build_boyd_panel(self.args_frame, self._labeled_entry)
+        self.boyd_Ms, self.boyd_Mt = boyd.Ms, boyd.Mt
 
-        # ── Cohen–Coon args ─────────────────────────────────────────────────
-        self.cc_frame = ttk.Frame(self.args_frame)
-        ttk.Label(self.cc_frame,
-                  text="Reaction-curve rules with a dead-time correction.\n"
-                       "Better than ZN-I on delay-dominant plants.",
-                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w")
-        self.cc_step = tk.StringVar(value="1.0")
-        self.cc_noise = tk.StringVar(value="0.0")
-        self._labeled_entry(self.cc_frame, "step amplitude", self.cc_step, width=12)
-        self._labeled_entry(self.cc_frame, "noise σ", self.cc_noise, width=12)
+        self.cc_frame, cc = build_cohen_coon_panel(self.args_frame, self._labeled_entry)
+        self.cc_step, self.cc_noise = cc.step, cc.noise
 
-        # ── CHR args ────────────────────────────────────────────────────────
-        self.chr_frame = ttk.Frame(self.args_frame)
-        ttk.Label(self.chr_frame, text="Design intent:").pack(anchor="w")
-        self.chr_response = tk.StringVar(value="setpoint")
-        ttk.Radiobutton(self.chr_frame, text="Setpoint tracking (servo)",
-                        variable=self.chr_response, value="setpoint").pack(anchor="w")
-        ttk.Radiobutton(self.chr_frame, text="Load rejection (regulator)",
-                        variable=self.chr_response, value="load").pack(anchor="w")
-        ttk.Label(self.chr_frame, text="Overshoot target:").pack(anchor="w", pady=(4, 0))
-        self.chr_overshoot = tk.StringVar(value="0")
-        ttk.Radiobutton(self.chr_frame, text="0% (aperiodic, most damped)",
-                        variable=self.chr_overshoot, value="0").pack(anchor="w")
-        ttk.Radiobutton(self.chr_frame, text="20% (quicker, some overshoot)",
-                        variable=self.chr_overshoot, value="20").pack(anchor="w")
-        ttk.Label(self.chr_frame,
-                  text="Note: the 0%/20% target is for the nominal FOPDT model;\n"
-                       "realized overshoot on the true plant may differ.",
-                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w", pady=(2, 0))
+        self.chr_frame, chr_ = build_chr_panel(self.args_frame)
+        self.chr_response, self.chr_overshoot = chr_.response, chr_.overshoot
 
-        # ── Tyreus–Luyben args ──────────────────────────────────────────────
-        self.tl_frame = ttk.Frame(self.args_frame)
-        ttk.Label(self.tl_frame, text="How to obtain Ku, Pu:").pack(anchor="w")
-        self.tl_source = tk.StringVar(value="bode")
-        ttk.Radiobutton(self.tl_frame, text="Analytical (Bode crossover of −180°)",
-                        variable=self.tl_source, value="bode").pack(anchor="w")
-        ttk.Radiobutton(self.tl_frame, text="Simulated relay-feedback test",
-                        variable=self.tl_source, value="relay").pack(anchor="w")
-        self.tl_relay_h = tk.StringVar(value="1.0")
-        self.tl_relay_T = tk.StringVar(value="80.0")
-        self._labeled_entry(self.tl_frame, "relay h", self.tl_relay_h, width=12)
-        self._labeled_entry(self.tl_frame, "relay duration", self.tl_relay_T, width=12)
-        self.tl_pi = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.tl_frame, text="PI only (no derivative)",
-                        variable=self.tl_pi).pack(anchor="w", pady=(2, 0))
-        ttk.Label(self.tl_frame,
-                  text="Conservative cousin of ZN-II: larger margins, less\n"
-                       "overshoot. Already detuned — no 'Halve gains' needed.",
-                  foreground="#666", justify="left", font=("TkDefaultFont", 8)
-                  ).pack(anchor="w", pady=(2, 0))
+        self.tl_frame, tl = build_tyreus_luyben_panel(self.args_frame, self._labeled_entry)
+        self.tl_source, self.tl_relay_h, self.tl_relay_T, self.tl_pi = (
+            tl.source, tl.relay_h, tl.relay_T, tl.pi)
 
         # ── Tune button ─────────────────────────────────────────────────────
         # ── Global "halve gains" toggle ─────────────────────────────────────
@@ -759,7 +577,7 @@ class PIDTunerApp:
                 Kd = 1.0
         else:
             Kd = float(Kd_str)
-        return tune_pole_cancellation(plant, p1, p2, Kd=Kd)
+        return StablePoleCancellation(plant, p1, p2, Kd=Kd).tune()
 
     def _tune_zn1(self, plant):
         step = float(self.zn1_step.get())
@@ -767,7 +585,7 @@ class PIDTunerApp:
         _, _, _, _, fopdt = run_step_test(plant, step_amp=step,
                                           noise_sigma=noise, seed=0)
         self.identified = fopdt
-        return tune_zn_method_1(fopdt)
+        return ZieglerNicholsI(fopdt).tune()
 
     def _tune_zn2(self, plant):
         if self.zn2_source.get() == "bode":
@@ -776,14 +594,14 @@ class PIDTunerApp:
             h = float(self.zn2_relay_h.get())
             T = float(self.zn2_relay_T.get())
             Ku, Pu, _, _, _ = run_relay_test(plant, t_max=T, h=h)
-        return tune_zn_method_2(Ku, Pu)
+        return ZieglerNicholsII(Ku, Pu).tune()
 
     def _tune_amigo(self, plant):
         # Always run a step test to get the FOPDT
         _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
                                           noise_sigma=0.0, seed=0)
         self.identified = fopdt
-        return tune_amigo(fopdt, integrating=self.amigo_integrating.get())
+        return Amigo(fopdt, integrating=self.amigo_integrating.get()).tune()
 
     def _tune_simc(self, plant):
         _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
@@ -793,7 +611,7 @@ class PIDTunerApp:
         tau_c = float(tau_c_str) if tau_c_str else None
         tau2_str = self.simc_tau2.get().strip()
         tau2 = float(tau2_str) if tau2_str else None
-        return tune_simc(fopdt, tau_c=tau_c, tau2=tau2)
+        return Simc(fopdt, tau_c=tau_c, tau2=tau2).tune()
 
     def _tune_boyd(self, plant):
         Ms = float(self.boyd_Ms.get())
@@ -802,10 +620,10 @@ class PIDTunerApp:
         try:
             _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
                                               noise_sigma=0.0, seed=0)
-            seed = tune_simc(fopdt).gains
+            seed = Simc(fopdt).tune().gains
         except Exception:
             seed = None
-        return tune_boyd(plant, Ms=Ms, Mt=Mt, seed_gains=seed)
+        return Boyd(plant, Ms=Ms, Mt=Mt, seed_gains=seed).tune()
 
     def _tune_cohen_coon(self, plant):
         step = float(self.cc_step.get())
@@ -813,15 +631,15 @@ class PIDTunerApp:
         _, _, _, _, fopdt = run_step_test(plant, step_amp=step,
                                           noise_sigma=noise, seed=0)
         self.identified = fopdt
-        return tune_cohen_coon(fopdt)
+        return CohenCoon(fopdt).tune()
 
     def _tune_chr(self, plant):
         _, _, _, _, fopdt = run_step_test(plant, step_amp=1.0,
                                           noise_sigma=0.0, seed=0)
         self.identified = fopdt
-        return tune_chr(fopdt,
-                        response=self.chr_response.get(),
-                        overshoot=int(self.chr_overshoot.get()))
+        return ChienHronesReswick(fopdt,
+                                  response=self.chr_response.get(),
+                                  overshoot=int(self.chr_overshoot.get())).tune()
 
     def _tune_tyreus_luyben(self, plant):
         if self.tl_source.get() == "bode":
@@ -830,7 +648,7 @@ class PIDTunerApp:
             h = float(self.tl_relay_h.get())
             T = float(self.tl_relay_T.get())
             Ku, Pu, _, _, _ = run_relay_test(plant, t_max=T, h=h)
-        return tune_tyreus_luyben(Ku, Pu, use_derivative=not self.tl_pi.get())
+        return TyreusLuyben(Ku, Pu, use_derivative=not self.tl_pi.get()).tune()
 
     # ── compare all methods ─────────────────────────────────────────────────
     def on_compare_all(self):
@@ -870,139 +688,6 @@ class PIDTunerApp:
         self._open_all_tabs_and_draw()
         self.status.set(f"Compared {n_ok} methods. Untick any in the session "
                         f"list to declutter.")
-
-    @staticmethod
-    def _heat_color(v):
-        """Normalized goodness v∈[0,1] (1=best) → red→yellow→green hex."""
-        if v is None or not np.isfinite(v):
-            return "#cccccc"
-        v = max(0.0, min(1.0, float(v)))
-        # red (215,48,39) → yellow (255,255,191) → green (26,152,80)
-        if v < 0.5:
-            f = v / 0.5
-            r = 215 + f * (255 - 215)
-            g = 48 + f * (255 - 48)
-            b = 39 + f * (191 - 39)
-        else:
-            f = (v - 0.5) / 0.5
-            r = 255 + f * (26 - 255)
-            g = 255 + f * (152 - 255)
-            b = 191 + f * (80 - 191)
-        return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
-
-    # ── heatmap table ───────────────────────────────────────────────────────
-    _METRIC_LABELS = {
-        "OS%": "OS %", "ts": "tₛ (2%)", "IAE": "IAE\n(track)",
-        "IAE_load": "IAE\n(load)", "Ms": "Mₛ", "Mt": "Mₜ", "u_tv": "TV(u)",
-    }
-
-    def _build_heatmap_table(self, parent, rows):
-        # Footnote pinned to the bottom first so it always shows.
-        ttk.Label(parent, padding=(8, 4), foreground="#555",
-                  text="Mₛ robust band ≈ [1.4, 2.0].  TV(u) = control-signal "
-                       "total variation (smoothness).  IAE(load) from a unit "
-                       "load step at the plant input.").pack(side="bottom",
-                                                             fill="x")
-        # 12 methods × 8 columns fits without scrolling — grid fills the tab.
-        grid = ttk.Frame(parent, padding=(6, 6))
-        grid.pack(fill="both", expand=True)
-
-        metrics = TABLE_METRICS
-        hdr_font = ("TkDefaultFont", 9, "bold")
-        tk.Label(grid, text="Method", font=hdr_font, anchor="w",
-                 padx=8, pady=4).grid(row=0, column=0, sticky="nsew")
-        for c, m in enumerate(metrics, start=1):
-            tk.Label(grid, text=self._METRIC_LABELS.get(m, m), font=hdr_font,
-                     padx=8, pady=4, justify="center").grid(row=0, column=c,
-                                                            sticky="nsew")
-
-        norm = {}
-        for m in metrics:
-            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
-                   for r in rows]
-            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
-
-        for i, r in enumerate(rows):
-            rr = i + 1
-            stable = r.get("stable")
-            name_bg = "#ffffff" if stable else "#dddddd"
-            tk.Label(grid, text=r["name"], anchor="w", padx=8, pady=3,
-                     bg=name_bg).grid(row=rr, column=0, sticky="nsew")
-            if not stable:
-                tk.Label(grid, text=f"— {r.get('error', 'failed')} —",
-                         anchor="w", padx=8, pady=3, bg=name_bg, fg="#a00"
-                         ).grid(row=rr, column=1, columnspan=len(metrics),
-                                sticky="nsew")
-                continue
-            for c, m in enumerate(metrics, start=1):
-                val = r.get(m, float("nan"))
-                color = self._heat_color(norm[m][i])
-                txt = f"{val:.3g}" if np.isfinite(val) else "—"
-                tk.Label(grid, text=txt, padx=8, pady=3, bg=color,
-                         anchor="center").grid(row=rr, column=c, sticky="nsew")
-
-        grid.columnconfigure(0, weight=3, minsize=140)
-        for c in range(1, len(metrics) + 1):
-            grid.columnconfigure(c, weight=2, minsize=70)
-        for rr in range(len(rows) + 1):
-            grid.rowconfigure(rr, weight=1)
-
-    # ── radar chart ─────────────────────────────────────────────────────────
-    def _build_radar_tab(self, parent, rows):
-        stable = [r for r in rows if r.get("stable")]
-        if not stable:
-            ttk.Label(parent, text="No stable methods to plot.",
-                      padding=20).pack()
-            return
-
-        # Six axes, each normalized so OUTER = better.
-        axes_spec = [
-            ("Track\n(IAE)", "IAE", -1),
-            ("Load rej.\n(IAE)", "IAE_load", -1),
-            ("Robust\n(Mₛ)", "Ms", -1),
-            ("Low OS\n(OS%)", "OS%", -1),
-            ("Speed\n(tₛ)", "ts", -1),
-            ("Smooth\n(TV)", "u_tv", -1),
-        ]
-        labels = [a[0] for a in axes_spec]
-        goodness = []  # list per-axis of normalized arrays (1=best)
-        for _, key, direction in axes_spec:
-            col = [r.get(key, float("inf")) for r in stable]
-            goodness.append(normalize_column(col, direction=direction))
-        goodness = np.array(goodness)  # shape (n_axes, n_methods)
-
-        n_ax = len(axes_spec)
-        angles = np.linspace(0, 2 * np.pi, n_ax, endpoint=False).tolist()
-        angles += angles[:1]
-
-        fig = Figure(figsize=(7.2, 6.4), dpi=100)
-        ax = fig.add_subplot(111, polar=True)
-        ax.set_theta_offset(np.pi / 2)
-        ax.set_theta_direction(-1)
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(labels, fontsize=9)
-        ax.set_ylim(0, 1)
-        ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-        ax.set_yticklabels(["", "", "", ""])
-        ax.set_rlabel_position(0)
-
-        cmap = matplotlib.colormaps.get_cmap("tab20")
-        for j, r in enumerate(stable):
-            vals = goodness[:, j].tolist()
-            vals += vals[:1]
-            color = cmap(j % 20)
-            ax.plot(angles, vals, lw=1.6, color=color, label=r["name"])
-            ax.fill(angles, vals, color=color, alpha=0.06)
-
-        ax.set_title("Each axis normalized so outer = best across methods",
-                     fontsize=10, pad=18)
-        ax.legend(loc="upper right", bbox_to_anchor=(1.32, 1.10),
-                  fontsize=8, framealpha=0.9)
-        fig.tight_layout()
-
-        canvas = FigureCanvasTkAgg(fig, master=parent)
-        canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(canvas, parent)
 
     # ── closed-loop sim ────────────────────────────────────────────────────
     def _run_closed_loop(self, plant, gains):
@@ -1121,16 +806,8 @@ class PIDTunerApp:
             return
         frame = ttk.Frame(self.right_nb)
         self.right_nb.add(frame, text="Response  ")
-        self.fig = Figure(figsize=(9, 8), dpi=100)
-        self.ax_y = self.fig.add_subplot(311)
-        self.ax_u = self.fig.add_subplot(312, sharex=self.ax_y)
-        self.ax_e = self.fig.add_subplot(313, sharex=self.ax_y)
-        for ax in (self.ax_y, self.ax_u, self.ax_e):
-            ax.grid(True, alpha=0.3)
-        self.fig.tight_layout()
-        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, frame)
+        self.fig, self.ax_y, self.ax_u, self.ax_e, self.canvas = \
+            create_response_figure(frame)
         self.plots_tab = frame
 
     def _ensure_heatmap_tab(self):
@@ -1192,81 +869,21 @@ class PIDTunerApp:
     def _draw_plots_tab(self):
         if self.plots_tab is None or self.canvas is None:
             return
-        self.ax_y.clear()
-        self.ax_u.clear()
-        self.ax_e.clear()
-        for ax in (self.ax_y, self.ax_u, self.ax_e):
-            ax.grid(True, alpha=0.3)
-        self.ax_y.set_ylabel("PV / SP")
-        self.ax_u.set_ylabel("control u(t)")
-        self.ax_e.set_ylabel("error e(t)")
-        self.ax_e.set_xlabel("time (s)")
-
         active = [e for e in self.tuned if e.enabled and e.sim is not None]
-        if not active:
-            self.ax_y.set_title("No tuned controllers shown — tune a method "
-                                "or tick one in the session list.")
-            self.canvas.draw()
-            return
-
-        seen_kinds = set()
-        for entry in active:
-            kind = entry.sim.sp_kind
-            if kind in seen_kinds:
-                continue
-            seen_kinds.add(kind)
-            kind_label = f"setpoint ({kind})" if len(active) > 1 else "setpoint"
-            same_kind = [e for e in active if e.sim.sp_kind == kind]
-            longest = max(same_kind, key=lambda e: len(e.sim.t))
-            self.ax_y.plot(longest.sim.t, longest.sim.sp, "--",
-                           color="#666", linewidth=1.0, alpha=0.7,
-                           label=kind_label)
-
-        for entry in active:
-            label = entry.label
-            if entry.sim.metrics.get("unstable"):
-                label += "  [UNSTABLE]"
-            self.ax_y.plot(entry.sim.t, entry.sim.y, color=entry.color,
-                           linewidth=1.5, label=label)
-            self.ax_u.plot(entry.sim.t, entry.sim.u, color=entry.color,
-                           linewidth=1.2, label=entry.label)
-            self.ax_e.plot(entry.sim.t, entry.sim.e, color=entry.color,
-                           linewidth=1.2, label=entry.label)
-
-        self.ax_y.legend(loc="lower right", bbox_to_anchor=(1.02, 1.0), fontsize=8)
-        stable_ys = [e.sim.y for e in active if not e.sim.metrics.get("unstable")]
-        if stable_ys:
-            max_sp = max(np.max(np.abs(e.sim.sp)) for e in active)
-            self.ax_y.set_ylim(-0.2 * max_sp, max(2.0 * max_sp, 0.1))
-
-        self.fig.tight_layout()
-        self.canvas.draw()
+        draw_response_tab(self.fig, self.ax_y, self.ax_u, self.ax_e,
+                          self.canvas, active)
 
     # ── heatmap tab ─────────────────────────────────────────────────────────
     def _draw_heatmap_tab(self):
         if self.heatmap_tab is None or not self.heatmap_tab.winfo_exists():
             return
-        for child in self.heatmap_tab.winfo_children():
-            child.destroy()
-        rows = self._session_rows()
-        if not rows:
-            ttk.Label(self.heatmap_tab, padding=20, foreground="#888",
-                      text="Tune methods to compare them here.").pack()
-            return
-        self._build_heatmap_table(self.heatmap_tab, rows)
+        draw_heatmap_tab(self.heatmap_tab, self._session_rows())
 
     # ── radar tab ───────────────────────────────────────────────────────────
     def _draw_radar_tab(self):
         if self.radar_tab is None or not self.radar_tab.winfo_exists():
             return
-        for child in self.radar_tab.winfo_children():
-            child.destroy()
-        rows = self._session_rows()
-        if not any(r.get("stable") for r in rows):
-            ttk.Label(self.radar_tab, padding=20, foreground="#888",
-                      text="Tune at least one stable method to see the radar.").pack()
-            return
-        self._build_radar_tab(self.radar_tab, rows)
+        draw_radar_tab(self.radar_tab, self._session_rows())
 
 
 
