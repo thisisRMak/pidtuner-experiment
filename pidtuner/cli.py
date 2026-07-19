@@ -25,6 +25,8 @@ from tuning_methods import (
 )
 from compare import metric_row, compare_all_methods, select_slowest_stable_poles
 from simulate import simulate_closed_loop
+from signal_source import SignalGenerator
+from signal_format import save_signal
 
 
 def format_row_text(row: dict) -> str:
@@ -136,6 +138,21 @@ def main():
         type=str,
         help="Save simulation step response plot to this filename (e.g. plot.png)"
     )
+    parser.add_argument(
+        "--gen-signal",
+        choices=["step", "relay"],
+        help="Instead of tuning, run this experiment against --plant and publish "
+             "the resulting signal to --out-signal, then exit. This is entity A's "
+             "CLI mode — the black-box tuner (cli_blackbox.py) never sees --plant."
+    )
+    parser.add_argument("--out-signal", type=str, help="Output path for --gen-signal (.npz)")
+    parser.add_argument("--step-amp", type=float, default=1.0, help="Step test: step amplitude")
+    parser.add_argument("--noise-sigma", type=float, default=0.0, help="Step test: measurement noise std dev")
+    parser.add_argument("--seed", type=int, default=None, help="Step test: noise RNG seed")
+    parser.add_argument("--t-max", type=float, default=None, help="Signal generation: test duration (default: auto)")
+    parser.add_argument("--h", type=float, default=1.0, help="Relay test: relay amplitude")
+    parser.add_argument("--setpoint", type=float, default=0.0, help="Relay test: setpoint")
+    parser.add_argument("--hysteresis", type=float, default=0.0, help="Relay test: hysteresis band")
 
     args = parser.parse_args()
 
@@ -148,6 +165,41 @@ def main():
         else:
             print(f"Error: Failed to parse plant transfer function: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # 1b. Signal-export mode (entity A): generate a signal and exit, no tuning.
+    if args.gen_signal:
+        if not args.out_signal:
+            msg = "--gen-signal requires --out-signal <path.npz>"
+            if args.json:
+                print(json.dumps({"error": msg}))
+            else:
+                print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            gen = SignalGenerator(plant)
+            if args.gen_signal == "step":
+                sig = gen.step_test(step_amp=args.step_amp, t_max=args.t_max,
+                                     noise_sigma=args.noise_sigma, seed=args.seed)
+            else:
+                sig = gen.relay_test(h=args.h, setpoint=args.setpoint,
+                                      hysteresis=args.hysteresis,
+                                      t_max=args.t_max if args.t_max is not None else 80.0)
+            save_signal(sig, args.out_signal)
+        except Exception as exc:
+            if args.json:
+                print(json.dumps({"error": f"Signal generation failed: {exc}"}))
+            else:
+                print(f"Error: Signal generation failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        info = {"experiment": sig.experiment, "n_samples": len(sig),
+                "dt": sig.dt, "meta": sig.meta, "out": args.out_signal}
+        if args.json:
+            print(json.dumps(info, indent=2))
+        else:
+            print(f"Wrote {sig.experiment} signal ({len(sig)} samples, dt={sig.dt:.4g}s) "
+                  f"to {args.out_signal}")
+        sys.exit(0)
 
     # 2. Run tuning
     results: list[tuple[str, TuningResult]] = []
