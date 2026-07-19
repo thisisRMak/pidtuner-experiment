@@ -20,13 +20,17 @@ and a dead time of 0.5 s. This plant has finite Ku, so every method
 works on it — making it the right common case to test.
 """
 
+import ast
+import os
+import tempfile
 import unittest
 import numpy as np
 
 from plant import TransferFunction, parse_coeff_list
 from identify import (
     run_step_test, run_relay_test, find_ultimate_gain, FOPDT,
-    fit_fopdt_from_step,
+    fit_fopdt_from_step, SOPDT, fit_sopdt_from_step,
+    identify_ultimate_gain_from_relay,
 )
 from tune import (
     PIDGains, halve_gains,
@@ -43,6 +47,9 @@ from compare import (
     robustness_metrics, load_rejection_metrics, compare_all_methods,
     normalize_column,
 )
+from signal_format import Signal, save_signal, load_signal
+from signal_source import SignalGenerator
+from blackbox import BlackBoxTuner, identify_from_signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -747,6 +754,229 @@ class TestEdgeCases(unittest.TestCase):
             "unstable": True, "sp_kind": "step",
         }
         self.assertIn("UNSTABLE", format_metrics(bad_metrics))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Signal-generator / black-box-tuner split
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _module_imports_plant(module_file):
+    """AST-based structural check: does this module's own source (not its
+    transitive dependencies) contain an `import plant` / `from plant import`
+    statement? Used to verify the isolation contract without relying on
+    convention alone."""
+    with open(module_file) as f:
+        tree = ast.parse(f.read(), filename=module_file)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == "plant" for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "plant":
+                return True
+    return False
+
+
+class TestSignalFormat(unittest.TestCase):
+    def _sample_signal(self):
+        t = np.linspace(0.0, 1.0, 11)
+        u = np.ones_like(t)
+        y = np.linspace(0.0, 5.0, 11)
+        return Signal(t=t, u=u, y=y, dt=0.1, experiment="step",
+                      meta={"step_amp": 1.0, "noise_sigma": 0.0, "seed": None})
+
+    def test_no_plant_import(self):
+        import signal_format
+        self.assertFalse(_module_imports_plant(signal_format.__file__),
+                          "signal_format.py must never import plant.py")
+
+    def test_invalid_experiment_rejected(self):
+        with self.assertRaises(ValueError):
+            Signal(t=np.zeros(3), u=np.zeros(3), y=np.zeros(3), dt=0.1,
+                   experiment="not-a-real-experiment")
+
+    def test_non_serializable_meta_rejected(self):
+        with self.assertRaises(ValueError):
+            Signal(t=np.zeros(3), u=np.zeros(3), y=np.zeros(3), dt=0.1,
+                   experiment="step", meta={"bad": np.array([1, 2, 3])})
+
+    def test_iter_yields_ordered_triples(self):
+        sig = self._sample_signal()
+        triples = list(sig)
+        self.assertEqual(len(triples), len(sig))
+        for k, (tk, uk, yk) in enumerate(triples):
+            self.assertEqual(tk, sig.t[k])
+            self.assertEqual(uk, sig.u[k])
+            self.assertEqual(yk, sig.y[k])
+
+    def test_save_load_round_trip(self):
+        sig = self._sample_signal()
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sig.npz")
+            save_signal(sig, path)
+            loaded = load_signal(path)
+        np.testing.assert_array_equal(loaded.t, sig.t)
+        np.testing.assert_array_equal(loaded.u, sig.u)
+        np.testing.assert_array_equal(loaded.y, sig.y)
+        self.assertEqual(loaded.dt, sig.dt)
+        self.assertEqual(loaded.experiment, sig.experiment)
+        self.assertEqual(loaded.meta, sig.meta)
+        # "live" interface is identical whether freshly built or loaded
+        self.assertEqual(list(loaded), list(sig))
+
+
+class TestSignalSource(unittest.TestCase):
+    def test_step_test_matches_run_step_test(self):
+        plant = benchmark_plant()
+        t1, u1, _, y_meas1, _ = run_step_test(plant, step_amp=1.0)
+        sig = SignalGenerator(plant).step_test(step_amp=1.0)
+        np.testing.assert_allclose(sig.t, t1)
+        np.testing.assert_allclose(sig.u, u1)
+        np.testing.assert_allclose(sig.y, y_meas1)
+        self.assertAlmostEqual(sig.dt, t1[1] - t1[0])
+        self.assertEqual(sig.experiment, "step")
+
+    def test_relay_test_matches_run_relay_test(self):
+        plant = benchmark_plant()
+        _, _, t1, u1, y1 = run_relay_test(plant, h=1.0)
+        sig = SignalGenerator(plant).relay_test(h=1.0)
+        np.testing.assert_allclose(sig.t, t1)
+        np.testing.assert_allclose(sig.u, u1)
+        np.testing.assert_allclose(sig.y, y1)
+        self.assertEqual(sig.experiment, "relay")
+
+    def test_step_test_publishes_only_measured_signal(self):
+        """A real sensor never hands over the noise-free signal — the
+        published Signal must carry only y_meas, never y_true."""
+        plant = benchmark_plant()
+        sig = SignalGenerator(plant).step_test(step_amp=1.0, noise_sigma=5.0, seed=0)
+        _, _, y_true, y_meas, _ = run_step_test(plant, step_amp=1.0, noise_sigma=5.0, seed=0)
+        np.testing.assert_allclose(sig.y, y_meas)
+        self.assertFalse(np.allclose(sig.y, y_true))
+
+
+class TestSOPDTFit(unittest.TestCase):
+    def test_recovers_benchmark_parameters(self):
+        """Benchmark plant has true tau1=10, tau2=1, L=0.5, K=1000 — two
+        well-separated real poles, a clean SOPDT target."""
+        plant = benchmark_plant()
+        sig = SignalGenerator(plant).step_test(step_amp=1.0)
+        fopdt = fit_fopdt_from_step(sig.t, sig.y, sig.meta["step_amp"])
+        sopdt = fit_sopdt_from_step(sig.t, sig.y, sig.meta["step_amp"], fopdt_hint=fopdt)
+        self.assertAlmostEqual(sopdt.tau1, 10.0, delta=1.5)
+        self.assertAlmostEqual(sopdt.tau2, 1.0, delta=0.5)
+        self.assertAlmostEqual(sopdt.L, 0.5, delta=0.3)
+        self.assertAlmostEqual(sopdt.K, 1000.0, delta=50.0)
+
+    def test_to_tf_has_two_real_stable_poles(self):
+        sopdt = SOPDT(K=1000.0, tau1=10.0, tau2=1.0, L=0.5)
+        poles = sopdt.to_tf().poles()
+        self.assertEqual(len(poles), 2)
+        for p in poles:
+            self.assertAlmostEqual(float(np.imag(p)), 0.0, places=6)
+            self.assertLess(np.real(p), 0.0)
+
+    def test_declines_on_genuinely_first_order_plant(self):
+        """A plant with only one real time constant shouldn't get a
+        fabricated second pole — the fit should report itself degenerate."""
+        plant = fopdt_plant()
+        sig = SignalGenerator(plant).step_test(step_amp=1.0)
+        with self.assertRaises(RuntimeError):
+            fit_sopdt_from_step(sig.t, sig.y, sig.meta["step_amp"])
+
+    def test_declines_on_underdamped_plant(self):
+        """Complex poles can't be represented by the two-real-pole SOPDT
+        form — the fit must refuse rather than mis-fit."""
+        plant = TransferFunction.from_coeffs(num=[1.0], den=[1.0, 0.4, 4.0])
+        sig = SignalGenerator(plant).step_test(step_amp=1.0)
+        with self.assertRaises(RuntimeError):
+            fit_sopdt_from_step(sig.t, sig.y, sig.meta["step_amp"])
+
+
+class TestIdentifyUltimateGainFromRelay(unittest.TestCase):
+    def test_matches_run_relay_test(self):
+        plant = benchmark_plant()
+        Ku1, Pu1, t, u, y = run_relay_test(plant, h=1.0)
+        Ku2, Pu2 = identify_ultimate_gain_from_relay(t, u, y, h=1.0)
+        self.assertAlmostEqual(Ku1, Ku2, places=9)
+        self.assertAlmostEqual(Pu1, Pu2, places=9)
+
+
+class TestBlackBox(unittest.TestCase):
+    """End-to-end: entity C never receives a plant reference, only Signals."""
+
+    def _signals(self):
+        plant = benchmark_plant()
+        gen = SignalGenerator(plant)
+        step_sig = gen.step_test(step_amp=1.0)
+        relay_sig = gen.relay_test(h=1.0)
+        return step_sig, relay_sig
+
+    def test_no_plant_import(self):
+        import blackbox
+        self.assertFalse(_module_imports_plant(blackbox.__file__),
+                          "blackbox.py must never import plant.py directly")
+
+    def test_all_methods_available_on_benchmark(self):
+        step_sig, relay_sig = self._signals()
+        tuner = BlackBoxTuner(step_signal=step_sig, relay_signal=relay_sig)
+        rows = tuner.tune_all()
+        self.assertEqual(len(rows), 12)  # 9 methods, 4 of them CHR variants
+        for row in rows:
+            self.assertTrue(row.available, f"{row.name} unexpectedly unavailable: {row.reason}")
+            self.assertTrue(row.result.black_box)
+            self.assertIsInstance(row.result.gains, PIDGains)
+
+    def test_file_roundtrip_equivalent_to_in_process(self):
+        step_sig, relay_sig = self._signals()
+        with tempfile.TemporaryDirectory() as d:
+            step_path = os.path.join(d, "step.npz")
+            relay_path = os.path.join(d, "relay.npz")
+            save_signal(step_sig, step_path)
+            save_signal(relay_sig, relay_path)
+            loaded_step = load_signal(step_path)
+            loaded_relay = load_signal(relay_path)
+
+        direct_rows = BlackBoxTuner(step_signal=step_sig, relay_signal=relay_sig).tune_all()
+        file_rows = BlackBoxTuner(step_signal=loaded_step, relay_signal=loaded_relay).tune_all()
+        self.assertEqual([r.name for r in direct_rows], [r.name for r in file_rows])
+        for d_row, f_row in zip(direct_rows, file_rows):
+            self.assertEqual(d_row.available, f_row.available)
+            if d_row.available:
+                self.assertAlmostEqual(d_row.result.gains.Kp, f_row.result.gains.Kp, places=9)
+                self.assertAlmostEqual(d_row.result.gains.Ki, f_row.result.gains.Ki, places=9)
+                self.assertAlmostEqual(d_row.result.gains.Kd, f_row.result.gains.Kd, places=9)
+
+    def test_no_relay_signal_falls_back_to_surrogate_bode(self):
+        step_sig, _ = self._signals()
+        model = identify_from_signals(step_signal=step_sig, relay_signal=None)
+        self.assertIsNotNone(model.Ku)
+        self.assertIsNotNone(model.Pu)
+        self.assertEqual(model.ku_pu_source, "surrogate-bode")
+
+    def test_fopdt_based_gains_match_white_box_exactly(self):
+        """ZN-I/AMIGO/SIMC/Cohen-Coon/CHR reduce to the same FOPDT fit the
+        white-box pipeline computes (same generation code, no ground-truth
+        shortcuts) — so black-box and white-box gains should match exactly."""
+        plant = benchmark_plant()
+        step_sig, relay_sig = SignalGenerator(plant).step_test(step_amp=1.0), \
+            SignalGenerator(plant).relay_test(h=1.0)
+        bb_rows = {r.name: r for r in
+                   BlackBoxTuner(step_signal=step_sig, relay_signal=relay_sig).tune_all()}
+        wb_rows = {r["name"]: r for r in compare_all_methods(plant, include_variants=True)}
+        for name in ("ZN-I", "AMIGO", "SIMC", "Cohen–Coon"):
+            self.assertTrue(bb_rows[name].available)
+            self.assertAlmostEqual(bb_rows[name].result.gains.Kp, wb_rows[name]["gains"].Kp, places=6)
+
+    def test_pole_cancellation_and_boyd_available_via_surrogate(self):
+        """The two methods that historically needed the true plant directly
+        (StablePoleCancellation, Boyd) should work here via the fitted
+        SOPDT surrogate, since this plant has two well-separated real poles."""
+        step_sig, relay_sig = self._signals()
+        rows = {r.name: r for r in
+                BlackBoxTuner(step_signal=step_sig, relay_signal=relay_sig).tune_all()}
+        self.assertTrue(rows["Pole cancellation"].available)
+        self.assertTrue(rows["Boyd"].available)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
