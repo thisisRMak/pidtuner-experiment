@@ -52,6 +52,7 @@ class TuningResult:
     cancelled_poles: list = field(default_factory=list)
     free_param: dict = field(default_factory=dict)  # e.g. {'tau_c': 0.5}
     notes: str = ""
+    black_box: bool = False  # set by blackbox.BlackBoxTuner, never by tune() itself
 
 
 def halve_gains(result):
@@ -78,6 +79,7 @@ def halve_gains(result):
         cancelled_poles=list(result.cancelled_poles),
         free_param=dict(result.free_param),
         notes=(result.notes + "\nAll gains halved post-tuning.").strip(),
+        black_box=result.black_box,
     )
 
 
