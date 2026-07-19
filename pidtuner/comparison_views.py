@@ -11,11 +11,27 @@ from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk,
 )
 from compare import TABLE_METRICS, METRIC_DIRECTION, normalize_column
+from widgets import add_tooltip
 
 _METRIC_LABELS = {
     "OS%": "OS %", "ts": "tₛ (2%)", "IAE": "IAE\n(track)",
     "IAE_load": "IAE\n(load)", "Ms": "Mₛ", "Mt": "Mₜ", "u_tv": "TV(u)",
 }
+
+_BLACK_BOX_TOOLTIP = (
+    "Black-box result: tuned from a model identified purely from a "
+    "published signal (step/relay response) — the true transfer function "
+    "was never consulted to produce these gains."
+)
+
+
+def _add_black_box_badge(cell, bg):
+    """A small 'BB' tag with a hover tooltip, packed into a name cell."""
+    badge = tk.Label(cell, text=" BB ", bg="#5b3a9e", fg="#ffffff",
+                      font=("TkDefaultFont", 7, "bold"), padx=2, pady=0)
+    badge.pack(side="right", padx=(4, 6))
+    add_tooltip(badge, _BLACK_BOX_TOOLTIP)
+    return badge
 
 
 def _heat_color(v):
@@ -75,8 +91,12 @@ def draw_heatmap_tab(parent, rows):
         rr = i + 1
         stable = r.get("stable")
         name_bg = "#ffffff" if stable else "#dddddd"
-        tk.Label(grid, text=r["name"], anchor="w", padx=8, pady=3,
-                 bg=name_bg).grid(row=rr, column=0, sticky="nsew")
+        name_cell = tk.Frame(grid, bg=name_bg)
+        name_cell.grid(row=rr, column=0, sticky="nsew")
+        tk.Label(name_cell, text=r["name"], anchor="w", padx=8, pady=3,
+                 bg=name_bg).pack(side="left", fill="x", expand=True)
+        if r.get("black_box"):
+            _add_black_box_badge(name_cell, name_bg)
         if not stable:
             tk.Label(grid, text=f"— {r.get('error', 'failed')} —",
                      anchor="w", padx=8, pady=3, bg=name_bg, fg="#a00"
@@ -148,7 +168,8 @@ def draw_radar_tab(parent, rows):
         vals = goodness[:, j].tolist()
         vals += vals[:1]
         color = cmap(j % 20)
-        ax.plot(angles, vals, lw=1.6, color=color, label=r["name"])
+        label = r["name"] + (" [BB]" if r.get("black_box") else "")
+        ax.plot(angles, vals, lw=1.6, color=color, label=label)
         ax.fill(angles, vals, color=color, alpha=0.06)
 
     ax.set_title("Each axis normalized so outer = best across methods",

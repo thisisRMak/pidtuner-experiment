@@ -6,6 +6,60 @@ import tkinter as tk
 from tkinter import ttk
 
 
+class Tooltip:
+    """A minimal hover tooltip for any Tk widget (Tkinter has no built-in
+    one). Shows a small popup near the widget after a short delay, hides on
+    leave/click. Keep a reference to the returned instance for the tooltip's
+    bindings to stay alive as long as the widget does."""
+
+    def __init__(self, widget, text, delay=400, wraplength=260):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.wraplength = wraplength
+        self._after_id = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None):
+        self._cancel_pending()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel_pending(self):
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip is not None or not self.widget.winfo_viewable():
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        self._tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self._tip, text=self.text, justify="left",
+                 background="#ffffe0", relief="solid", borderwidth=1,
+                 wraplength=self.wraplength, padx=6, pady=4,
+                 font=("TkDefaultFont", 8)).pack()
+
+    def _hide(self, _event=None):
+        self._cancel_pending()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
+def add_tooltip(widget, text, **kwargs):
+    """Attach a hover tooltip to any widget. Returns the Tooltip instance —
+    hang onto it if the widget outlives the immediate calling scope and you
+    want to update/remove the tooltip later; otherwise it's fine to discard
+    (the widget's own event bindings keep it alive)."""
+    return Tooltip(widget, text, **kwargs)
+
+
 class ClosableNotebook(ttk.Notebook):
     """A ttk.Notebook with closing ('X') buttons on each tab."""
     _style_ready = False

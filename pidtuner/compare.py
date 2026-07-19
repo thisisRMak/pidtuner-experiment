@@ -144,32 +144,36 @@ def _safe(fn, *a, **k):
         return ("__error__", str(exc))
 
 
-def metric_row(plant, name, gains):
+def metric_row(plant, name, gains, black_box=False):
     """Compute one comparison row for an arbitrary (name, gains) pair.
 
     Returns a dict shaped exactly like a row of compare_all_methods:
-        {name, gains, stable, error, OS%, ts, IAE, IAE_load, Ms, Mt,
-         GM_dB, PM_deg, u_tv, u_peak}
+        {name, gains, stable, error, black_box, OS%, ts, IAE, IAE_load, Ms,
+         Mt, GM_dB, PM_deg, u_tv, u_peak}
     Unstable / failed tunings come back with stable=False and an error string
-    so the UI can grey them out.
+    so the UI can grey them out. `black_box` is provenance only (whether the
+    gains came from an identified surrogate rather than the true plant) —
+    it never changes how this row is computed, since scoring always needs
+    the real plant regardless of how the gains were derived.
     """
     if gains is None:
         return {"name": name, "gains": None, "stable": False,
-                "error": "no gains"}
+                "error": "no gains", "black_box": black_box}
     try:
         track = simulate_closed_loop(plant, gains, setpoint=1.0,
                                      setpoint_kind="step",
                                      u_min=-1e6, u_max=1e6)
     except Exception as exc:               # noqa: BLE001
         return {"name": name, "gains": gains, "stable": False,
-                "error": f"sim failed: {exc}"}
+                "error": f"sim failed: {exc}", "black_box": black_box}
     if track.metrics.get("unstable", True) or not track.stable:
         return {"name": name, "gains": gains, "stable": False,
-                "error": "closed loop unstable"}
+                "error": "closed loop unstable", "black_box": black_box}
     load = load_rejection_metrics(plant, gains)
     rob = robustness_metrics(plant, gains)
     return {
         "name": name, "gains": gains, "stable": True, "error": None,
+        "black_box": black_box,
         "OS%": track.metrics.get("Overshoot", float("nan")),
         "ts": track.metrics.get("Settling", float("nan")),
         "IAE": track.metrics.get("IAE", float("nan")),
@@ -240,9 +244,9 @@ def compare_all_methods(plant, include_variants=True):
     for name, res in entries:
         if isinstance(res, tuple) and res and res[0] == "__error__":
             rows.append({"name": name, "stable": False, "error": res[1],
-                         "gains": None})
+                         "gains": None, "black_box": False})
             continue
-        rows.append(metric_row(plant, name, res.gains))
+        rows.append(metric_row(plant, name, res.gains, black_box=res.black_box))
     return rows
 
 

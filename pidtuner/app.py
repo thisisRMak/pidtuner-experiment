@@ -535,7 +535,7 @@ class PIDTunerApp:
         label = self._next_label(method, halved=self.halve_gains_var.get())
         entry = TunedEntry(label=label, gains=result.gains,
                            result=result, sim=sim)
-        entry.mrow = metric_row(plant, label, result.gains)
+        entry.mrow = metric_row(plant, label, result.gains, black_box=result.black_box)
         self.tuned.append(entry)
         self._refresh_tuned_list()
         self._show_last_result(result, sim)
