@@ -32,11 +32,10 @@ import numpy as np
 
 from identify import run_step_test, find_ultimate_gain
 from simulate import simulate_closed_loop
-from tune import (
-    tune_pole_cancellation, select_slowest_stable_poles,
-    tune_zn_method_1, tune_zn_method_2,
-    tune_amigo, tune_simc, tune_boyd,
-    tune_cohen_coon, tune_chr, tune_tyreus_luyben,
+from tune import select_slowest_stable_poles
+from tuning_methods import (
+    StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
+    Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
 
 
@@ -203,7 +202,7 @@ def compare_all_methods(plant, include_variants=True):
 
     seed = None
     if fopdt is not None:
-        seed = _safe(lambda: tune_simc(fopdt).gains)
+        seed = _safe(lambda: Simc(fopdt).tune().gains)
         if isinstance(seed, tuple):
             seed = None
 
@@ -214,28 +213,28 @@ def compare_all_methods(plant, include_variants=True):
     def _pole():
         p1, p2 = select_slowest_stable_poles(plant)
         Kd = 1.0 / abs(plant.dc_gain()) if abs(plant.dc_gain()) > 1e-9 else 1.0
-        return tune_pole_cancellation(plant, p1, p2, Kd=Kd)
+        return StablePoleCancellation(plant, p1, p2, Kd=Kd).tune()
     entries.append(("Pole cancellation", _safe(_pole)))
 
     if fopdt is not None:
-        entries.append(("ZN-I", _safe(tune_zn_method_1, fopdt)))
+        entries.append(("ZN-I", _safe(lambda: ZieglerNicholsI(fopdt).tune())))
     if Ku is not None:
-        entries.append(("ZN-II", _safe(tune_zn_method_2, Ku, Pu)))
+        entries.append(("ZN-II", _safe(lambda: ZieglerNicholsII(Ku, Pu).tune())))
     if fopdt is not None:
-        entries.append(("AMIGO", _safe(tune_amigo, fopdt)))
-        entries.append(("SIMC", _safe(tune_simc, fopdt)))
-    entries.append(("Boyd", _safe(tune_boyd, plant, 1.4, 1.4, seed_gains=seed)))
+        entries.append(("AMIGO", _safe(lambda: Amigo(fopdt).tune())))
+        entries.append(("SIMC", _safe(lambda: Simc(fopdt).tune())))
+    entries.append(("Boyd", _safe(lambda: Boyd(plant, 1.4, 1.4, seed_gains=seed).tune())))
     if fopdt is not None:
-        entries.append(("Cohen–Coon", _safe(tune_cohen_coon, fopdt)))
+        entries.append(("Cohen–Coon", _safe(lambda: CohenCoon(fopdt).tune())))
         if include_variants:
-            entries.append(("CHR set 0%", _safe(tune_chr, fopdt, "setpoint", 0)))
-            entries.append(("CHR set 20%", _safe(tune_chr, fopdt, "setpoint", 20)))
-            entries.append(("CHR load 0%", _safe(tune_chr, fopdt, "load", 0)))
-            entries.append(("CHR load 20%", _safe(tune_chr, fopdt, "load", 20)))
+            entries.append(("CHR set 0%", _safe(lambda: ChienHronesReswick(fopdt, "setpoint", 0).tune())))
+            entries.append(("CHR set 20%", _safe(lambda: ChienHronesReswick(fopdt, "setpoint", 20).tune())))
+            entries.append(("CHR load 0%", _safe(lambda: ChienHronesReswick(fopdt, "load", 0).tune())))
+            entries.append(("CHR load 20%", _safe(lambda: ChienHronesReswick(fopdt, "load", 20).tune())))
         else:
-            entries.append(("CHR set 0%", _safe(tune_chr, fopdt, "setpoint", 0)))
+            entries.append(("CHR set 0%", _safe(lambda: ChienHronesReswick(fopdt, "setpoint", 0).tune())))
     if Ku is not None:
-        entries.append(("Tyreus–Luyben", _safe(tune_tyreus_luyben, Ku, Pu)))
+        entries.append(("Tyreus–Luyben", _safe(lambda: TyreusLuyben(Ku, Pu).tune())))
 
     rows = []
     for name, res in entries:
