@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from plant import TransferFunction, poly_mul, poly_add
-from tune import PIDGains
+from tuning_methods import PIDGains
 
 
 # ─────────────────────────────────────────────────────────────────────────────
