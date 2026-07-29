@@ -1,8 +1,13 @@
 """Closed-loop simulation and performance metrics.
 
 The PID is implemented in parallel form with:
-  - Conditional-integration anti-windup (integral only accumulates when
-    the unsaturated command is in [u_min, u_max]).
+  - Selectable anti-windup: "conditional" (integral only accumulates when
+    the unsaturated command is in [u_min, u_max]) — the default, matching
+    prior behavior — or "back_calc" (back-calculation/tracking: the
+    integral keeps accumulating but is corrected by Ka*(u_sat - u_unsat),
+    per Astrom & Hagglund). See ANTI-WINDUP section below for the
+    rationale and formula. Both are no-ops when the actuator never
+    saturates (u_min/u_max wide enough that u_sat == u_unsat always).
   - First-order derivative filter with bandwidth N/Td (default N = 10):
     the pure D term is replaced by Kd*s / (1 + (Kd/(N*Kp))*s). Without
     this, a step setpoint hits the controller with an infinite derivative
@@ -11,6 +16,47 @@ The PID is implemented in parallel form with:
   - Closed-loop stability check via the characteristic equation roots
     of 1 + C(s)*G(s) (for plants without dead time; for plants with
     dead time we approximate L with a 2nd-order Pade and check that).
+
+─────────────────────────────────────────────────────────────────────────────
+ANTI-WINDUP: conditional-integration vs. back-calculation
+─────────────────────────────────────────────────────────────────────────────
+Both address the same failure mode: when the actuator saturates (u_unsat
+outside [u_min, u_max]), a plain integrator keeps accumulating error it
+can't act on. When the error finally reverses sign, the controller has to
+"unwind" that excess integral before it starts correcting the right way —
+producing large overshoot and a sluggish recovery ("integrator windup").
+
+Conditional-integration (this module's original/default method): freeze
+the integral outright while saturated. Simple, cheap, no extra parameter.
+Recovery is limited by how much integral had already accumulated *before*
+saturation was detected each step — it doesn't actively unwind anything,
+it just stops making things worse.
+
+Back-calculation (a.k.a. "tracking anti-windup", Astrom & Hagglund):
+instead of freezing, keep integrating but add a correction term
+proportional to the saturation error itself:
+
+    dI/dt = e + Ka*(u_sat - u_unsat)
+
+When not saturated, u_sat == u_unsat, so the correction vanishes and this
+is ordinary integration. When saturated, the term actively pulls the
+integral back toward consistency with what the actuator can actually
+deliver, at a rate set by Ka — so it unwinds faster than conditional
+integration rather than merely pausing. Astrom & Hagglund recommend
+sizing Ka via a tracking time constant Tt: Ka = 1/Tt, with
+
+    Tt = sqrt(Ti * Td)   (full PID)
+    Tt = Ti              (PI-only, Td = 0)
+
+derived here from whatever gains were already computed by one of the 9
+tuning methods (Ti = Kp/Ki, Td = Kd/Kp — see PIDGains.to_textbook()) via
+compute_back_calc_Ka(). This textbook doesn't give its own Ka formula, so
+we use Astrom & Hagglund's rather than inventing one.
+
+Neither mode does anything unless the actuator actually saturates, i.e.
+u_min/u_max are set tighter than the natural command range — with the
+library defaults (u_min=-1e6, u_max=1e6) both modes are identical to no
+anti-windup at all.
 """
 
 from __future__ import annotations
@@ -34,11 +80,39 @@ class PIDState:
     prev_pv: float = 0.0
 
 
-def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=10.0):
+def compute_back_calc_Ka(gains, Ka=None):
+    """Back-calculation anti-windup gain, per Astrom & Hagglund.
+
+    Ka = 1/Tt, with Tt = sqrt(Ti*Td) for full PID or Tt = Ti when Td = 0
+    (PI-only), derived from the gains' own (Ti, Td) — see
+    PIDGains.to_textbook(). An explicit `Ka` override bypasses the
+    derivation entirely (Tt reported back as 1/Ka for display only).
+
+    Returns (Ka, Tt). If there's no integral action (Ki == 0, Ti = inf)
+    there's nothing for an integrator to wind up, so Ka = 0, Tt = inf.
+    """
+    if Ka is not None:
+        return float(Ka), (1.0 / Ka if Ka > 0 else float("inf"))
+    _, Ti, Td = gains.to_textbook()
+    if not np.isfinite(Ti) or Ti <= 0:
+        return 0.0, float("inf")
+    Tt = np.sqrt(Ti * Td) if Td > 1e-12 else Ti
+    if Tt <= 0:
+        return 0.0, float("inf")
+    return float(1.0 / Tt), float(Tt)
+
+
+def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=10.0,
+             antiwindup="conditional", Ka=0.0):
     """One PID timestep with anti-windup + derivative filter.
 
     Derivative is applied to -pv (not to error) to avoid the "derivative
     kick" on setpoint changes — a standard practice in process control.
+
+    `antiwindup` selects the integrator-saturation strategy:
+      - "conditional" (default): freeze the integral while saturated.
+      - "back_calc": keep integrating, corrected by Ka*(u_sat - u_unsat)
+        (see module docstring). `Ka` is ignored in "conditional" mode.
     """
     e = sp - pv
     # Filtered derivative of -pv (avoids derivative kick on SP step)
@@ -60,10 +134,15 @@ def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=10.0):
 
     trial_int = state.integral + e * dt
     u_unsat = gains.Kp * e + gains.Ki * trial_int + d_term
-    # Conditional-integration anti-windup
-    if u_min <= u_unsat <= u_max:
-        state.integral = trial_int
     u = float(np.clip(u_unsat, u_min, u_max))
+    if antiwindup == "back_calc":
+        # Always integrate, corrected by the saturation error itself —
+        # vanishes (reduces to plain integration) when u == u_unsat.
+        state.integral = state.integral + (e + Ka * (u - u_unsat)) * dt
+    else:
+        # Conditional-integration: freeze while saturated.
+        if u_min <= u_unsat <= u_max:
+            state.integral = trial_int
     state.prev_pv = pv
     return u
 
@@ -127,6 +206,11 @@ class ClosedLoopResult:
     stable: bool
     metrics: dict
     sp_kind: str = "step"
+    antiwindup: str = "conditional"
+    Ka: float = 0.0     # back_calc gain actually used (0 in "conditional" mode)
+    Tt: float = float("inf")  # 1/Ka, for display — inf when Ka == 0
+    u_min: float = -1e6  # actuator bounds used, so callers can identify
+    u_max: float = 1e6   # exactly which samples of u(t) were saturated
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,7 +246,8 @@ def make_setpoint(t, kind, amplitude=1.0):
 def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                          setpoint_kind="step", sp_array=None,
                          u_min=-1e6, u_max=1e6, N=10.0, use_d_filter=True,
-                         load_step=None, load_step_time=0.0):
+                         load_step=None, load_step_time=0.0,
+                         antiwindup="conditional", Ka=None):
     """Simulate the unity-feedback loop with PID controller.
 
     Parameters
@@ -177,6 +262,13 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                     injected at the *plant input* for t >= load_step_time.
                     Use with setpoint=0 for a pure load-rejection test.
     load_step_time: time at which the load disturbance switches on.
+    antiwindup    : 'conditional' (default) | 'back_calc' — see module
+                    docstring. Only affects behavior when the actuator
+                    actually saturates (u_min/u_max tighter than the
+                    command range).
+    Ka            : back-calculation gain override; None (default) derives
+                    it from `gains` via compute_back_calc_Ka(). Ignored
+                    when antiwindup='conditional'.
     """
     dt = plant.auto_dt()
     if t_end is None:
@@ -218,8 +310,12 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
     y = np.zeros(len(t))
     u = np.zeros(len(t))
 
+    Ka_used, Tt_used = ((0.0, float("inf")) if antiwindup != "back_calc"
+                        else compute_back_calc_Ka(gains, Ka))
+
     for i in range(1, len(t)):
-        u[i] = pid_step(gains, state, sp[i], y[i - 1], dt, u_min, u_max, N=N_eff)
+        u[i] = pid_step(gains, state, sp[i], y[i - 1], dt, u_min, u_max,
+                        N=N_eff, antiwindup=antiwindup, Ka=Ka_used)
         j = i - 1 - delay
         u_eff = u[j] if j >= 0 else 0.0
         # Load disturbance enters at the plant input (after the controller).
@@ -240,7 +336,9 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
 
     m = compute_metrics(t, sp, y, e, u, sp_kind=kind)
     return ClosedLoopResult(t=t, sp=sp, y=y, u=u, e=e,
-                            stable=stable, metrics=m, sp_kind=kind)
+                            stable=stable, metrics=m, sp_kind=kind,
+                            antiwindup=antiwindup, Ka=Ka_used, Tt=Tt_used,
+                            u_min=u_min, u_max=u_max)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -41,7 +41,7 @@ from tune import (
 )
 from simulate import (
     simulate_closed_loop, format_metrics, make_setpoint,
-    is_closed_loop_stable, compute_metrics,
+    is_closed_loop_stable, compute_metrics, compute_back_calc_Ka,
 )
 from compare import (
     robustness_metrics, load_rejection_metrics, compare_all_methods,
@@ -706,6 +706,77 @@ class TestSetpointWaveforms(unittest.TestCase):
     def test_unknown_kind_rejected(self):
         with self.assertRaises(ValueError):
             make_setpoint(self.t, "wat")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anti-windup: conditional-integration (default) vs. back-calculation
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAntiWindup(unittest.TestCase):
+    def setUp(self):
+        self.plant = TransferFunction.parse("1000/((s+1)*(10s+1))", L=0.5)
+        self.gains = PIDGains(Kp=0.011295149534671681, Ki=0.005297933356462488,
+                              Kd=0.006020291046836671)
+
+    def test_default_is_conditional(self):
+        sim = simulate_closed_loop(self.plant, self.gains, setpoint=1.0,
+                                   setpoint_kind="step", u_min=-1e6, u_max=1e6)
+        self.assertEqual(sim.antiwindup, "conditional")
+        self.assertEqual(sim.Ka, 0.0)
+
+    def test_modes_identical_when_never_saturated(self):
+        # Wide-open bounds -> u_sat == u_unsat always -> both modes reduce
+        # to plain integration, so the trajectories must match exactly.
+        common = dict(plant=self.plant, gains=self.gains, setpoint=1.0,
+                      setpoint_kind="step", u_min=-1e6, u_max=1e6)
+        cond = simulate_closed_loop(antiwindup="conditional", **common)
+        back = simulate_closed_loop(antiwindup="back_calc", **common)
+        np.testing.assert_allclose(cond.y, back.y)
+        np.testing.assert_allclose(cond.u, back.u)
+
+    def test_modes_diverge_when_saturated(self):
+        # Tight bounds force real saturation; conditional-integration
+        # (freeze) and back-calculation (active correction) must then
+        # produce different trajectories.
+        common = dict(plant=self.plant, gains=self.gains, setpoint=1.0,
+                      setpoint_kind="step", u_min=-0.003, u_max=0.003)
+        cond = simulate_closed_loop(antiwindup="conditional", **common)
+        back = simulate_closed_loop(antiwindup="back_calc", **common)
+        self.assertGreater(np.max(np.abs(cond.y - back.y)), 1e-6)
+        self.assertGreater(back.Ka, 0.0)
+
+    def test_Ka_auto_derivation_full_pid(self):
+        # Ti = Kp/Ki, Td = Kd/Kp, Tt = sqrt(Ti*Td), Ka = 1/Tt (Astrom & Hagglund).
+        Ka, Tt = compute_back_calc_Ka(self.gains)
+        Ti = self.gains.Kp / self.gains.Ki
+        Td = self.gains.Kd / self.gains.Kp
+        expected_Tt = np.sqrt(Ti * Td)
+        self.assertAlmostEqual(Tt, expected_Tt, places=9)
+        self.assertAlmostEqual(Ka, 1.0 / expected_Tt, places=9)
+
+    def test_Ka_auto_derivation_pi_only(self):
+        # Td = 0 -> Tt = Ti (PI-only case), per Astrom & Hagglund.
+        gains = PIDGains(Kp=0.01, Ki=0.004, Kd=0.0)
+        Ka, Tt = compute_back_calc_Ka(gains)
+        expected_Ti = gains.Kp / gains.Ki
+        self.assertAlmostEqual(Tt, expected_Ti, places=9)
+        self.assertAlmostEqual(Ka, 1.0 / expected_Ti, places=9)
+
+    def test_Ka_no_integral_action(self):
+        # Ki = 0 -> nothing for an integrator to wind up -> Ka = 0, Tt = inf.
+        gains = PIDGains(Kp=0.01, Ki=0.0, Kd=0.005)
+        Ka, Tt = compute_back_calc_Ka(gains)
+        self.assertEqual(Ka, 0.0)
+        self.assertEqual(Tt, float("inf"))
+
+    def test_Ka_override_bypasses_derivation(self):
+        Ka, Tt = compute_back_calc_Ka(self.gains, Ka=2.0)
+        self.assertEqual(Ka, 2.0)
+        self.assertAlmostEqual(Tt, 0.5, places=9)
+        sim = simulate_closed_loop(self.plant, self.gains, setpoint=1.0,
+                                   setpoint_kind="step", u_min=-0.003, u_max=0.003,
+                                   antiwindup="back_calc", Ka=2.0)
+        self.assertEqual(sim.Ka, 2.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

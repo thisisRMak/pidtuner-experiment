@@ -24,7 +24,7 @@ from tuning_methods import (
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben
 )
 from compare import metric_row, compare_all_methods, select_slowest_stable_poles
-from simulate import simulate_closed_loop
+from simulate import simulate_closed_loop, compute_back_calc_Ka, format_metrics
 from signal_source import SignalGenerator
 from signal_format import save_signal
 
@@ -67,6 +67,58 @@ def serialize_row_json(row: dict) -> dict:
         else:
             out[k] = v
     return out
+
+
+def saturated_sim_info(plant, gains, args):
+    """Simulate the step response under the requested actuator-saturation /
+    anti-windup settings.
+
+    Returns None when neither --u-min nor --u-max was given — in that case
+    the actuator never saturates, so conditional vs. back_calc anti-windup
+    would be indistinguishable and there's nothing informative to show.
+    """
+    if args.u_min is None and args.u_max is None:
+        return None
+    u_min = args.u_min if args.u_min is not None else -1e6
+    u_max = args.u_max if args.u_max is not None else 1e6
+    sim = simulate_closed_loop(plant, gains, setpoint=1.0, setpoint_kind="step",
+                               u_min=u_min, u_max=u_max,
+                               antiwindup=args.antiwindup, Ka=args.Ka)
+    return {
+        "u_min": u_min, "u_max": u_max, "antiwindup": args.antiwindup,
+        "Ka": sim.Ka, "Tt": sim.Tt if np.isfinite(sim.Tt) else None,
+        "metrics": sim.metrics, "sim": sim,
+    }
+
+
+def format_saturated_block(info):
+    """Render a saturated_sim_info() dict as an indented text block."""
+    tt_str = f"{info['Tt']:.4g} s" if info["Tt"] is not None else "inf (no integral action)"
+    ka_part = (f", Ka={info['Ka']:.4g} [Tt={tt_str}]"
+              if info["antiwindup"] == "back_calc" else "")
+    header = (f"  Saturated-actuator simulation "
+             f"(u_min={info['u_min']:g}, u_max={info['u_max']:g}, "
+             f"antiwindup={info['antiwindup']}{ka_part}):")
+    body = format_metrics(info["metrics"])
+    indented = "\n".join("    " + line for line in body.splitlines())
+    return header + "\n" + indented
+
+
+def serialize_saturated_json(info):
+    """JSON-safe version of saturated_sim_info() (drops the raw sim object)."""
+    metrics_clean = {}
+    for k, v in info["metrics"].items():
+        if isinstance(v, (np.floating, float)):
+            metrics_clean[k] = float(v) if np.isfinite(v) else None
+        elif isinstance(v, (np.integer, int)):
+            metrics_clean[k] = int(v)
+        else:
+            metrics_clean[k] = v
+    return {
+        "u_min": info["u_min"], "u_max": info["u_max"],
+        "antiwindup": info["antiwindup"], "Ka": info["Ka"], "Tt": info["Tt"],
+        "metrics": metrics_clean,
+    }
 
 
 def main():
@@ -129,6 +181,38 @@ def main():
         help="Halve all gains post-tuning"
     )
     parser.add_argument(
+        "--u-min",
+        type=float,
+        default=None,
+        help="Actuator saturation lower bound for the simulated response "
+             "(default: unbounded, i.e. no saturation). Only meaningful "
+             "together with --u-max and (optionally) --antiwindup."
+    )
+    parser.add_argument(
+        "--u-max",
+        type=float,
+        default=None,
+        help="Actuator saturation upper bound for the simulated response "
+             "(default: unbounded, i.e. no saturation)."
+    )
+    parser.add_argument(
+        "--antiwindup",
+        choices=["conditional", "back_calc"],
+        default="conditional",
+        help="Anti-windup strategy for the simulated response when the "
+             "actuator saturates (default: conditional-integration, the "
+             "prior default behavior). 'back_calc' is Astrom & Hagglund's "
+             "back-calculation method; has no effect without --u-min/--u-max."
+    )
+    parser.add_argument(
+        "--Ka",
+        type=float,
+        default=None,
+        help="Back-calculation anti-windup gain override (default: "
+             "auto-derived per method from Ka=1/Tt, Tt=sqrt(Ti*Td)). "
+             "Ignored unless --antiwindup back_calc."
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Output results in JSON format"
@@ -155,6 +239,14 @@ def main():
     parser.add_argument("--hysteresis", type=float, default=0.0, help="Relay test: hysteresis band")
 
     args = parser.parse_args()
+
+    saturating = args.u_min is not None or args.u_max is not None
+    if args.antiwindup == "back_calc" and not saturating:
+        print("Note: --antiwindup back_calc has no effect without "
+              "--u-min/--u-max (the actuator never saturates).", file=sys.stderr)
+    if args.Ka is not None and args.antiwindup != "back_calc":
+        print("Note: --Ka has no effect unless --antiwindup back_calc.",
+              file=sys.stderr)
 
     # 1. Parse plant
     try:
@@ -221,13 +313,27 @@ def main():
                         refreshed = metric_row(plant, r["name"] + " ½", new_gains)
                         r.update(refreshed)
 
+            sat_infos = {}
+            for r in rows:
+                if r.get("stable", False) and r.get("gains"):
+                    si = saturated_sim_info(plant, r["gains"], args)
+                    if si is not None:
+                        sat_infos[r["name"]] = si
+
             if args.json:
-                serialized = [serialize_row_json(r) for r in rows]
+                serialized = []
+                for r in rows:
+                    row_json = serialize_row_json(r)
+                    if r["name"] in sat_infos:
+                        row_json["saturated_sim"] = serialize_saturated_json(sat_infos[r["name"]])
+                    serialized.append(row_json)
                 print(json.dumps(serialized, indent=2))
             else:
                 print("=== PIDTuner Comparison Results ===")
                 for r in rows:
                     print(format_row_text(r))
+                    if r["name"] in sat_infos:
+                        print(format_saturated_block(sat_infos[r["name"]]))
                     print("-" * 40)
 
             if args.plot:
@@ -235,7 +341,8 @@ def main():
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
                 for r in rows:
                     if r.get("stable", False) and r.get("gains"):
-                        sim = simulate_closed_loop(plant, r["gains"], setpoint=1.0, setpoint_kind="step")
+                        sim = (sat_infos[r["name"]]["sim"] if r["name"] in sat_infos
+                              else simulate_closed_loop(plant, r["gains"], setpoint=1.0, setpoint_kind="step"))
                         ax1.plot(sim.t, sim.y, label=r["name"])
                         ax2.plot(sim.t, sim.u)
                 
@@ -340,16 +447,23 @@ def main():
 
         # 3. Simulate and gather metrics
         mrow = metric_row(plant, res.method, res.gains)
+        sat_info = saturated_sim_info(plant, res.gains, args)
 
         # 4. Print / serialize output
         if args.json:
-            print(json.dumps(serialize_row_json(mrow), indent=2))
+            out = serialize_row_json(mrow)
+            if sat_info is not None:
+                out["saturated_sim"] = serialize_saturated_json(sat_info)
+            print(json.dumps(out, indent=2))
         else:
             print(format_row_text(mrow))
+            if sat_info is not None:
+                print(format_saturated_block(sat_info))
 
         # 5. Plot
         if args.plot:
-            sim = simulate_closed_loop(plant, res.gains, setpoint=1.0, setpoint_kind="step")
+            sim = (sat_info["sim"] if sat_info is not None else
+                  simulate_closed_loop(plant, res.gains, setpoint=1.0, setpoint_kind="step"))
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
             ax1.plot(sim.t, sim.y, label=res.method)
             ax1.axhline(1.0, color="k", linestyle="--", alpha=0.5, label="Setpoint")

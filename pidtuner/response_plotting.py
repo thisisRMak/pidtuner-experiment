@@ -63,6 +63,7 @@ def draw_response_tab(fig, ax_y, ax_u, ax_e, canvas, active_entries):
                   color="#666", linewidth=1.0, alpha=0.7,
                   label=kind_label)
 
+    saturated_any = False
     for entry in active_entries:
         label = entry.label
         if entry.sim.metrics.get("unstable"):
@@ -71,10 +72,25 @@ def draw_response_tab(fig, ax_y, ax_u, ax_e, canvas, active_entries):
                   linewidth=1.5, label=label)
         ax_u.plot(entry.sim.t, entry.sim.u, color=entry.color,
                   linewidth=1.2, label=entry.label)
+        # Mark actuator-saturated samples (u pinned at u_min/u_max) distinctly
+        # — this is where conditional-integration vs. back-calculation
+        # anti-windup actually differ in *behavior*, even though the u(t)
+        # plateau itself looks identical between the two modes.
+        sat_mask = (np.isclose(entry.sim.u, entry.sim.u_min) |
+                   np.isclose(entry.sim.u, entry.sim.u_max))
+        if sat_mask.any():
+            saturated_any = True
+            ax_u.plot(entry.sim.t[sat_mask], entry.sim.u[sat_mask],
+                      color=entry.color, marker="o", markersize=3,
+                      linestyle="none", alpha=0.7)
         ax_e.plot(entry.sim.t, entry.sim.e, color=entry.color,
                   linewidth=1.2, label=entry.label)
 
     ax_y.legend(loc="lower right", bbox_to_anchor=(1.02, 1.0), fontsize=8)
+    if saturated_any:
+        ax_u.plot([], [], marker="o", markersize=3, linestyle="none",
+                  color="#666", label="saturated (u at u_min/u_max)")
+        ax_u.legend(loc="lower right", fontsize=7)
     stable_ys = [e.sim.y for e in active_entries if not e.sim.metrics.get("unstable")]
     if stable_ys:
         max_sp = max(np.max(np.abs(e.sim.sp)) for e in active_entries)

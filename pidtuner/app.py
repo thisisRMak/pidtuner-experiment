@@ -355,6 +355,25 @@ class PIDTunerApp:
                   foreground="#666", justify="left", font=("TkDefaultFont", 8)
                   ).pack(anchor="w", pady=(2, 0))
 
+        # Anti-windup: only visible/relevant once u min/u max above can
+        # actually saturate the actuator (see simulate.py module docstring).
+        aw_row = ttk.Frame(sf)
+        aw_row.pack(fill="x", pady=(4, 0))
+        ttk.Label(aw_row, text="Anti-windup", width=18).pack(side="left")
+        self.antiwindup_var = tk.StringVar(value="conditional")
+        ttk.OptionMenu(aw_row, self.antiwindup_var, "conditional",
+                       "conditional", "back_calc").pack(side="left", fill="x", expand=True)
+        self.ka_var = tk.StringVar(value="")
+        self._labeled_entry(sf, "Ka override (blank=auto)", self.ka_var, width=12)
+        ttk.Label(sf,
+                  text="conditional: freeze integral while saturated (default, "
+                       "unchanged from before). back_calc: Astrom & Hagglund "
+                       "back-calculation, Ka=1/Tt auto-derived from Ti,Td unless "
+                       "overridden. Neither has any effect unless u min/u max "
+                       "above actually saturate the actuator.",
+                  foreground="#666", justify="left", wraplength=260,
+                  font=("TkDefaultFont", 8)).pack(anchor="w", pady=(2, 0))
+
     # ── results frame ───────────────────────────────────────────────────────
     def _build_results_frame(self, parent):
         rf = ttk.LabelFrame(parent, text="Tuned controllers (session overlay)",
@@ -539,7 +558,7 @@ class PIDTunerApp:
             messagebox.showerror("Simulation failed", str(exc))
             return
 
-        label = self._next_label(method, halved=self.halve_gains_var.get())
+        label = self._next_label(method, halved=self.halve_gains_var.get(), sim=sim)
         entry = TunedEntry(label=label, gains=result.gains,
                            result=result, sim=sim)
         entry.mrow = metric_row(plant, label, result.gains,
@@ -686,8 +705,8 @@ class PIDTunerApp:
                 sim = self._run_closed_loop(plant, gains)
             except Exception:
                 continue
-            entry = TunedEntry(label=row["name"], gains=gains,
-                               result=None, sim=sim)
+            entry = TunedEntry(label=row["name"] + self._antiwindup_tag(sim),
+                               gains=gains, result=None, sim=sim)
             entry.mrow = row
             self.tuned.append(entry)
             n_ok += 1
@@ -707,14 +726,31 @@ class PIDTunerApp:
         umin = float(self.umin_var.get())
         umax = float(self.umax_var.get())
         kind = self.sp_kind_var.get()
+        antiwindup = self.antiwindup_var.get()
+        ka_str = self.ka_var.get().strip()
+        Ka = float(ka_str) if ka_str else None
         return simulate_closed_loop(
             plant, gains, t_end=t_end, setpoint=sp,
             setpoint_kind=kind,
             u_min=umin, u_max=umax, use_d_filter=self.d_filter_var.get(),
+            antiwindup=antiwindup, Ka=Ka,
         )
 
     # ── label naming for overlay legend ────────────────────────────────────
-    def _next_label(self, method, halved=False):
+    def _antiwindup_tag(self, sim):
+        """Legend/label suffix for a non-default anti-windup mode.
+
+        Conditional-integration is the original default and stays untagged
+        (unchanged legends for everyone not using this feature); back_calc
+        is opt-in, so it's worth flagging — otherwise two overlaid entries
+        for the same method with different anti-windup settings are
+        indistinguishable in the legend (same gains, same base label).
+        """
+        if sim.antiwindup != "back_calc":
+            return ""
+        return f" [back_calc, Ka={sim.Ka:.3g}]"
+
+    def _next_label(self, method, halved=False, sim=None):
         base = method.split(". ", 1)[1] if ". " in method else method
         base = base.split(" (")[0]
         if halved:
@@ -723,6 +759,8 @@ class PIDTunerApp:
         kind = self.sp_kind_var.get()
         if kind != "step":
             base = f"{base} ({kind})"
+        if sim is not None:
+            base += self._antiwindup_tag(sim)
         count = sum(1 for e in self.tuned if e.label.split(" #")[0] == base)
         if count == 0:
             return base
@@ -792,6 +830,9 @@ class PIDTunerApp:
             parts.append(f"\nCancelled poles: s = {cp}")
         if result.notes:
             parts.append(f"\n{result.notes}")
+        if sim.antiwindup == "back_calc":
+            tt_str = f"{sim.Tt:.4g} s" if np.isfinite(sim.Tt) else "inf (no integral action)"
+            parts.append(f"\nAnti-windup: back_calc, Ka = {sim.Ka:.4g}  (Tt = {tt_str})")
         parts.append("")
         parts.append("Metrics:  " + format_metrics(sim.metrics))
         self.last_lbl.config(text="\n".join(parts))

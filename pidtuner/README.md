@@ -132,11 +132,68 @@ for step, ss-error/max-error for ramp, peak-error/residual for pulse).
 
 Closed-loop simulation:
 - Setpoint, duration, actuator saturation (`u_min`, `u_max`).
-- Anti-windup via conditional integration (integral only accumulates
-  when the unsaturated command is in range).
+- Anti-windup: **conditional-integration** (default, unchanged from
+  before — integral only accumulates when the unsaturated command is
+  in range) or **back-calculation** (opt-in — integral keeps
+  accumulating but is corrected by `Ka*(u_sat - u_unsat)`). See
+  "Anti-windup" below; neither mode has any effect unless `u_min`/`u_max`
+  actually saturate the actuator.
 - Optional derivative low-pass filter with `N = 10`, applied to `-pv`
   rather than to error (avoids derivative kick on setpoint steps).
   Strongly recommended; toggle off to see the unfiltered behavior.
+
+### Anti-windup
+
+Both modes solve the same problem: when the actuator saturates
+(the unsaturated command falls outside `[u_min, u_max]`), a plain
+integrator keeps accumulating error it can't act on ("integrator
+windup"), producing overshoot and a slow recovery once the error
+reverses sign. They differ in how they prevent it:
+
+- **Conditional-integration** (default): freeze the integral outright
+  while saturated. Simple, no extra parameter, and this project's
+  original anti-windup behavior — nothing changes unless you opt into
+  back-calculation.
+- **Back-calculation** ("tracking" anti-windup, Åström & Hägglund):
+  keep integrating, but continuously correct with the saturation error
+  itself:
+
+  ```
+  dI/dt = e + Ka*(u_sat - u_unsat)
+  ```
+
+  When not saturated, `u_sat == u_unsat` and this reduces to ordinary
+  integration. When saturated, the correction term actively pulls the
+  integral back toward what the actuator can deliver, at a rate set by
+  `Ka`, instead of merely pausing.
+
+  `Ka` is auto-derived from whatever gains a tuning method already
+  produced, via `Ka = 1/Tt` with `Tt = sqrt(Ti·Td)` for a full PID or
+  `Tt = Ti` when `Td = 0` (PI-only) — Åström & Hägglund's rule (this
+  course's own text doesn't give one). `Ti`/`Td` come from the gains
+  themselves (`Ti = Kp/Ki`, `Td = Kd/Kp`). An explicit `Ka` override is
+  available in both the GUI (blank = auto) and CLI (`--Ka`).
+
+  The auto-derived `Ka` is a reasonable default, not a guarantee of
+  better performance — for some plants/saturation levels back-calculation
+  with the auto `Ka` can actually overshoot *more* than conditional
+  integration; `Ka` is itself a design knob. Compare both modes on your
+  plant rather than assuming back-calculation always wins.
+
+This is orthogonal to which of the 9 tuning methods produced the gains —
+none of them know about actuator limits, so anti-windup is purely a
+property of the simulation step that follows tuning, not of tuning
+itself. See `simulate.py`'s module docstring for the full derivation.
+
+CLI: `--u-min`/`--u-max` set the saturation bounds (default: unbounded,
+i.e. no saturation — unchanged from before); `--antiwindup
+{conditional,back_calc}` selects the mode (default: `conditional`);
+`--Ka` overrides the auto-derived gain. When saturation is requested,
+the CLI prints an extra "Saturated-actuator simulation" block (and adds
+a `saturated_sim` key in `--json` mode) alongside the normal
+(always-unsaturated) comparison metrics, so you can see both the
+idealized cross-method comparison and the actual saturated response
+side by side.
 
 Overlay plotting:
 - Every successful tune is added to the session list with a unique
