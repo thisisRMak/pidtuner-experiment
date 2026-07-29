@@ -48,7 +48,7 @@ from parameter_panels import (
     build_amigo_panel, build_simc_panel, build_boyd_panel,
     build_cohen_coon_panel, build_chr_panel, build_tyreus_luyben_panel,
 )
-from simulate import simulate_closed_loop, format_metrics
+from simulate import simulate_closed_loop, format_metrics, saturation_mask
 
 
 METHODS = [
@@ -745,9 +745,15 @@ class PIDTunerApp:
         is opt-in, so it's worth flagging — otherwise two overlaid entries
         for the same method with different anti-windup settings are
         indistinguishable in the legend (same gains, same base label).
+
+        Ka is only shown if the actuator actually saturated in this sim —
+        back_calc's correction term is zero otherwise, so an unconditional
+        Ka would misleadingly suggest it did something.
         """
         if sim.antiwindup != "back_calc":
             return ""
+        if not np.any(saturation_mask(sim)):
+            return " [back_calc: never saturated]"
         return f" [back_calc, Ka={sim.Ka:.3g}]"
 
     def _next_label(self, method, halved=False, sim=None):
@@ -831,8 +837,12 @@ class PIDTunerApp:
         if result.notes:
             parts.append(f"\n{result.notes}")
         if sim.antiwindup == "back_calc":
-            tt_str = f"{sim.Tt:.4g} s" if np.isfinite(sim.Tt) else "inf (no integral action)"
-            parts.append(f"\nAnti-windup: back_calc, Ka = {sim.Ka:.4g}  (Tt = {tt_str})")
+            if np.any(saturation_mask(sim)):
+                tt_str = f"{sim.Tt:.4g} s" if np.isfinite(sim.Tt) else "inf (no integral action)"
+                parts.append(f"\nAnti-windup: back_calc, Ka = {sim.Ka:.4g}  (Tt = {tt_str})")
+            else:
+                parts.append("\nAnti-windup: back_calc requested, but the actuator "
+                             "never saturated in this simulation — Ka had no effect.")
         parts.append("")
         parts.append("Metrics:  " + format_metrics(sim.metrics))
         self.last_lbl.config(text="\n".join(parts))

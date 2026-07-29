@@ -72,6 +72,22 @@ python3 cli.py --plant "1000/((s+1)(10s+1))" --method all \
   --u-min -0.003 --u-max 0.003 --antiwindup back_calc --json
 ```
 
+The same bound is applied to all 9 methods, but they don't all produce
+gains of the same magnitude, so some rows may not actually saturate at
+that bound — `saturated_sim` is added to *every* stable row regardless,
+since it's conditioned only on whether you asked for saturation bounds at
+all, not on whether that specific row's gains actually hit them. Each
+`saturated_sim` block carries a `"saturated": true/false` field for
+exactly this reason: when `false`, `Ka`/`Tt` come back `null` rather than
+showing a derived number that never actually engaged (back_calc's
+correction term is zero unless the actuator is pinned at `u_min`/`u_max` —
+see `test_modes_identical_when_never_saturated` in `test_pid_tuner.py`),
+and its metrics will just numerically match the ordinary (always-
+unbounded) row above it. The single-method CLI path also prints a stderr
+note in this case ("the actuator never reached --u-min/--u-max... Ka not
+reported"); the GUI's session-list label likewise reads
+`[back_calc: never saturated]` instead of showing a `Ka` value.
+
 **5. The no-op warnings** — both print a note to stderr instead of
 silently doing nothing:
 

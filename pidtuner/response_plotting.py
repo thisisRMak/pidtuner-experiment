@@ -11,6 +11,8 @@ from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk,
 )
 
+from simulate import saturation_mask
+
 
 def create_response_figure(parent):
     """Build the 3-row response Figure/axes/canvas + toolbar inside parent.
@@ -76,8 +78,7 @@ def draw_response_tab(fig, ax_y, ax_u, ax_e, canvas, active_entries):
         # — this is where conditional-integration vs. back-calculation
         # anti-windup actually differ in *behavior*, even though the u(t)
         # plateau itself looks identical between the two modes.
-        sat_mask = (np.isclose(entry.sim.u, entry.sim.u_min) |
-                   np.isclose(entry.sim.u, entry.sim.u_max))
+        sat_mask = saturation_mask(entry.sim)
         if sat_mask.any():
             saturated_any = True
             ax_u.plot(entry.sim.t[sat_mask], entry.sim.u[sat_mask],

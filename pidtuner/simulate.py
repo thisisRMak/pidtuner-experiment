@@ -341,6 +341,18 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                             u_min=u_min, u_max=u_max)
 
 
+def saturation_mask(sim):
+    """Boolean array over sim.t: True where sim.u sits exactly at u_min/u_max.
+
+    This is the only place anti-windup mode can have made a difference —
+    back_calc's correction term is zero everywhere else, so `sim.Ka` is
+    inert unless `saturation_mask(sim).any()`. Shared by the CLI's
+    saturated-sim reporting, the GUI's legend tagging, and the response
+    plot's per-sample marking so all three agree on the same definition.
+    """
+    return np.isclose(sim.u, sim.u_min) | np.isclose(sim.u, sim.u_max)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Performance metrics
 # ─────────────────────────────────────────────────────────────────────────────

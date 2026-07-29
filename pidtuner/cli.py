@@ -24,7 +24,7 @@ from tuning_methods import (
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben
 )
 from compare import metric_row, compare_all_methods, select_slowest_stable_poles
-from simulate import simulate_closed_loop, compute_back_calc_Ka, format_metrics
+from simulate import simulate_closed_loop, format_metrics, saturation_mask
 from signal_source import SignalGenerator
 from signal_format import save_signal
 
@@ -76,6 +76,11 @@ def saturated_sim_info(plant, gains, args):
     Returns None when neither --u-min nor --u-max was given — in that case
     the actuator never saturates, so conditional vs. back_calc anti-windup
     would be indistinguishable and there's nothing informative to show.
+
+    `Ka`/`Tt` are only populated when the actuator actually saturated in
+    this specific simulation (see `saturated`) — back_calc's correction
+    term is otherwise always zero, so reporting a derived Ka that never
+    engaged would misleadingly suggest it did something.
     """
     if args.u_min is None and args.u_max is None:
         return None
@@ -84,20 +89,26 @@ def saturated_sim_info(plant, gains, args):
     sim = simulate_closed_loop(plant, gains, setpoint=1.0, setpoint_kind="step",
                                u_min=u_min, u_max=u_max,
                                antiwindup=args.antiwindup, Ka=args.Ka)
+    saturated = bool(np.any(saturation_mask(sim)))
+    engaged = saturated and sim.antiwindup == "back_calc"
     return {
         "u_min": u_min, "u_max": u_max, "antiwindup": args.antiwindup,
-        "Ka": sim.Ka, "Tt": sim.Tt if np.isfinite(sim.Tt) else None,
+        "saturated": saturated,
+        "Ka": sim.Ka if engaged else None,
+        "Tt": (sim.Tt if np.isfinite(sim.Tt) else None) if engaged else None,
         "metrics": sim.metrics, "sim": sim,
     }
 
 
 def format_saturated_block(info):
     """Render a saturated_sim_info() dict as an indented text block."""
-    tt_str = f"{info['Tt']:.4g} s" if info["Tt"] is not None else "inf (no integral action)"
-    ka_part = (f", Ka={info['Ka']:.4g} [Tt={tt_str}]"
-              if info["antiwindup"] == "back_calc" else "")
+    ka_part = ""
+    if info["Ka"] is not None:
+        tt_str = f"{info['Tt']:.4g} s" if info["Tt"] is not None else "inf (no integral action)"
+        ka_part = f", Ka={info['Ka']:.4g} [Tt={tt_str}]"
     header = (f"  Saturated-actuator simulation "
              f"(u_min={info['u_min']:g}, u_max={info['u_max']:g}, "
+             f"saturated={'yes' if info['saturated'] else 'no'}, "
              f"antiwindup={info['antiwindup']}{ka_part}):")
     body = format_metrics(info["metrics"])
     indented = "\n".join("    " + line for line in body.splitlines())
@@ -116,7 +127,8 @@ def serialize_saturated_json(info):
             metrics_clean[k] = v
     return {
         "u_min": info["u_min"], "u_max": info["u_max"],
-        "antiwindup": info["antiwindup"], "Ka": info["Ka"], "Tt": info["Tt"],
+        "antiwindup": info["antiwindup"], "saturated": info["saturated"],
+        "Ka": info["Ka"], "Tt": info["Tt"],
         "metrics": metrics_clean,
     }
 
@@ -448,6 +460,11 @@ def main():
         # 3. Simulate and gather metrics
         mrow = metric_row(plant, res.method, res.gains)
         sat_info = saturated_sim_info(plant, res.gains, args)
+        if (sat_info is not None and args.antiwindup == "back_calc"
+                and not sat_info["saturated"]):
+            print("Note: the actuator never reached --u-min/--u-max in this "
+                  "simulation — back_calc had no effect (Ka not reported).",
+                  file=sys.stderr)
 
         # 4. Print / serialize output
         if args.json:
