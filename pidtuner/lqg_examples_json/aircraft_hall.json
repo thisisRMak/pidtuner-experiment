@@ -1,0 +1,132 @@
+{
+  "key": "aircraft_hall",
+  "name": "Aircraft (Hall)",
+  "citation": "Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall.m)",
+  "source_file": "pidtuner/lqg_examples_m/AIAircraftHall.m",
+  "A": [
+    [
+      -0.0297,
+      -1.0,
+      0.0,
+      0.0438,
+      0.0
+    ],
+    [
+      0.331,
+      -0.0042,
+      -0.0461,
+      0.0,
+      0.0
+    ],
+    [
+      -1.13,
+      0.128,
+      -0.803,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "B": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.381,
+      0.04
+    ],
+    [
+      0.067,
+      1.59
+    ],
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ]
+  ],
+  "C": [
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "D": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ]
+  ],
+  "suggested_Q_kind": "custom",
+  "suggested_Q": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "suggested_R_kind": "identity",
+  "suggested_R_scale": 1.0,
+  "notes": "GOLDEN TEST CASE: matches AILQG.pdf Example 1 exactly. LQR(Q, R=I(2)) on this plant reproduces the PDF's printed S (eq. 25), K (eq. 26), and closed-loop poles to the digits shown \u2014 verified numerically while building this catalog, see test_lqg.py."
+}

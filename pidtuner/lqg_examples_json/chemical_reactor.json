@@ -1,0 +1,99 @@
+{
+  "key": "chemical_reactor",
+  "name": "Chemical reactor (Munro)",
+  "citation": "Munro (via AIChemicalReactor1.m)",
+  "source_file": "pidtuner/lqg_examples_m/AIChemicalReactor1.m",
+  "A": [
+    [
+      1.38,
+      -0.2077,
+      6.715,
+      -5.676
+    ],
+    [
+      -0.5814,
+      -4.29,
+      0.0,
+      0.675
+    ],
+    [
+      1.067,
+      4.273,
+      -6.654,
+      5.893
+    ],
+    [
+      0.048,
+      4.273,
+      1.343,
+      -2.104
+    ]
+  ],
+  "B": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      5.679,
+      0.0
+    ],
+    [
+      1.136,
+      -3.146
+    ],
+    [
+      1.136,
+      0.0
+    ]
+  ],
+  "C": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "D": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0
+    ]
+  ],
+  "suggested_Q_kind": "identity",
+  "suggested_Q": null,
+  "suggested_R_kind": "identity",
+  "suggested_R_scale": 1.0,
+  "notes": "Q=I(4), R=I(2) in the source. No output map given (Q isn't output-weighted), so C defaults to I(4)."
+}
