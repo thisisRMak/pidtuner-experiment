@@ -473,6 +473,11 @@ class TransferFunction:
             H = H * np.exp(-1j * omega * self.L)
         return H
 
+    def to_state_space(self, name="") -> "StateSpacePlant":
+        """Convert to a StateSpacePlant (see tf_to_state_space) for use with
+        the LQR/LQG design track. Raises if the plant has dead time."""
+        return tf_to_state_space(self, name=name)
+
     # ── pretty-printing ─────────────────────────────────────────────────────
     def pretty(self):
         return (f"num={np.array2string(self.num, precision=4, separator=', ')}  "
@@ -497,3 +502,165 @@ class TransferFunction:
         if self.L > 0:
             parts.append(f"time delay L={self.L:g}s")
         return ", ".join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# StateSpacePlant: continuous-time MIMO plant ẋ = Ax + Bu, y = Cx + Du
+#   Used by the LQR/LQG design track (lqg_design_methods.py) — a separate
+#   representation from TransferFunction because LQG's own math (state
+#   feedback, the Kalman filter) is defined directly in terms of A, B, C, D,
+#   not num/den polynomials, and is not restricted to SISO.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class StateSpacePlant:
+    A: np.ndarray
+    B: np.ndarray
+    C: np.ndarray
+    D: np.ndarray
+    name: str = ""
+
+    def __post_init__(self):
+        self.A = np.atleast_2d(np.asarray(self.A, dtype=float))
+        self.B = np.atleast_2d(np.asarray(self.B, dtype=float))
+        self.C = np.atleast_2d(np.asarray(self.C, dtype=float))
+        self.D = np.atleast_2d(np.asarray(self.D, dtype=float))
+        nx = self.A.shape[0]
+        if self.A.shape != (nx, nx):
+            raise ValueError(f"A must be square, got shape {self.A.shape}")
+        if self.B.shape[0] != nx:
+            raise ValueError(
+                f"B must have {nx} rows to match A, got shape {self.B.shape}")
+        if self.C.shape[1] != nx:
+            raise ValueError(
+                f"C must have {nx} columns to match A, got shape {self.C.shape}")
+        ny, nu = self.C.shape[0], self.B.shape[1]
+        if self.D.shape != (ny, nu):
+            raise ValueError(
+                f"D must have shape ({ny}, {nu}) to match B/C, got {self.D.shape}")
+
+    # ── shape ───────────────────────────────────────────────────────────────
+    @property
+    def nx(self):
+        return self.A.shape[0]
+
+    @property
+    def nu(self):
+        return self.B.shape[1]
+
+    @property
+    def ny(self):
+        return self.C.shape[0]
+
+    # ── constructors ────────────────────────────────────────────────────────
+    @classmethod
+    def from_matrices(cls, A, B, C=None, D=None, name=""):
+        """Build from A, B with C/D defaulting to full state output
+        (C=I, D=0) when not given — the common case for LQR examples that
+        only ever use A/B plus a cost matrix, never an explicit output."""
+        A = np.atleast_2d(np.asarray(A, dtype=float))
+        nx = A.shape[0]
+        B = np.atleast_2d(np.asarray(B, dtype=float))
+        nu = B.shape[1]
+        if C is None:
+            C = np.eye(nx)
+        if D is None:
+            D = np.zeros((np.atleast_2d(C).shape[0], nu))
+        return cls(A=A, B=B, C=C, D=D, name=name)
+
+    # ── analysis ────────────────────────────────────────────────────────────
+    def poles(self):
+        return np.linalg.eigvals(self.A)
+
+    def is_open_loop_stable(self):
+        poles = self.poles()
+        if len(poles) == 0:
+            return True
+        return bool(np.all(np.real(poles) < -1e-9))
+
+    def is_controllable(self):
+        """Popov-Belevitch-Hautus test: rank([A-λI, B]) == nx for every
+        eigenvalue λ of A. Used instead of the textbook Krylov
+        controllability matrix [B AB A²B ...] because that matrix's columns
+        span wildly different magnitudes as powers of A accumulate (e.g. a
+        12+-state plant with eigenvalues spread over two decades), which
+        makes matrix_rank's SVD-based tolerance unreliable — it flagged a
+        real preset plant (AUTM, 12 states) as uncontrollable even though
+        LQR solves it and stabilizes it without issue. PBH doesn't have
+        that blowup since it never forms powers of A."""
+        nx = self.nx
+        for lam in np.linalg.eigvals(self.A):
+            M = np.hstack([self.A - lam * np.eye(nx), self.B])
+            if np.linalg.matrix_rank(M) < nx:
+                return False
+        return True
+
+    def is_observable(self):
+        """PBH test, dual of is_controllable: rank([A-λI; C]) == nx for
+        every eigenvalue λ of A."""
+        nx = self.nx
+        for lam in np.linalg.eigvals(self.A):
+            M = np.vstack([self.A - lam * np.eye(nx), self.C])
+            if np.linalg.matrix_rank(M) < nx:
+                return False
+        return True
+
+    # ── simulation (discretize and step) ────────────────────────────────────
+    def discretize(self, dt):
+        if self.nx == 0:
+            return (np.zeros((0, 0)), np.zeros((0, self.nu)),
+                    np.zeros((self.ny, 0)), self.D.copy())
+        Ad, Bd, Cd, Dd, _ = cont2discrete((self.A, self.B, self.C, self.D),
+                                          dt, method="zoh")
+        return Ad, Bd, Cd, Dd
+
+    def auto_dt(self):
+        """Pick a sim timestep small enough to resolve the fastest mode."""
+        poles = self.poles()
+        omega_max = max(np.max(np.abs(poles)), 1e-6) if len(poles) else 1.0
+        return max(1.0 / (20.0 * omega_max), 1e-4)
+
+    def simulate_open_loop(self, t, u, x0=None):
+        """Open-loop simulation: feed u(t) (shape (n, nu)), return
+        (x(t) shape (n, nx), y(t) shape (n, ny))."""
+        dt = float(t[1] - t[0])
+        Ad, Bd, C, D = self.discretize(dt)
+        n = len(t)
+        u = np.atleast_2d(u)
+        if u.shape[0] != n:
+            u = u.T
+        x = np.zeros(self.nx) if x0 is None else np.asarray(x0, dtype=float)
+        xs = np.zeros((n, self.nx))
+        ys = np.zeros((n, self.ny))
+        xs[0] = x
+        ys[0] = C @ x + D @ u[0]
+        for i in range(1, n):
+            x = Ad @ x + Bd @ u[i - 1]
+            xs[i] = x
+            ys[i] = C @ x + D @ u[i]
+        return xs, ys
+
+    def pretty(self):
+        return (f"nx={self.nx}, nu={self.nu}, ny={self.ny}"
+                f"{f' ({self.name})' if self.name else ''}")
+
+
+def tf_to_state_space(tf: "TransferFunction", name="") -> StateSpacePlant:
+    """Convert a SISO TransferFunction to a StateSpacePlant via tf2ss.
+
+    Dead time (tf.L > 0) has no exact finite-dimensional state-space
+    realization, so it's rejected here rather than silently dropped — the
+    LQG track (unlike the PID track) doesn't yet model delay.
+    """
+    if tf.L > 0:
+        raise ValueError(
+            f"cannot convert a plant with dead time (L={tf.L:g}s) to a "
+            f"finite-dimensional state-space realization; the LQG design "
+            f"track does not yet model delay"
+        )
+    A, B, C, D = tf2ss(tf.num, tf.den)
+    if A.size == 0:
+        # Pure gain (no dynamics) — still expressible as a 0-state system.
+        return StateSpacePlant(A=np.zeros((0, 0)), B=np.zeros((0, 1)),
+                               C=np.zeros((1, 0)), D=np.atleast_2d(D), name=name)
+    return StateSpacePlant(A=A, B=B, C=np.atleast_2d(C), D=np.atleast_2d(D), name=name)
