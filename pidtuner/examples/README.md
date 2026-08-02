@@ -30,9 +30,17 @@ Requires the `pidtuner` conda/pip environment to be active (see
 - **`run_lqg_demo.sh`** — `cli_lqg.py`, the LQR/LQG design track (a
   separate paradigm from the PID tuners above — state-space plants, not
   transfer functions). Runs every method (`lqr`, `output_weighted`,
-  `bryson`, `lqg`) plus reference tracking, then sweeps all 11 preset
-  plants and writes a professor-facing review
-  (`docs/lqg_review.md`) via `lqg_review.py`. See
+  `bryson`, `lqg`, `implicit`, `explicit`) plus reference tracking (with
+  sign-aware Overshoot/Rise/Settling metrics) and both cross-method
+  comparisons (`--method all` — the regulator family, overlaid
+  `||x(t)||`/`||u(t)||`; `--method model_following_all` — implicit vs.
+  explicit against the target model, overlaid per output channel — see
+  `docs/lqg_testing.md` "Cross-method comparisons" for why these are two
+  separate comparisons, not one) plus custom `--Q-diag`/`--R-diag` weights
+  combined with reference tracking (the lever for actually iterating on a
+  design — see `docs/lqg_testing.md` "Custom weights and
+  reference-tracking"), then sweeps all 11 preset plants and writes a
+  professor-facing review (`docs/lqg_review.md`) via `lqg_review.py`. See
   `docs/lqg_testing.md` for what the printed pre-/post-design checks mean.
 
 - **`run_supervisor_lqg_demo.sh`** — `cli_supervisor_lqg.py`, the LQR/LQG
@@ -41,7 +49,8 @@ Requires the `pidtuner` conda/pip environment to be active (see
   "Design notes" for why). Same Ollama requirement/skip behavior as
   `run_supervisor_demo.sh`. Its one benchmark tool bundles `lqr`,
   `output_weighted`, `bryson`, and `lqg` together (LQR and LQG are treated
-  as one family here, not two).
+  as one family here, not two), plus `implicit`/`explicit` model-following
+  when the user supplies a target model.
 
 Run them all:
 

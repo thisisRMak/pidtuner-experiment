@@ -6,12 +6,17 @@ supervisor_common.py are domain-agnostic (method_name + rationale, grounded
 against whatever names a benchmark tool returned) and are reused as-is by
 supervisor_session_lqg.py — no LQG-specific version needed. Only the
 priorities side needs its own vocabulary: PID's PRIORITY_CATEGORIES maps to
-compare.METRIC_TIERS names (OS%, IAE, Ms/Mt, ...), none of which the LQG
-track computes (no MIMO Ms/Mt yet, no overshoot/rise-time outside a
-reference-tracking scenario this supervisor doesn't drive — see
-docs/lqg_testing.md). This module's categories map onto what
-lqg_simulate.compute_regulator_metrics and lqg_checks.py actually return
-instead.
+compare.METRIC_TIERS names (OS%, IAE, Ms/Mt, ...), most of which the LQG
+track doesn't compute the same way (no MIMO Ms/Mt yet — pole_margin stands
+in). This module's categories map onto what
+lqg_simulate.compute_regulator_metrics/compute_tracking_metrics and
+lqg_checks.py actually return instead. "overshoot" only has real data
+behind it when the caller also passes `reference` to run_lqg_benchmark
+(see supervisor_tools_lqg.py) — the plain regulator response has no
+Overshoot metric (there's no "final value" to overshoot past when driving
+x to 0) — but it's kept as a category anyway so the worksheet can record
+the user's stated priority before the tool call that would actually
+produce that number.
 
 Also no `tf_known` field: PID's PrioritiesWorksheet locks tf_known because
 it gates which of two competing tools (white-box/black-box) may be called.
@@ -28,11 +33,14 @@ from typing import Optional
 
 # Maps 1:1 onto fields this module's benchmark tool actually returns (see
 # supervisor_tools_lqg.py's _serialize_row): the regulator-response metrics
-# from lqg_simulate.compute_regulator_metrics, plus pole_margin (a stability-
+# from lqg_simulate.compute_regulator_metrics, pole_margin (a stability-
 # margin proxy -- see its docstring -- standing in for the Ms/Mt robustness
-# metrics the PID track has and the LQG track doesn't compute yet).
+# metrics the PID track has and the LQG track doesn't compute yet), and
+# (only populated when `reference` is passed to run_lqg_benchmark) the
+# per-channel tracking metrics from lqg_simulate.compute_tracking_metrics.
 PRIORITY_CATEGORIES_LQG = {
-    "speed": ["settling_2pct"],
+    "speed": ["settling_2pct", "Rise"],
+    "overshoot": ["Overshoot"],
     "control_effort": ["ISU", "u_peak"],
     "regulation_tightness": ["final_state_norm"],
     "robustness": ["pole_margin"],

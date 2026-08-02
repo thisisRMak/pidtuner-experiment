@@ -63,6 +63,87 @@ class TestRunLqgBenchmark(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("error", result)
 
+    def test_am_diag_omitted_skips_model_following(self):
+        result = run_lqg_benchmark("aircraft_hall")
+        names = [r["name"] for r in result["rows"]]
+        self.assertNotIn("Implicit model-following", names)
+        self.assertNotIn("Explicit model-following", names)
+
+    def test_am_diag_given_adds_both_model_following_rows(self):
+        result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07])
+        self.assertTrue(result["ok"])
+        names = [r["name"] for r in result["rows"]]
+        self.assertEqual(names, ["LQR (suggested Q/R)", "Output-weighted LQR",
+                                 "Bryson's rule", "LQG (Kalman filter)",
+                                 "Implicit model-following", "Explicit model-following"])
+        implicit_row, explicit_row = result["rows"][4], result["rows"][5]
+        self.assertTrue(implicit_row["stable"])
+        self.assertTrue(explicit_row["stable"])
+        self.assertIn("K", implicit_row)
+        self.assertIn("K1", explicit_row)
+        self.assertIn("K2", explicit_row)
+        self.assertNotIn("K", explicit_row)
+
+    def test_am_diag_wrong_length_reports_error(self):
+        result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07, 0.03])
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_am_diag_nonpositive_reports_error(self):
+        result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, -0.07])
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_schema_includes_am_diag_and_q1_scale(self):
+        props = RUN_LQG_BENCHMARK_SCHEMA["function"]["parameters"]["properties"]
+        self.assertIn("am_diag", props)
+        self.assertIn("q1_scale", props)
+
+    def test_schema_includes_custom_weights_and_reference(self):
+        props = RUN_LQG_BENCHMARK_SCHEMA["function"]["parameters"]["properties"]
+        self.assertIn("Q_diag", props)
+        self.assertIn("R_diag", props)
+        self.assertIn("reference", props)
+
+    def test_Q_diag_R_diag_adds_custom_row(self):
+        result = run_lqg_benchmark("aircraft_hall", Q_diag=[1, 1, 1, 1, 1], R_diag=[0.1, 0.1])
+        self.assertTrue(result["ok"])
+        names = [r["name"] for r in result["rows"]]
+        self.assertIn("Custom LQR (Q_diag/R_diag)", names)
+
+    def test_Q_diag_without_R_diag_reports_error(self):
+        result = run_lqg_benchmark("aircraft_hall", Q_diag=[1, 1, 1, 1, 1])
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_reference_adds_tracking_metrics(self):
+        result = run_lqg_benchmark("aircraft_hall", reference=[1.0, -0.5])
+        self.assertTrue(result["ok"])
+        for row in result["rows"]:
+            self.assertIn("tracking_metrics", row)
+            self.assertEqual(len(row["tracking_metrics"]), 2)
+
+    def test_no_reference_means_no_tracking_metrics_key(self):
+        result = run_lqg_benchmark("aircraft_hall")
+        for row in result["rows"]:
+            self.assertNotIn("tracking_metrics", row)
+
+    def test_reference_on_non_square_plant_reports_error(self):
+        result = run_lqg_benchmark("chemical_reactor", reference=[1.0, 1.0, 1.0, 1.0])
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_iteration_workflow_different_weights_change_metrics(self):
+        # The scenario the supervisor is actually meant to support: call
+        # once, look at the result, propose different weights, call again.
+        first = run_lqg_benchmark("aircraft_hall", Q_diag=[1, 1, 1, 1, 1],
+                                  R_diag=[10, 10], reference=[1.0, -0.5])
+        second = run_lqg_benchmark("aircraft_hall", Q_diag=[1, 1, 1, 1, 1],
+                                   R_diag=[0.01, 0.01], reference=[1.0, -0.5])
+        first_overshoot = first["rows"][-1]["tracking_metrics"][0]["Overshoot"]
+        second_overshoot = second["rows"][-1]["tracking_metrics"][0]["Overshoot"]
+        self.assertNotEqual(first_overshoot, second_overshoot)
+
     def test_schema_enum_matches_catalog(self):
         props = RUN_LQG_BENCHMARK_SCHEMA["function"]["parameters"]["properties"]
         self.assertEqual(set(props["plant_preset"]["enum"]), set(list_examples()))

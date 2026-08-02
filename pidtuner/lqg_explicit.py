@@ -87,6 +87,21 @@ class ExplicitModelFollowing(BaseControlDesignMethod):
             raise ValueError(
                 f"Q1 must be (ny, ny) = ({plant.ny}, {plant.ny}), got shape "
                 f"{self.Q1.shape}")
+        if self.Am.shape != self.Q1.shape:
+            raise ValueError(
+                f"Am must be (ny, ny) = {self.Q1.shape} to match Q1 (Q̂'s "
+                f"block construction, eq. 54, requires xm's dimension to "
+                f"equal Q1's), got shape {self.Am.shape}")
+        if not np.all(np.real(np.linalg.eigvals(self.Am)) < 0):
+            raise ValueError(
+                f"Am must be Hurwitz-stable (a target model with an unstable "
+                f"or marginal mode isn't a sensible thing to track), got "
+                f"eigenvalues {np.linalg.eigvals(self.Am)}. Besides being "
+                f"conceptually nonsensical, xm is uncontrollable inside the "
+                f"augmented [x;xm] system (eq. 51 has no B for the xm block), "
+                f"so an unstable Am also makes the augmented Riccati problem "
+                f"unsolvable -- scipy would raise an opaque LinAlgError "
+                f"instead of this message.")
 
     def design(self) -> ExplicitModelFollowingResult:
         A, B, C = self.plant.A, self.plant.B, self.plant.C

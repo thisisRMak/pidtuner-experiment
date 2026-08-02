@@ -22,12 +22,33 @@ CLIs (one-off, conversational, and batch runs).
 (exact match); `ExplicitModelFollowing` is validated structurally against
 Example 4 instead, since the PDF's own printed numbers for that example
 don't satisfy their own Riccati equation — see `docs/lqg_testing.md` "The
-Example 4 discrepancy." Neither model-following class is wired into
-`cli_lqg.py`'s `--method`/preset sweep yet, since they need a per-design
-target model (`Am`, `Q1`) with no natural "suggested" value per preset
-plant — see `docs/lqg_testing.md`. Companion to `docs/refactor.md` (the
-completed PID modularization) — this document originally planned the
-structure below before implementation started; it's kept as the design
+Example 4 discrepancy." Both model-following classes are wired into
+`cli_lqg.py --method implicit`/`explicit` (2026-08-02, via `--am-diag` —
+a per-design target model with no natural "suggested" value per preset
+plant, so it's a required flag, never guessed) and into the supervisor's
+`run_lqg_benchmark` tool (opt-in via the same `am_diag` parameter).
+`lqg_simulate.simulate_explicit_model_following` (the augmented `[x;xm]`
+closed loop) and `lqg_simulate.compute_tracking_metrics`
+(sign-aware Overshoot/Rise/Settling for the reference-tracking case) also
+shipped alongside this — see `docs/lqg_testing.md` for both.
+`lqg_compare.py` (2026-08-02) adds the two cross-method comparisons —
+`compare_regulator_methods` (LQR/OutputWeightedLQR/BrysonLQR/LQG, the
+`compare.py` analog) and `compare_model_following` (implicit vs. explicit
+against a shared target model) — as the shared core both `cli_lqg.py`
+(`--method all`/`model_following_all`, with optional `--plot` overlays)
+and `supervisor_tools_lqg.py`'s `run_lqg_benchmark` now call into; see
+`docs/lqg_testing.md` "Cross-method comparisons" for why these are two
+separate comparisons, not a six-method table.
+`compare_regulator_methods` also gained `Q_diag`/`R_diag` (a 5th "Custom
+LQR" row with caller-supplied weights) and `reference` (per-channel
+Overshoot/Rise/Settling via `add_reference_tracking` on every row) —
+together, the lever the LLM supervisor needed to actually iterate on a
+design (propose weights, see the metrics, propose again) rather than only
+choose among four fixed strategies; see `docs/lqg_testing.md` "Custom
+weights and reference-tracking." Companion to
+`docs/refactor.md` (the completed PID modularization) — this document
+originally planned the structure below before implementation started; it's
+kept as the design
 record rather than rewritten past-tense throughout.
 
 ## What the professor's material actually is
@@ -172,9 +193,12 @@ repo style.
 | `lqg_bryson.py` — **done** | `BrysonLQR` — split out of `lqg_design_methods.py` (2026-08-02) into its own file, alongside `lqg_implicit.py`/`lqg_explicit.py` below, specifically so the three "how do I pick Q/R" methods are easy to read/diff side by side; all three still subclass `BaseControlDesignMethod` from `lqg_design_methods.py` | 1 |
 | `lqg_implicit.py` — **done** | `ImplicitModelFollowing` | 2 |
 | `lqg_explicit.py` — **done** | `ExplicitModelFollowing` + `ExplicitModelFollowingResult` (a distinct result type, not `LQGDesignResult`, since its control law is `u=-K1x-K2xm`, not a single `u=-Kx`) | 2 |
-| `lqg_simulate.py` (cont.) — **not done** | Command-generator / augmented-state simulation (`lsim`-equivalent) for `ExplicitModelFollowing` — the design/gain computation is implemented and tested, but there's no `simulate_explicit_model_following()` yet | 2 |
+| `lqg_simulate.py` (cont.) — **done** | `simulate_explicit_model_following`: the augmented `[x;xm]` closed loop (`xm` autonomous under `Am`, plant chasing it via `u=-K1x-K2xm`); `compute_tracking_metrics`/`format_tracking_metrics`: sign-aware per-channel Overshoot/Rise/Settling for the reference-tracking case (`simulate_state_feedback`'s `r` parameter) | 2 |
+| `cli_lqg.py` (cont.) — **done** | `--method implicit`/`explicit` via `--am-diag`/`--Q1-scale`; `--reference-tracking` now actually simulates tracking `--reference` (previously only computed/printed `N̄` without ever driving a run toward it — a bug fixed alongside this) | 2 |
+| `supervisor_tools_lqg.py` (cont.) — **done** | `run_lqg_benchmark`'s `am_diag`/`q1_scale` parameters — opt-in model-following rows, never guessed (see `docs/lqg_testing.md`) | 2 |
 | `lqg_review.py` — **done** | One-pass LQR sweep + full check suite over the preset catalog, written to `docs/lqg_review.md`/JSON for external review | — |
-| `compare.py` (extended) | Generalize `Ms`/`Mt` to MIMO via singular values (SISO formulas are the scalar special case); `ISU=∫u²dt` already matches the LQ cost's control term | whenever cross-method comparison is wanted, likely alongside or after Phase 2 |
+| `lqg_compare.py` — **done** | `compare_regulator_methods` (LQR/OutputWeightedLQR/BrysonLQR/LQG, shared time axis for overlay plotting) + `compare_model_following` (implicit vs. explicit against a shared target model's own free response) — the shared core `cli_lqg.py`/`supervisor_tools_lqg.py` both call into. Built as its own new module rather than extending `compare.py` in place (see next row) — no plotting code, matching `compare.py`'s own convention | 2 |
+| `compare.py` (extended) | Generalize `Ms`/`Mt` to MIMO via singular values (SISO formulas are the scalar special case) — **not done**; `lqg_compare.py`'s `pole_margin` (`-max(Re(closed-loop poles))`) stands in as a robustness proxy for now, see `docs/lqg_testing.md`. `ISU=∫u²dt` already matches the LQ cost's control term and is used as-is | whenever true Ms/Mt-for-MIMO is wanted |
 
 `identify.py`/`blackbox.py`-equivalent work for LQG (subspace identification
 — N4SID/ERA — to get `(A,B,C,D)` from I/O data instead of a known model) is

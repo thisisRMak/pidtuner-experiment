@@ -53,17 +53,62 @@ python3 cli_lqg.py --plant-preset aircraft_hall --method lqr
 # Output-weighted LQR, JSON, with a state/control-effort plot
 python3 cli_lqg.py --plant-preset drone --method output_weighted --Qy-scale 2.0 --json --plot out.png
 
-# Full LQG (Kalman filter) + reference tracking, output-feedback simulation
-python3 cli_lqg.py --plant-preset aircraft_hall --method lqg --sim output_feedback --reference-tracking
+# Full LQG (Kalman filter), output-feedback simulation
+python3 cli_lqg.py --plant-preset aircraft_hall --method lqg --sim output_feedback
+
+# Reference tracking (now actually simulates tracking --reference, not just
+# computing/printing N̄ — a bug fixed alongside the metrics below) with the
+# sign-aware Overshoot/Rise/Settling metrics. Only --sim state_feedback
+# supports --reference-tracking's simulation (output_feedback doesn't take
+# an r input at all).
+python3 cli_lqg.py --plant-preset aircraft_hall --method lqr \
+  --reference-tracking --reference 1.0 -0.5 --sim state_feedback
+
+# Model-following: implicit (u=-Kx shaped toward a target model) and
+# explicit (u=-K1x-K2xm, xm simulated alongside the plant)
+python3 cli_lqg.py --plant-preset aircraft_hall --method implicit --am-diag 0.1 0.07
+python3 cli_lqg.py --plant-preset aircraft_hall --method explicit --am-diag 0.1 0.07 \
+  --sim model_following --plot out.png
+
+# Comparison 1/2: regulator family (lqr/output_weighted/bryson/lqg), same
+# plant/objective -- overlaid ||x(t)||/||u(t)|| plot
+python3 cli_lqg.py --plant-preset aircraft_hall --method all --plot compare_regulator.png
+
+# Comparison 2/2: implicit vs. explicit model-following, same target model
+# -- overlaid per-output-channel plot against the target model itself
+python3 cli_lqg.py --plant-preset aircraft_hall --method model_following_all \
+  --am-diag 0.1 0.07 --plot compare_model_following.png
+
+# Iterating on a design: custom Q/R weights (a 5th row alongside the other
+# four) + reference tracking, to see how a weight change actually affects
+# Overshoot/Rise/Settling -- not just the regulator metrics. Compare this
+# run's numbers to the plain --method all --reference-tracking run above:
+# lower R here measurably reduced overshoot on this plant, which is *not*
+# the naive "less control-effort penalty -> more aggressive -> more
+# overshoot" intuition -- check empirically, don't assume the direction.
+python3 cli_lqg.py --plant-preset aircraft_hall --method all \
+  --Q-diag 1 1 1 1 1 --R-diag 0.1 0.1 \
+  --reference-tracking --reference 1.0 -0.5 --plot compare_custom.png
 ```
 
-`--method` is one of `lqr`, `output_weighted`, `bryson`, `lqg`. Every run
-prints pre-/post-design correctness checks by default (`--no-checks` to
-suppress) — see `docs/lqg_testing.md` for what each one verifies.
-`ImplicitModelFollowing`/`ExplicitModelFollowing` aren't wired into this
-CLI yet (they need a target model `Am`/`Q1` with no natural per-preset
-default); use them from Python directly (`lqg_implicit.py`/
-`lqg_explicit.py`) or see `test_lqg.py` for worked examples.
+`--method` is one of `lqr`, `output_weighted`, `bryson`, `lqg`, `implicit`,
+`explicit`, `all` (regulator-family comparison), `model_following_all`
+(implicit vs. explicit comparison — see `docs/lqg_testing.md`
+"Cross-method comparisons" for why these are two separate comparisons, not
+one six-method table). Every run prints pre-/post-design correctness checks by
+default (`--no-checks` to suppress) — see `docs/lqg_testing.md` for what
+each one verifies. `implicit`/`explicit` require `--am-diag` (desired
+model pole magnitudes, one per output — there's no "suggested" target
+model the way there's a suggested Q/R for the other four methods, so it's
+a required flag, never guessed); `explicit` additionally simulates the
+model state `xm(t)` alongside the plant and rejects `--reference-tracking`
+(it already tracks a target model, there's no separate constant-reference
+mode for it). `--Q-diag`/`--R-diag` (given together) override the
+suggested `Q`/`R` with custom per-state/per-input weights — on `lqr` this
+replaces the design entirely, on `all` it adds a 5th "Custom LQR" row —
+the way to actually iterate on a design rather than only choosing among
+the fixed strategies; see `docs/lqg_testing.md` "Custom weights and
+reference-tracking."
 
 ## Conversational (LLM supervisor)
 

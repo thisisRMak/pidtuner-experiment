@@ -26,7 +26,10 @@ from lqg_design_methods import (
 from lqg_bryson import BrysonLQR
 from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing
-from lqg_simulate import simulate_state_feedback, simulate_output_feedback
+from lqg_simulate import (
+    simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
+    compute_tracking_metrics,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,6 +315,94 @@ class TestExplicitModelFollowing(unittest.TestCase):
     def test_rejects_non_square_Am(self):
         with self.assertRaises(ValueError):
             ExplicitModelFollowing(self.plant, Am=np.zeros((2, 3)), Q1=self.Q1, R=self.R)
+
+    def test_rejects_Am_not_matching_Q1_size(self):
+        # square (3,3) Am, but Q1/plant.ny say nxm should be 2 -- eq. 54's
+        # block construction requires xm's dimension to equal Q1's.
+        with self.assertRaises(ValueError):
+            ExplicitModelFollowing(self.plant, Am=np.eye(3), Q1=self.Q1, R=self.R)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Explicit model-following simulation (augmented [x; xm] closed loop)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSimulateExplicitModelFollowing(unittest.TestCase):
+    def setUp(self):
+        self.plant = electro_mechanical_system()
+        self.Am = np.array([[-0.1, 0], [0, -0.07]])
+        self.res = ExplicitModelFollowing(self.plant, Am=self.Am, Q1=np.eye(2),
+                                          R=np.eye(2)).design()
+
+    def test_plant_output_tracks_model_state(self):
+        t = np.arange(0.0, 300.0, 0.05)
+        sim = simulate_explicit_model_following(self.res, t)
+        self.assertTrue(sim.stable)
+        self.assertEqual(sim.xm.shape, (len(t), 2))
+        # both the model and the plant's tracking of it should have
+        # converged (Am is stable, so both go to ~0) by the end.
+        np.testing.assert_allclose(sim.y[-1], sim.xm[-1], atol=1e-3)
+        np.testing.assert_allclose(sim.xm[-1], [0.0, 0.0], atol=1e-3)
+
+    def test_unstable_Am_rejected_at_construction(self):
+        # xm is uncontrollable inside the augmented system (eq. 51 has no B
+        # for the xm block), so an unstable Am isn't just conceptually odd,
+        # it also makes the augmented ARE unsolvable -- this must be caught
+        # with a clear message, not scipy's opaque LinAlgError.
+        with self.assertRaises(ValueError):
+            ExplicitModelFollowing(self.plant, Am=np.array([[0.1, 0], [0, -0.07]]),
+                                   Q1=np.eye(2), R=np.eye(2))
+
+    def test_rejects_wrong_result_type(self):
+        plant = double_integrator()
+        lqr_res = LQR(plant, Q=np.eye(2), R=np.eye(1)).design()
+        with self.assertRaises(ValueError):
+            simulate_explicit_model_following(lqr_res, np.arange(0.0, 1.0, 0.1))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reference-tracking step metrics (Overshoot/Rise/Settling, sign-aware)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestComputeTrackingMetrics(unittest.TestCase):
+    def test_positive_and_negative_reference_both_get_nonnegative_overshoot(self):
+        ex = load_example("aircraft_hall")  # square: nu == ny == 2
+        res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
+        rt = add_reference_tracking(res)
+        t = np.arange(0.0, 200.0, 0.05)
+        r = np.tile([1.0, -0.5], (len(t), 1))
+        sim = simulate_state_feedback(rt, t, r=r)
+        self.assertIsNotNone(sim.tracking_metrics)
+        self.assertEqual(len(sim.tracking_metrics), 2)
+        for m in sim.tracking_metrics:
+            self.assertGreaterEqual(m["Overshoot"], 0.0)
+            self.assertGreater(m["Rise"], 0.0)
+            self.assertGreater(m["Settling"], 0.0)
+
+    def test_negative_final_overshoot_uses_the_trough_not_the_peak(self):
+        # A channel that dips to -1.5 against final=-1.0 has genuinely
+        # overshot (50%) -- a peak-only formula (PID's original, unsigned)
+        # would instead look at max(y)=0 and report a much larger, wrong
+        # number for a negative-going step.
+        t = np.linspace(0, 10, 200)
+        y_col = np.full_like(t, -1.0)
+        y_col[50] = -1.5  # a dip below the negative target
+        metrics = compute_tracking_metrics(t, y_col.reshape(-1, 1), np.full((len(t), 1), -1.0))
+        self.assertAlmostEqual(metrics[0]["Overshoot"], 50.0, places=3)
+
+    def test_zero_final_returns_zero_overshoot_and_nan_rise(self):
+        t = np.linspace(0, 10, 50)
+        y_col = np.zeros_like(t)
+        metrics = compute_tracking_metrics(t, y_col.reshape(-1, 1), np.zeros((len(t), 1)))
+        self.assertEqual(metrics[0]["Overshoot"], 0.0)
+        self.assertTrue(np.isnan(metrics[0]["Rise"]))
+
+    def test_regulator_case_has_no_tracking_metrics(self):
+        p = double_integrator()
+        res = LQR(p, Q=np.eye(2), R=np.eye(1)).design()
+        t = np.arange(0.0, 20.0, 0.01)
+        sim = simulate_state_feedback(res, t)
+        self.assertIsNone(sim.tracking_metrics)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
