@@ -1,7 +1,8 @@
 # CLI demo scripts
 
 Runnable, end-to-end examples of the PIDTuner CLIs. Run from anywhere; each
-script `cd`s to `pidtuner/` itself and writes artifacts to `examples/out/`.
+script `cd`s to `pidtuner/` itself and writes artifacts to `examples/out/`
+(whitebox/blackbox demos) or `examples/lqg/` (the LQR/LQG demo).
 See `../../docs/cli_guide.md` for a narrative walkthrough of every script
 (one-off runs, conversational runs, batch runs) across both the PID and
 LQR/LQG tracks.
@@ -42,6 +43,7 @@ Requires the `pidtuner` conda/pip environment to be active (see
   reference-tracking"), then sweeps all 11 preset plants and writes a
   professor-facing review (`docs/lqg_review.md`) via `lqg_review.py`. See
   `docs/lqg_testing.md` for what the printed pre-/post-design checks mean.
+  Artifacts land in `examples/lqg/`, not `examples/out/`.
 
 - **`run_supervisor_lqg_demo.sh`** — `cli_supervisor_lqg.py`, the LQR/LQG
   conversational supervisor (a separate script/session from

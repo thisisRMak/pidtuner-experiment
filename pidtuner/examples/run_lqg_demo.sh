@@ -8,7 +8,7 @@
 # professor-provided examples currently in the catalog.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT=examples/out
+OUT=examples/lqg
 mkdir -p "$OUT"
 
 echo "### 1. List all preset plants ###"

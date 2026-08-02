@@ -6,7 +6,7 @@ writes the results to a JSON file (machine-readable) and a Markdown report
 (for sharing with the professor).
 
 Run:  python lqg_review.py
-Writes:  examples/out/lqg_professor_review.json
+Writes:  examples/lqg/lqg_professor_review.json
          docs/lqg_review.md
 """
 
@@ -23,7 +23,7 @@ from lqg_design_methods import LQR
 from lqg_checks import checks_for_result
 
 _HERE = os.path.dirname(__file__)
-_JSON_OUT = os.path.join(_HERE, "examples", "out", "lqg_review.json")
+_JSON_OUT = os.path.join(_HERE, "examples", "lqg", "lqg_professor_review.json")
 _MD_OUT = os.path.join(_HERE, "..", "docs", "lqg_review.md")
 
 # Plants whose source .m file needed a fix before it would run at all —
