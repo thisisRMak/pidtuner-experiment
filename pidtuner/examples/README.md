@@ -1,7 +1,10 @@
 # CLI demo scripts
 
-Runnable, end-to-end examples of the three PIDTuner CLIs. Run from anywhere;
-each script `cd`s to `pidtuner/` itself and writes artifacts to `examples/out/`.
+Runnable, end-to-end examples of the PIDTuner CLIs. Run from anywhere; each
+script `cd`s to `pidtuner/` itself and writes artifacts to `examples/out/`.
+See `../../docs/cli_guide.md` for a narrative walkthrough of every script
+(one-off runs, conversational runs, batch runs) across both the PID and
+LQR/LQG tracks.
 
 Requires the `pidtuner` conda/pip environment to be active (see
 `../README.md`).
@@ -24,10 +27,27 @@ Requires the `pidtuner` conda/pip environment to be active (see
   with instructions if unavailable. Pipes a scripted conversation into
   the REPL's stdin so it runs non-interactively.
 
+- **`run_lqg_demo.sh`** — `cli_lqg.py`, the LQR/LQG design track (a
+  separate paradigm from the PID tuners above — state-space plants, not
+  transfer functions). Runs every method (`lqr`, `output_weighted`,
+  `bryson`, `lqg`) plus reference tracking, then sweeps all 11 preset
+  plants and writes a professor-facing review
+  (`docs/lqg_review.md`) via `lqg_review.py`. See
+  `docs/lqg_testing.md` for what the printed pre-/post-design checks mean.
+
+- **`run_supervisor_lqg_demo.sh`** — `cli_supervisor_lqg.py`, the LQR/LQG
+  conversational supervisor (a separate script/session from
+  `cli_supervisor.py`, not a mode flag on it — see `docs/cli_guide.md`
+  "Design notes" for why). Same Ollama requirement/skip behavior as
+  `run_supervisor_demo.sh`. Its one benchmark tool bundles `lqr`,
+  `output_weighted`, `bryson`, and `lqg` together (LQR and LQG are treated
+  as one family here, not two).
+
 Run them all:
 
 ```bash
-for s in run_whitebox_demo.sh run_blackbox_demo.sh run_supervisor_demo.sh; do
+for s in run_whitebox_demo.sh run_blackbox_demo.sh run_supervisor_demo.sh \
+         run_lqg_demo.sh run_supervisor_lqg_demo.sh; do
     ./"$s"
 done
 ```
