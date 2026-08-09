@@ -1,11 +1,10 @@
 """Preset catalog of real MIMO plants ported from the professor's
 lqg_examples_m/*.m LQR examples — see docs/lqg_plan.md.
 
-Only the 11 directly-runnable plants are included; 1 broken source file
-(AIExample2RTP.m) is excluded pending professor confirmation of the
-missing/mismatched values — see docs/lqg_plan.md "Known issues in the
-source material". Regenerate the catalog with lqg_examples_gen.py if that
-changes.
+All 12 directly-runnable plants are included (AIExample2RTP.m, the last
+holdout, was fixed 2026-08-02 — see docs/lqg_plan.md "Known issues in the
+source material"). Regenerate the catalog with lqg_examples_gen.py if a
+transcription error is found.
 """
 
 from __future__ import annotations

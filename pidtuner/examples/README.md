@@ -40,7 +40,7 @@ Requires the `pidtuner` conda/pip environment to be active (see
   separate comparisons, not one) plus custom `--Q-diag`/`--R-diag` weights
   combined with reference tracking (the lever for actually iterating on a
   design — see `docs/lqg_testing.md` "Custom weights and
-  reference-tracking"), then sweeps all 11 preset plants and writes a
+  reference-tracking"), then sweeps all 12 preset plants and writes a
   professor-facing review (`docs/lqg_review.md`) via `lqg_review.py`. See
   `docs/lqg_testing.md` for what the printed pre-/post-design checks mean.
   Artifacts land in `examples/lqg/`, not `examples/out/`.

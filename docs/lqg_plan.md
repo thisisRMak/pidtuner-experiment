@@ -106,12 +106,11 @@ augmentation (§8). See "Phasing" below for how that gap shapes scope.
 | `AIFurnaceModel.m` | Furnace (Davison 2011 / Rosenbrock) | 8 / 4 / 4 | `Q=I`, `R=0.1·I` | **fixed** (2026-08-02): stray trailing `)` removed, shapes consistent, LQR stabilizes it — ported as `furnace_model` |
 | `AIAUTM.m` | AUTM | 12 / 2 / 2 | `Q=CᵀC`, `R=I` | clean |
 | `AIDistillationColumn.m` | Distillation column (Davison 2011) | 11 / 2 / 3 | `Q=I`, `R=0.1·I` | clean, non-square C |
-| `AIExample2RTP.m` | RTP (FPE 8e) | — | — | **still broken**: `lqr()` call references undefined uppercase `A`,`B`,`C`,`D` (only lowercase `a,b,c,d` are assigned); even mapping case, `Q` (4×4) doesn't match `a`'s 3 states and `R=eye(2)` doesn't match `b`'s 3 inputs — holding off pending clarification, see "Known issues" |
+| `AIExample2RTP.m` | RTP (FPE 8e) | 3 / 3 / 3 | custom hand-picked `Q` (cross terms), `R=I` | **fixed** (2026-08-02): source's `lqr()` call referenced undefined uppercase `A`,`B`,`C`,`D` while only lowercase `a,b,c,d` were assigned, and the dimensions didn't match even correcting the case — ported as `example2_rtp` |
 
-1 of the 12 is still not directly runnable as-is (`AIFurnaceModel.m` and
-`AIF100Engine.m` were both fixed and folded in). **Decision: the preset
-catalog ships the 11 clean plants** — see "Known issues" and "Decisions"
-below.
+All 12 are now directly runnable as-is (`AIFurnaceModel.m`, `AIF100Engine.m`,
+and `AIExample2RTP.m` all needed a fix first — see "Known issues" below).
+**Decision: the preset catalog ships all 12 clean plants.**
 
 ## Design-method menu, phased by evidence
 
@@ -128,15 +127,16 @@ behind model-following — see "Decisions" below.
    cross-term `N`) directly. Matches `AIChemicalReactor1`, `AIDistillationColumn`,
    `AIFurnaceModel`, `AIAircraftHall`. **Validated against PDF Example 1.**
 2. `OutputWeightedLQR` — `Q = CᵀQyC`, PDF §3.4 (eq. 32–34). Matches 7 of the
-   11 clean plants (`AIGeneric_RTP`, `AIAIRC`, `AIDrone`, `AIRPV`, `AITGEN`,
+   12 clean plants (`AIGeneric_RTP`, `AIAIRC`, `AIDrone`, `AIRPV`, `AITGEN`,
    `AIAUTM`, `AIF100Engine`).
 3. `BrysonLQR` — `Qii = 1/x_max²`, `Rii = 1/u_max²`, PDF §3.1 eq. 27. No
    direct `.m` example, but it's the PDF's headline "give me sane defaults"
    heuristic — the LQG analog of AMIGO/SIMC's role on the PID side.
 
 Validated with the clean plants in the preset library (see "Known issues"
-below for the 1 excluded pending professor confirmation); `AIAircraftHall.m`
-gives an exact numeric answer key for `LQR`.
+below — all 3 initially-broken source files have since been fixed and
+ported, none excluded); `AIAircraftHall.m` gives an exact numeric answer key
+for `LQR`.
 
 *Output feedback (Kalman filter, separation principle), PDF §6–7 (eq. 93–111):*
 4. `LQG` — Kalman filter gain `Kf`/`L` (steady-state algebraic Riccati
@@ -186,7 +186,7 @@ repo style.
 |---|---|---|
 | `plant.py` (extended) | Add `StateSpacePlant` (A,B,C,D; MIMO, `nx`/`nu`/`ny` independent). `TransferFunction.to_state_space()` for the SISO case | 1 |
 | `lqg_design_methods.py` | `BaseControlDesignMethod` (new, independent hierarchy — not force-unified with `BaseTuningMethod`) → `LQR`, `OutputWeightedLQR`, `LQG` (Kalman filter + separation principle), plus `add_reference_tracking`. Also holds the result types (`StateFeedbackGains`, `LQGDesignResult`, `KalmanFilterResult`) and the shared Riccati solvers (`_lqr_core`, `_kalman_core`) — a separate `lqg_gains.py` was originally planned here but the split wasn't worth a second file in practice; they live alongside the design classes instead | 1 |
-| `lqg_examples.py` + `lqg_examples_json/*.json` | The plant preset catalog (11 clean plants; 1 excluded pending professor confirmation — see "Known issues"), loadable by name (`--plant-preset aircraft_hall`), each with citation + quirk notes in metadata; source `.m` files live in `lqg_examples_m/` | 1 |
+| `lqg_examples.py` + `lqg_examples_json/*.json` | The plant preset catalog (all 12 plants, none excluded — see "Known issues"), loadable by name (`--plant-preset aircraft_hall`), each with citation + quirk notes in metadata; source `.m` files live in `lqg_examples_m/` | 1 |
 | `lqg_simulate.py` | State-feedback and output-feedback (Kalman-filtered) closed-loop sim: `ẋ = (A-BK)x`, MIMO trajectories, actuator saturation (plain clip — no back-calc-style anti-windup yet, that's PID-specific machinery) | 1 |
 | `cli_lqg.py` | argparse CLI, same shape as `cli.py` (flat script, matching current per-mode convention — no unified dispatcher yet) | 1 |
 | `lqg_checks.py` | Pre-/post-design correctness checks (Q/R well-posedness, stabilizability, detectability, ARE residual, S/P symmetric-PSD, closed-loop stability) — printed by `cli_lqg.py`, see `docs/lqg_testing.md` | 1 |
@@ -252,29 +252,32 @@ then, `app.py` stays PID-only; no LQG tab is planned in this phase.
   general formula on a bigger augmented F-4 system, but wasn't reproduced
   as a full golden-value test (out of scope — see `docs/lqg_testing.md`
   "Model-following classes").
-- The other 10 clean plants: no independent answer key (nobody has run these
-  in MATLAB to record expected `K`), so they serve as smoke-test/regression
-  fixtures (LQR converges, closed-loop stable, `K` has the right shape) and
-  as the demo catalog for the CLI, not as numeric golden values.
+- The other 9 clean plants without a golden answer key: no independent
+  answer key (nobody has run these in MATLAB to record expected `K`), so
+  they serve as smoke-test/regression fixtures (LQR converges, closed-loop
+  stable, `K` has the right shape) and as the demo catalog for the CLI, not
+  as numeric golden values.
 - The `LQG` Kalman-filter class has no source data at all — validate
   synthetically against the PDF's own algebraic identities (separation
   principle, eq. 108).
 - `lqg_checks.py`'s pre-/post-design checks (Q/R well-posedness,
   stabilizability, detectability, ARE residual, symmetric-PSD, closed-loop
   stability — see `docs/lqg_testing.md`) run over every design in
-  `cli_lqg.py` by default, and pass for all 11 preset plants (see
+  `cli_lqg.py` by default, and pass for all 12 preset plants (see
   `docs/lqg_review.md`).
 
 ## Known issues in the source material
 
-Originally 3 of the 12 plant files didn't run as-is; 2 have since been
-corrected and ported. 1 remains broken:
-- `AIExample2RTP.m` — the `lqr()` call references undefined uppercase
-  `A`,`B`,`C`,`D`; only lowercase `a,b,c,d` are assigned (3 states, 3
-  inputs). Even correcting the case mismatch, the file's `Q` is 4×4 (needs
-  3×3) and `R=eye(2)` (needs 3×3) — still effectively a stub, not a
-  transcription-ready example. Holding off — needs the professor's/user's
-  input on what `Q`/`R` were actually intended, not a guess.
+All 3 of the 12 plant files that didn't run as-is have since been corrected
+and ported — none remain excluded:
+- ~~`AIExample2RTP.m` — the `lqr()` call referenced undefined uppercase
+  `A`,`B`,`C`,`D`~~ **fixed 2026-08-02**: only lowercase `a,b,c,d` had been
+  assigned (3 states, 3 inputs), and even correcting the case mismatch the
+  file's `Q` was 4×4 (needs 3×3) and `R=eye(2)` (needs 3×3). Source now
+  uses consistent, correctly-sized `A,B,Q,R` (custom hand-picked `Q` with
+  off-diagonal cross terms, `R=I(3)`). Ported as `example2_rtp` (3 states,
+  3 inputs, 3 outputs; already open-loop stable — poles at -0.148, -0.053,
+  -0.086).
 - ~~`AIF100Engine.m` — `R` undefined~~ **fixed 2026-08-02**: `R=eye(5)` now
   matches `nu=5` (from `B`'s and `D`'s column counts); LQR stabilizes it
   (it's already open-loop stable) and it's fully controllable. Ported as
@@ -283,15 +286,11 @@ corrected and ported. 1 remains broken:
   and stabilizes cleanly, ported as `furnace_model` (Davison 2011 /
   Rosenbrock, 8 states / 4 inputs / 4 outputs).
 
-**Decision: check with the professor before porting the remaining one.**
-The preset catalog now ships 11 clean, directly-runnable plants
+**The preset catalog now ships all 12 clean, directly-runnable plants**
 (`AIChemicalReactor1`, `AIGeneric_RTP`, `AIAIRC`, `AIDrone`, `AIRPV`,
 `AITGEN`, `AIAircraftHall`, `AIAUTM`, `AIDistillationColumn`,
-`AIFurnaceModel`, `AIF100Engine`). `AIExample2RTP.m` is added once a
-corrected original is available, rather than guessing at the
-undefined/mismatched `Q`/`R`/`A`/`B` values — a reconstructed version
-(closer to a stub than a plant right now) would misrepresent what's
-actually a professor-provided example.
+`AIFurnaceModel`, `AIF100Engine`, `AIExample2RTP`) — no exclusions
+pending.
 
 ## Decisions
 
@@ -308,8 +307,9 @@ Resolved before implementation starts:
    `cli_supervisor.py`/`cli_astrom_batch.py`. `cli_lqg.py` joins them as its
    own script. A unified `pidtuner` subcommand dispatcher is explicitly
    parked, not ruled out — revisit once more modes exist.
-3. **Broken example files**: excluded from the initial preset catalog
-   pending professor confirmation (see "Known issues" above).
+3. **Broken example files**: all 3 initially-broken source files were fixed
+   and are now included in the preset catalog — none excluded (see "Known
+   issues" above).
 4. **LQG phasing**: the Kalman filter / output-feedback LQG compensator
    ships in Phase 1 alongside full-state-feedback LQR, not deferred behind
    model-following — see the Phase 1 description above for how it's

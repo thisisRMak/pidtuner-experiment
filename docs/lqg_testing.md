@@ -34,7 +34,7 @@ python3 lqg_review.py    # writes docs/lqg_review.md
 | `ExplicitModelFollowing` | **Not** golden-value tested against `AILQG.pdf` Example 4 — see "The Example 4 discrepancy" below. Validated structurally instead: `S` satisfies the ARE it's supposed to solve (residual ~1e-12), is symmetric PSD, `K1`/`K2` have the right shapes, and the closed loop is stable. |
 | `add_reference_tracking` | Steady-state output converges to the commanded reference (`aircraft_hall`, a square plant) to `atol=1e-3`; raises on non-square plants (`distillation_column`, 3 outputs / 2 inputs). |
 | `simulate_state_feedback`, `simulate_output_feedback` | Regulator response decays to ~0, saturation clips `u` to `[u_min, u_max]`, the Kalman-filtered estimator converges from a deliberately wrong initial guess, `output_feedback` raises without a Kalman filter. |
-| Preset catalog | All 11 plants: present/absent as expected, every preset's `LQR` design is stable with the right `K` shape, every preset plant is controllable (stronger than the `stabilizable` property `lqg_checks.py` actually requires — every professor-provided plant happens to be fully controllable). |
+| Preset catalog | All 12 plants: present/absent as expected, every preset's `LQR` design is stable with the right `K` shape, every preset plant is controllable (stronger than the `stabilizable` property `lqg_checks.py` actually requires — every professor-provided plant happens to be fully controllable). |
 
 ### The Example 4 discrepancy
 
@@ -276,10 +276,14 @@ abstractly about which direction to move a weight. Tested in
 no live Ollama needed, same pattern as
 `test_supervisor.py`).
 
-## `AIExample2RTP.m` — still excluded
+## `AIExample2RTP.m` — fixed, no longer excluded
 
-Held pending clarification (see `docs/lqg_plan.md` "Known issues in the
-source material" and `docs/lqg_review.md`): the `lqr()` call
-references undefined uppercase `A,B,C,D` (only lowercase `a,b,c,d` are
-assigned, 3 states / 3 inputs), and even correcting the case mismatch, the
-file's `Q` (4×4) and `R=eye(2)` don't match `a`/`b`'s dimensions.
+Fixed 2026-08-02 (see `docs/lqg_plan.md` "Known issues in the source
+material" and `docs/lqg_review.md`): the source's `lqr()` call had
+referenced undefined uppercase `A,B,C,D` while only lowercase `a,b,c,d`
+were assigned (3 states / 3 inputs), and even correcting the case
+mismatch, the file's `Q` (4×4) and `R=eye(2)` didn't match `a`/`b`'s
+dimensions. The source now uses consistent, correctly-sized `A,B,Q,R`
+(custom hand-picked `Q` with off-diagonal cross terms, `R=I(3)`) and is
+ported into the catalog as `example2_rtp` — the preset catalog has no
+remaining exclusions.

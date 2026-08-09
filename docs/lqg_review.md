@@ -1,8 +1,8 @@
 # LQG Design Track — Preset Catalog Review
 
-Generated 2026-08-02. One pass of `LQR` (each plant's own suggested `Q`/`R`, i.e. the same weights your `.m` files use) over all 11 plants currently in the preset catalog (`pidtuner/lqg_examples_m/*.m` → `pidtuner/lqg_examples_json/*.json`), with the full pre-/post-design correctness check suite (see `docs/lqg_testing.md` for what each check verifies).
+Generated 2026-08-02. One pass of `LQR` (each plant's own suggested `Q`/`R`, i.e. the same weights your `.m` files use) over all 12 plants currently in the preset catalog (`pidtuner/lqg_examples_m/*.m` → `pidtuner/lqg_examples_json/*.json`), with the full pre-/post-design correctness check suite (see `docs/lqg_testing.md` for what each check verifies).
 
-**Summary: 11/11 plants pass every check.**
+**Summary: 12/12 plants pass every check.**
 
 ## Source files that needed a fix before they'd run
 
@@ -10,10 +10,7 @@ These were excluded from the catalog until now because the `.m` file as original
 
 - **`pidtuner/lqg_examples_m/AIFurnaceModel.m`** (`furnace_model`): source had a stray trailing ')' after `lqr(A,B,Q,R)`, a plain syntax typo — fixed by removing it.
 - **`pidtuner/lqg_examples_m/AIF100Engine.m`** (`f100_engine`): source's `R` was undefined at the `lqr(A,B,Q,R)` call; now `R=eye(5)`, matching nu=5 from B/D's column count.
-
-## Still excluded, pending your input
-
-- **`AIExample2RTP.m`** (`example2_rtp`): the lqr() call references undefined uppercase A,B,C,D (only lowercase a,b,c,d are assigned); even mapping case, Q (4x4) doesn't match a's 3 states and R=eye(2) doesn't match b's 3 inputs.
+- **`pidtuner/lqg_examples_m/AIExample2RTP.m`** (`example2_rtp`): the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case — fixed by using consistent, correctly-sized A,B,Q,R.
 
 ## Results
 
@@ -25,6 +22,7 @@ These were excluded from the catalog until now because the `.m` file as original
 | `chemical_reactor` | 4/2/4 | identity | True | all pass |
 | `distillation_column` | 11/2/3 | identity | True | all pass |
 | `drone` | 6/2/2 | output_weighted | True | all pass |
+| `example2_rtp` 🔧 fixed | 3/3/3 | custom | True | all pass |
 | `f100_engine` 🔧 fixed | 4/5/5 | output_weighted | True | all pass |
 | `furnace_model` 🔧 fixed | 8/4/4 | identity | True | all pass |
 | `generic_rtp` | 15/5/5 | output_weighted | True | all pass |
@@ -140,6 +138,26 @@ Checks:
 - [PASS] S symmetric — max|S-Sᵀ| = 0.00e+00
 - [PASS] S positive semi-definite — min eig(S) = 0.0122
 - [PASS] closed-loop poles stable — max Re(pole) = -0.0414
+
+### `example2_rtp` — RTP (Franklin/Powell/Emami-Naeini 8e)
+
+Source: `pidtuner/lqg_examples_m/AIExample2RTP.m` (Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP.m))
+
+**Fixed for this review:** the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case — fixed by using consistent, correctly-sized A,B,Q,R.
+
+nx=3, nu=3, ny=3, Q=custom, R=identity, stable=True
+
+Checks:
+- [PASS] Q symmetric — max|Q-Qᵀ| = 0.00e+00
+- [PASS] R symmetric — max|R-Rᵀ| = 0.00e+00
+- [PASS] Q positive semi-definite — min eig(Q) = 1
+- [PASS] R positive definite — min eig(R) = 1
+- [PASS] (A,B) stabilizable — all unstable/marginal modes are controllable
+- [PASS] (A,√Q) detectable — all unstable/marginal modes are detectable through Q
+- [PASS] S solves the Riccati equation — ‖residual‖ = 4.11e-14 (tol 1e-06 × scale 5.15e+01)
+- [PASS] S symmetric — max|S-Sᵀ| = 0.00e+00
+- [PASS] S positive semi-definite — min eig(S) = 2.19
+- [PASS] closed-loop poles stable — max Re(pole) = -0.334
 
 ### `f100_engine` — F-100 Engine
 

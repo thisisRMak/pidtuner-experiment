@@ -1,10 +1,9 @@
 """One-off generator for the lqg_examples_json/*.json preset catalog.
 
-Transcribes the 11 directly-runnable plants from lqg_examples_m/*.m (see
-docs/lqg_plan.md "Known issues in the source material" for the 1 still-
-excluded file: AIExample2RTP.m). Kept in the repo for provenance — rerun
-this if a corrected original for the excluded file arrives, or if a
-transcription error is found here.
+Transcribes all 12 directly-runnable plants from lqg_examples_m/*.m (see
+docs/lqg_plan.md "Known issues in the source material" — none excluded as
+of 2026-08-02, AIExample2RTP.m having been the last one fixed). Kept in the
+repo for provenance — rerun this if a transcription error is found here.
 
 Run:  python lqg_examples_gen.py
 """
@@ -272,6 +271,31 @@ def build_f100_engine():
          "open-loop stable, LQR just improves the response.")
 
 
+def build_example2_rtp():
+    A = [[-.0682, .0149, 0],
+         [.0458, -.1181, .0218],
+         [0, .04683, -.1008]]
+    B = [[.3787, .1105, .0229],
+         [0, .0449, .0735],
+         [0, .0007, .4177]]
+    C = np.eye(3)
+    D = np.zeros((3, 3))
+    Q = [[1, 0, 0], [0, 20, -10], [0, -10, 20]]
+    _dump("example2_rtp", "RTP (Franklin/Powell/Emami-Naeini 8e)",
+         "Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, "
+         "8th ed. (via AIExample2RTP.m)",
+         "pidtuner/lqg_examples_m/AIExample2RTP.m",
+         A, B, C, D, "custom", "identity",
+         "Q = [[1,0,0],[0,20,-10],[0,-10,20]] (hand-picked, off-diagonal "
+         "cross terms), R = I(3) in the source. Was excluded (the lqr() "
+         "call referenced undefined uppercase A,B,C,D while only lowercase "
+         "a,b,c,d were assigned, and the dimensions didn't match even "
+         "correcting the case); re-added once the source was corrected — "
+         "see docs/lqg_plan.md \"Known issues\". Already open-loop stable "
+         "(poles at -0.148, -0.053, -0.086); LQR just improves the response.",
+         suggested_Q=Q)
+
+
 def build_generic_rtp():
     dat_path = os.path.join(_SOURCE_DIR, "rtpsystem.dat")
     raw = np.loadtxt(dat_path)
@@ -301,5 +325,6 @@ if __name__ == "__main__":
     build_distillation_column()
     build_furnace_model()
     build_f100_engine()
+    build_example2_rtp()
     build_generic_rtp()
     print("done.")

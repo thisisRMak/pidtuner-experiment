@@ -475,15 +475,11 @@ class TestSimulateOutputFeedback(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPresetCatalog(unittest.TestCase):
-    def test_eleven_clean_plants_present(self):
+    def test_twelve_clean_plants_present(self):
         expected = {"airc", "aircraft_hall", "autm", "chemical_reactor",
-                   "distillation_column", "drone", "f100_engine",
+                   "distillation_column", "drone", "example2_rtp", "f100_engine",
                    "furnace_model", "generic_rtp", "rpv", "tgen"}
         self.assertEqual(set(list_examples()), expected)
-
-    def test_excluded_examples_absent(self):
-        for key in ("example2_rtp",):
-            self.assertNotIn(key, list_examples())
 
     def test_unknown_key_raises(self):
         with self.assertRaises(ValueError):

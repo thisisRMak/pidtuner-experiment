@@ -34,17 +34,17 @@ _RECENTLY_FIXED = {
                      "a plain syntax typo — fixed by removing it.",
     "f100_engine": "source's `R` was undefined at the `lqr(A,B,Q,R)` call; "
                   "now `R=eye(5)`, matching nu=5 from B/D's column count.",
+    "example2_rtp": "the lqr() call referenced undefined uppercase A,B,C,D "
+                    "while only lowercase a,b,c,d were assigned, and the "
+                    "dimensions didn't match even correcting the case — "
+                    "fixed by using consistent, correctly-sized A,B,Q,R.",
 }
 
 # Plants still excluded from the catalog (see docs/lqg_plan.md "Known
 # issues in the source material") — listed here so the professor sees what
-# this report deliberately does *not* cover, and why.
-_STILL_EXCLUDED = {
-    "example2_rtp": "the lqr() call references undefined uppercase A,B,C,D "
-                    "(only lowercase a,b,c,d are assigned); even mapping "
-                    "case, Q (4x4) doesn't match a's 3 states and R=eye(2) "
-                    "doesn't match b's 3 inputs.",
-}
+# this report deliberately does *not* cover, and why. Empty as of
+# 2026-08-02: all 12 source .m files now run cleanly.
+_STILL_EXCLUDED = {}
 
 
 def _array(a):
