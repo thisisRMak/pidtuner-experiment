@@ -1,0 +1,95 @@
+{
+  "key": "example2_rtp",
+  "name": "RTP (Franklin/Powell/Emami-Naeini 8e)",
+  "citation": "Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP.m)",
+  "source_file": "pidtuner/lqg_examples_m/AIExample2RTP.m",
+  "A": [
+    [
+      -0.0682,
+      0.0149,
+      0.0
+    ],
+    [
+      0.0458,
+      -0.1181,
+      0.0218
+    ],
+    [
+      0.0,
+      0.04683,
+      -0.1008
+    ]
+  ],
+  "B": [
+    [
+      0.3787,
+      0.1105,
+      0.0229
+    ],
+    [
+      0.0,
+      0.0449,
+      0.0735
+    ],
+    [
+      0.0,
+      0.0007,
+      0.4177
+    ]
+  ],
+  "C": [
+    [
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "D": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "suggested_Q_kind": "custom",
+  "suggested_Q": [
+    [
+      1.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      20.0,
+      -10.0
+    ],
+    [
+      0.0,
+      -10.0,
+      20.0
+    ]
+  ],
+  "suggested_R_kind": "identity",
+  "suggested_R_scale": 1.0,
+  "notes": "Q = [[1,0,0],[0,20,-10],[0,-10,20]] (hand-picked, off-diagonal cross terms), R = I(3) in the source. Was excluded (the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case); re-added once the source was corrected \u2014 see docs/lqg_plan.md \"Known issues\". Already open-loop stable (poles at -0.148, -0.053, -0.086); LQR just improves the response."
+}
