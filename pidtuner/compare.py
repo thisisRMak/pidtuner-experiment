@@ -45,11 +45,21 @@ from tuning_methods import (
 # Robustness from the loop frequency response
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _controller_response(gains, omega):
-    """C(jω) = Kp + Ki/(jω) + Kd·(jω) for the parallel-form PID."""
+def _controller_response(gains, omega, N=10.0):
+    """C(jω) = Kp + Ki/(jω) + Kd·(jω)/(1 + τ_d·jω) for the parallel-form
+    PID, with the same derivative filter (τ_d = Kd/(N·|Kp|)) that
+    simulate.py's pid_step()/closed_loop_poles() use — see
+    docs/derivative_filter.md. Pass N=0 for the ideal (unfiltered) Kd·jω
+    term the tuning methods themselves are derived against.
+    """
     jw = 1j * np.asarray(omega, dtype=float)
     # Guard ω = 0 (integrator blows up); the grid below starts above 0.
-    return gains.Kp + gains.Ki / jw + gains.Kd * jw
+    if N > 0 and abs(gains.Kp) > 1e-12 and abs(gains.Kd) > 1e-12:
+        tau_d = gains.Kd / (N * abs(gains.Kp))
+        d_term = gains.Kd * jw / (1.0 + tau_d * jw)
+    else:
+        d_term = gains.Kd * jw
+    return gains.Kp + gains.Ki / jw + d_term
 
 
 def _robustness_grid(plant, n=2000):
@@ -68,10 +78,15 @@ def _robustness_grid(plant, n=2000):
     return np.logspace(np.log10(lo), np.log10(hi), n)
 
 
-def robustness_metrics(plant, gains):
-    """Return {Ms, Mt, GM_dB, PM_deg} from L(jω) = C(jω)·P(jω)."""
+def robustness_metrics(plant, gains, N=10.0):
+    """Return {Ms, Mt, GM_dB, PM_deg} from L(jω) = C(jω)·P(jω).
+
+    C(jω) includes the derivative filter (N=10 default, matching
+    simulate.py's default) so margins reflect the as-simulated loop, not
+    the ideal Kd·jω design model. Pass N=0 for the old ideal comparison.
+    """
     omega = _robustness_grid(plant)
-    L = _controller_response(gains, omega) * plant.freq_response(omega)
+    L = _controller_response(gains, omega, N=N) * plant.freq_response(omega)
     one_plus = 1.0 + L
     # Avoid division warnings at near-encirclement points
     with np.errstate(divide="ignore", invalid="ignore"):
