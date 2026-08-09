@@ -16,6 +16,9 @@ The PID is implemented in parallel form with:
   - Closed-loop stability check via the characteristic equation roots
     of 1 + C(s)*G(s) (for plants without dead time; for plants with
     dead time we approximate L with a 2nd-order Pade and check that).
+    C(s) includes the same derivative filter pole the simulation ran
+    with (closed_loop_poles(..., N=N_eff)), so the "stable" flag matches
+    what was actually simulated rather than the ideal Kd*s design model.
 
 ─────────────────────────────────────────────────────────────────────────────
 ANTI-WINDUP: conditional-integration vs. back-calculation
@@ -164,17 +167,47 @@ def _pade_2nd(L):
     return num, den
 
 
-def closed_loop_poles(plant, gains):
-    """Roots of  s*den_G + num_G * (Kd*s² + Kp*s + Ki) = 0,
-    with dead time approximated by 2nd-order Pade.
+def _filter_tau_d(gains, N):
+    """τ_d = Kd/(N·|Kp|), the derivative filter time constant used by
+    pid_step()/simulate_closed_loop(). Returns 0.0 (filter term disabled,
+    reducing C(s)'s D-term to the ideal Kd*s) under the same fallback
+    conditions as pid_step: Kp≈0, Kd≈0, or N<=0."""
+    if N > 0 and abs(gains.Kp) > 1e-12 and abs(gains.Kd) > 1e-12:
+        return gains.Kd / (N * abs(gains.Kp))
+    return 0.0
+
+
+def closed_loop_poles(plant, gains, N=10.0):
+    """Roots of the closed-loop characteristic polynomial, with dead time
+    approximated by 2nd-order Pade and the derivative low-pass filter
+    folded into C(s) so this matches what pid_step()/simulate_closed_loop()
+    actually simulate (see docs/derivative_filter.md):
+
+        C(s) = Kp + Ki/s + Kd*s/(1 + τ_d*s),   τ_d = Kd/(N*|Kp|)
+
+    Written over a common denominator, C(s) = nC(s)/dC(s) with:
+        nC(s) = (Kp*τ_d + Kd)*s² + (Kp + Ki*τ_d)*s + Ki
+        dC(s) = τ_d*s² + s
+
+    Pass N=0 to recover the older *ideal*/unfiltered characteristic
+    polynomial (nC = Kd*s² + Kp*s + Ki, dC = s) that the tuning methods
+    themselves (Boyd, pole placement, ZN, ...) are derived against — useful
+    for comparing "as-designed" vs. "as-simulated" stability.
 
     The characteristic polynomial of the unity-feedback loop is:
         1 + C(s) * G(s) * e^(-Ls) = 0
     Multiplied out:
-        s * den_G * den_pade + num_G * num_pade * (Kd*s² + Kp*s + Ki) = 0
+        dC(s) * den_G * den_pade + nC(s) * num_G * num_pade = 0
     """
-    nC = np.array([gains.Kd, gains.Kp, gains.Ki])  # Kd*s² + Kp*s + Ki
-    dC = np.array([1.0, 0.0])                       # s
+    tau_d = _filter_tau_d(gains, N)
+    if tau_d > 0:
+        nC = np.array([gains.Kp * tau_d + gains.Kd,
+                        gains.Kp + gains.Ki * tau_d,
+                        gains.Ki])
+        dC = np.array([tau_d, 1.0, 0.0])
+    else:
+        nC = np.array([gains.Kd, gains.Kp, gains.Ki])  # Kd*s² + Kp*s + Ki
+        dC = np.array([1.0, 0.0])                       # s
     nP, dP = _pade_2nd(plant.L)
     # 1 + (nC/dC) * (num/den) * (nP/dP) = 0
     # => dC*den*dP + nC*num*nP = 0
@@ -185,8 +218,8 @@ def closed_loop_poles(plant, gains):
     return np.roots(char)
 
 
-def is_closed_loop_stable(plant, gains):
-    poles = closed_loop_poles(plant, gains)
+def is_closed_loop_stable(plant, gains, N=10.0):
+    poles = closed_loop_poles(plant, gains, N=N)
     if len(poles) == 0:
         return True
     return bool(np.all(np.real(poles) < -1e-9))
@@ -329,7 +362,10 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
 
     e = sp - y
 
-    stable = is_closed_loop_stable(plant, gains)
+    # N_eff mirrors whatever was actually just simulated (0.0 if the
+    # derivative filter was disabled), so "stable" reflects the sim, not
+    # an idealization of it.
+    stable = is_closed_loop_stable(plant, gains, N=N_eff)
     # Also flag clearly divergent simulations
     if not np.all(np.isfinite(y)) or np.max(np.abs(y)) > 1e6:
         stable = False
