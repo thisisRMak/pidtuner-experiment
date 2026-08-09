@@ -168,11 +168,16 @@ reverses sign. They differ in how they prevent it:
   `Ka`, instead of merely pausing.
 
   `Ka` is auto-derived from whatever gains a tuning method already
-  produced, via `Ka = 1/Tt` with `Tt = sqrt(Ti·Td)` for a full PID or
-  `Tt = Ti` when `Td = 0` (PI-only) — Åström & Hägglund's rule (this
-  course's own text doesn't give one). `Ti`/`Td` come from the gains
-  themselves (`Ti = Kp/Ki`, `Td = Kd/Kp`). An explicit `Ka` override is
-  available in both the GUI (blank = auto) and CLI (`--Ka`).
+  produced, via `Ka = 1/Tt`. For a full PID, `Tt = sqrt(Ti·Td)` — Åström
+  & Hägglund's own stated rule of thumb (*Advanced PID Control*, Ch. 3,
+  "Integrator Windup" / "Back-Calculation and Tracking"). For PI-only
+  gains (`Td = 0`) that formula degenerates to `Tt = 0` (`Ka = ∞`), so
+  this project falls back to `Tt = Ti` instead — that fallback is *not*
+  from the textbook (the book only mentions `Tt = Ti` in an unrelated
+  context, where it's explicitly called "often too large"); it's this
+  codebase's own stopgap for the degenerate case. `Ti`/`Td` come from the
+  gains themselves (`Ti = Kp/Ki`, `Td = Kd/Kp`). An explicit `Ka` override
+  is available in both the GUI (blank = auto) and CLI (`--Ka`).
 
   The auto-derived `Ka` is a reasonable default, not a guarantee of
   better performance — for some plants/saturation levels back-calculation

@@ -45,16 +45,26 @@ When not saturated, u_sat == u_unsat, so the correction vanishes and this
 is ordinary integration. When saturated, the term actively pulls the
 integral back toward consistency with what the actuator can actually
 deliver, at a rate set by Ka — so it unwinds faster than conditional
-integration rather than merely pausing. Astrom & Hagglund recommend
-sizing Ka via a tracking time constant Tt: Ka = 1/Tt, with
+integration rather than merely pausing. Astrom & Hagglund size Ka via a
+tracking time constant Tt: Ka = 1/Tt, with a stated rule of thumb (Advanced
+PID Control, Ch. 3 "Integrator Windup" / "Back-Calculation and Tracking"):
 
-    Tt = sqrt(Ti * Td)   (full PID)
-    Tt = Ti              (PI-only, Td = 0)
+    Tt = sqrt(Ti * Td)   (full PID — this is the book's rule of thumb)
 
-derived here from whatever gains were already computed by one of the 9
-tuning methods (Ti = Kp/Ki, Td = Kd/Kp — see PIDGains.to_textbook()) via
-compute_back_calc_Ka(). This textbook doesn't give its own Ka formula, so
-we use Astrom & Hagglund's rather than inventing one.
+For a pure PI controller (Td = 0) that formula degenerates to Tt = 0
+(Ka = infinity), which is useless, so this module falls back to:
+
+    Tt = Ti               (PI-only, Td = 0 — NOT from the textbook)
+
+This fallback is this codebase's own choice, not Astrom & Hagglund's. The
+book only ever mentions Tt = Ti in an unrelated context (an alternate
+"interacting form" implementation) and there explicitly warns it's "often
+too large" — so treat this branch as a reasonable stopgap, not a cited
+recommendation.
+
+Both branches are derived here from whatever gains were already computed
+by one of the 9 tuning methods (Ti = Kp/Ki, Td = Kd/Kp — see
+PIDGains.to_textbook()) via compute_back_calc_Ka().
 
 Neither mode does anything unless the actuator actually saturates, i.e.
 u_min/u_max are set tighter than the natural command range — with the
@@ -84,12 +94,19 @@ class PIDState:
 
 
 def compute_back_calc_Ka(gains, Ka=None):
-    """Back-calculation anti-windup gain, per Astrom & Hagglund.
+    """Back-calculation anti-windup gain.
 
-    Ka = 1/Tt, with Tt = sqrt(Ti*Td) for full PID or Tt = Ti when Td = 0
-    (PI-only), derived from the gains' own (Ti, Td) — see
-    PIDGains.to_textbook(). An explicit `Ka` override bypasses the
-    derivation entirely (Tt reported back as 1/Ka for display only).
+    Ka = 1/Tt, with Tt = sqrt(Ti*Td) for full PID — Astrom & Hagglund's
+    stated rule of thumb (Advanced PID Control, Ch. 3) — or Tt = Ti when
+    Td = 0 (PI-only). The PI-only branch is NOT from the textbook: it's
+    this module's own fallback to avoid the degenerate Tt = sqrt(Ti*0) = 0
+    (Ka = infinity) that the PID formula would otherwise give a pure PI
+    controller. See the module docstring's ANTI-WINDUP section for the
+    full attribution.
+
+    Derived from the gains' own (Ti, Td) — see PIDGains.to_textbook(). An
+    explicit `Ka` override bypasses the derivation entirely (Tt reported
+    back as 1/Ka for display only).
 
     Returns (Ka, Tt). If there's no integral action (Ki == 0, Ti = inf)
     there's nothing for an integrator to wind up, so Ka = 0, Tt = inf.

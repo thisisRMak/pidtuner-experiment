@@ -15,9 +15,12 @@ two fixes, selectable per simulation:
 - **`conditional`** (default, unchanged from before): freeze the integral
   while saturated.
 - **`back_calc`**: keep integrating, corrected by the saturation error
-  itself (`Ka*(u_sat - u_unsat)`), per Åström & Hägglund. `Ka` is
-  auto-derived from the tuned gains (`Ka = 1/Tt`, `Tt = sqrt(Ti*Td)`)
-  unless you override it.
+  itself (`Ka*(u_sat - u_unsat)`). `Ka` is auto-derived from the tuned
+  gains (`Ka = 1/Tt`) unless you override it: `Tt = sqrt(Ti*Td)` for full
+  PID, which is Åström & Hägglund's own stated rule of thumb (*Advanced
+  PID Control*, Ch. 3); `Tt = Ti` for PI-only (Td = 0) gains, which is
+  this codebase's own fallback for the degenerate `Tt = sqrt(Ti*0) = 0`
+  case, not something the textbook recommends.
 
 Neither mode does anything unless the actuator actually saturates —
 `u_min`/`u_max` need to be tight enough for the specific method's gains.

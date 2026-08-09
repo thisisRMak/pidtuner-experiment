@@ -755,7 +755,8 @@ class TestAntiWindup(unittest.TestCase):
         self.assertAlmostEqual(Ka, 1.0 / expected_Tt, places=9)
 
     def test_Ka_auto_derivation_pi_only(self):
-        # Td = 0 -> Tt = Ti (PI-only case), per Astrom & Hagglund.
+        # Td = 0 -> Tt = Ti (PI-only case): this module's own fallback for
+        # the degenerate sqrt(Ti*0) = 0 case, not from Astrom & Hagglund.
         gains = PIDGains(Kp=0.01, Ki=0.004, Kd=0.0)
         Ka, Tt = compute_back_calc_Ka(gains)
         expected_Ti = gains.Kp / gains.Ki
