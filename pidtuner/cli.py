@@ -35,9 +35,12 @@ def format_row_text(row: dict) -> str:
         return f"Method: {row['name']} -> Unstable/Error: {row.get('error', 'Unknown')}"
 
     gains = row["gains"]
+    _, Ti, Td = gains.to_textbook()
+    Ti_str = f"{Ti:.6g} s" if np.isfinite(Ti) else "∞"
     return (
         f"Method: {row['name']}\n"
-        f"  Gains: Kp={gains.Kp:.6g}, Ki={gains.Ki:.6g}, Kd={gains.Kd:.6g}\n"
+        f"  Gains: Kp={gains.Kp:.6g}, Ki={gains.Ki:.6g}, Kd={gains.Kd:.6g}"
+        f"  (Ti={Ti_str}, Td={Td:.6g} s)\n"
         f"  Metrics:\n"
         f"    Overshoot:          {row.get('OS%') if np.isfinite(row.get('OS%', float('nan'))) else 'N/A'}\n"
         f"    Settling Time (2%): {row.get('ts') if np.isfinite(row.get('ts', float('nan'))) else 'N/A'} s\n"
@@ -54,7 +57,12 @@ def format_row_text(row: dict) -> str:
 def serialize_row_json(row: dict) -> dict:
     """Convert numpy values and gains objects in a metric row to standard Python types for JSON."""
     gains = row.get("gains")
-    gains_dict = {"Kp": gains.Kp, "Ki": gains.Ki, "Kd": gains.Kd} if gains else None
+    if gains:
+        _, Ti, Td = gains.to_textbook()
+        gains_dict = {"Kp": gains.Kp, "Ki": gains.Ki, "Kd": gains.Kd,
+                      "Ti": (float(Ti) if np.isfinite(Ti) else None), "Td": float(Td)}
+    else:
+        gains_dict = None
 
     out = {}
     for k, v in row.items():
@@ -242,6 +250,15 @@ def main():
              "CLI mode — the black-box tuner (cli_blackbox.py) never sees --plant."
     )
     parser.add_argument("--out-signal", type=str, help="Output path for --gen-signal (.npz)")
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=None,
+        help="Sample time override for --gen-signal (default: plant.auto_dt(), "
+             "which gives only L/5 samples across the dead time). Denser "
+             "sampling (smaller --dt) improves delay-sensitive black-box "
+             "identification of L."
+    )
     parser.add_argument("--step-amp", type=float, default=1.0, help="Step test: step amplitude")
     parser.add_argument("--noise-sigma", type=float, default=0.0, help="Step test: measurement noise std dev")
     parser.add_argument("--seed", type=int, default=None, help="Step test: noise RNG seed")
@@ -283,11 +300,13 @@ def main():
             gen = SignalGenerator(plant)
             if args.gen_signal == "step":
                 sig = gen.step_test(step_amp=args.step_amp, t_max=args.t_max,
-                                     noise_sigma=args.noise_sigma, seed=args.seed)
+                                     noise_sigma=args.noise_sigma, seed=args.seed,
+                                     dt=args.dt)
             else:
                 sig = gen.relay_test(h=args.h, setpoint=args.setpoint,
                                       hysteresis=args.hysteresis,
-                                      t_max=args.t_max if args.t_max is not None else 80.0)
+                                      t_max=args.t_max if args.t_max is not None else 80.0,
+                                      dt=args.dt)
             save_signal(sig, args.out_signal)
         except Exception as exc:
             if args.json:

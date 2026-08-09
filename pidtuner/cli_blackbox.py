@@ -30,9 +30,12 @@ def format_row_text(row) -> str:
     if not row.available:
         return f"Method: {row.name} -> Unavailable: {row.reason}"
     g = row.result.gains
+    _, Ti, Td = g.to_textbook()
+    Ti_str = f"{Ti:.6g} s" if np.isfinite(Ti) else "∞"
     return (
         f"Method: {row.name}\n"
-        f"  Gains: Kp={g.Kp:.6g}, Ki={g.Ki:.6g}, Kd={g.Kd:.6g}\n"
+        f"  Gains: Kp={g.Kp:.6g}, Ki={g.Ki:.6g}, Kd={g.Kd:.6g}"
+        f"  (Ti={Ti_str}, Td={Td:.6g} s)\n"
         f"  {row.result.notes}\n"
     )
 
@@ -41,9 +44,11 @@ def serialize_row_json(row) -> dict:
     if not row.available:
         return {"name": row.name, "available": False, "reason": row.reason}
     g = row.result.gains
+    _, Ti, Td = g.to_textbook()
     return {
         "name": row.name, "available": True,
-        "gains": {"Kp": g.Kp, "Ki": g.Ki, "Kd": g.Kd},
+        "gains": {"Kp": g.Kp, "Ki": g.Ki, "Kd": g.Kd,
+                  "Ti": (float(Ti) if np.isfinite(Ti) else None), "Td": float(Td)},
         "black_box": row.result.black_box,
         "notes": row.result.notes,
     }
@@ -52,8 +57,9 @@ def serialize_row_json(row) -> dict:
 def main():
     parser = argparse.ArgumentParser(
         description="Black-box PID tuner CLI: identifies a model and attempts "
-                     "all 9 tuning methods purely from published signal files "
-                     "(no access to the ground-truth transfer function)."
+                     "all 9 tuning methods (or one, via --method) purely from "
+                     "published signal files (no access to the ground-truth "
+                     "transfer function)."
     )
     parser.add_argument("--in-signal-step", type=str,
                          help="Path to a step-test Signal .npz (e.g. produced by "
@@ -63,6 +69,29 @@ def main():
                               "cli.py --gen-signal relay). Enables ZN-II/Tyreus-Luyben "
                               "via direct empirical Ku,Pu measurement.")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
+    parser.add_argument(
+        "--method",
+        default="all",
+        choices=[
+            "all", "pole_cancellation", "zn1", "zn2", "amigo",
+            "simc", "boyd", "cohen_coon", "chr", "tyreus_luyben"
+        ],
+        help="Restrict to a single tuning method instead of running all of "
+             "them (default: all). Same slugs as cli.py --method."
+    )
+    parser.add_argument(
+        "--response",
+        default="setpoint",
+        choices=["setpoint", "load"],
+        help="chr only: setpoint or load response behavior (default: setpoint)"
+    )
+    parser.add_argument(
+        "--overshoot",
+        type=int,
+        default=0,
+        choices=[0, 20],
+        help="chr only: overshoot percentage target (default: 0)"
+    )
 
     args = parser.parse_args()
 
@@ -87,7 +116,15 @@ def main():
 
     tuner = BlackBoxTuner(step_signal=step_signal, relay_signal=relay_signal)
     model = tuner.identify()
-    rows = tuner.tune_all()
+    try:
+        rows = tuner.tune_all(method=args.method, chr_response=args.response,
+                               chr_overshoot=args.overshoot)
+    except ValueError as exc:
+        if args.json:
+            print(json.dumps({"error": str(exc)}))
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     if args.json:
         out = {

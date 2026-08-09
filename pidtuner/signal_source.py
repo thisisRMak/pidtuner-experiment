@@ -25,9 +25,11 @@ class SignalGenerator:
         self.plant = plant
 
     # ── step test ────────────────────────────────────────────────────────
-    def _simulate_step_response(self, step_amp=1.0, t_max=None, noise_sigma=0.0, seed=None):
+    def _simulate_step_response(self, step_amp=1.0, t_max=None, noise_sigma=0.0,
+                                 seed=None, dt=None):
         plant = self.plant
-        dt = plant.auto_dt()
+        if dt is None:
+            dt = plant.auto_dt()
         if t_max is None:
             poles = plant.poles()
             if len(poles):
@@ -39,8 +41,12 @@ class SignalGenerator:
             t_max = max(10.0 * slow_decay + 5.0 * plant.L, 20.0)
 
         t = np.arange(0.0, t_max + dt, dt)
+        # u is held at step_amp for every sample from t=0 onward — the "before
+        # the step" value is what y[0]=y0 already represents in simulate(), so
+        # zeroing u[0] here would double up on that and shift the effective
+        # step edge one full dt late. plant.simulate()'s own `delay` handling
+        # is what accounts for plant.L; this array should just be the step.
         u = np.full_like(t, step_amp)
-        u[0] = 0.0
         y_true = plant.simulate(t, u)
         if noise_sigma > 0:
             rng = np.random.default_rng(seed)
@@ -49,12 +55,18 @@ class SignalGenerator:
             y_meas = y_true.copy()
         return t, u, y_true, y_meas, dt
 
-    def step_test(self, step_amp=1.0, t_max=None, noise_sigma=0.0, seed=None) -> Signal:
+    def step_test(self, step_amp=1.0, t_max=None, noise_sigma=0.0, seed=None,
+                  dt=None) -> Signal:
         """Publish a step-test signal. Only the measured (possibly noisy)
         output is published — a real sensor never hands over the noise-free
-        signal either, and shipping it would itself be a ground-truth leak."""
+        signal either, and shipping it would itself be a ground-truth leak.
+
+        `dt` overrides the auto-picked sample time (plant.auto_dt(), which
+        gives only L/5 samples across the dead time). Denser sampling
+        (smaller dt) meaningfully improves delay-sensitive identification —
+        see cli.py --gen-signal --dt."""
         t, u, y_true, y_meas, dt = self._simulate_step_response(
-            step_amp=step_amp, t_max=t_max, noise_sigma=noise_sigma, seed=seed)
+            step_amp=step_amp, t_max=t_max, noise_sigma=noise_sigma, seed=seed, dt=dt)
         return Signal(
             t=t, u=u, y=y_meas, dt=dt, experiment="step",
             meta={"step_amp": float(step_amp), "noise_sigma": float(noise_sigma),
@@ -62,9 +74,11 @@ class SignalGenerator:
         )
 
     # ── relay test ───────────────────────────────────────────────────────
-    def _simulate_relay_response(self, h=1.0, setpoint=0.0, hysteresis=0.0, t_max=80.0):
+    def _simulate_relay_response(self, h=1.0, setpoint=0.0, hysteresis=0.0, t_max=80.0,
+                                  dt=None):
         plant = self.plant
-        dt = plant.auto_dt()
+        if dt is None:
+            dt = plant.auto_dt()
         n = int(t_max / dt) + 1
         t = np.arange(n) * dt
         Ad, Bd, C, D = plant.discretize(dt)
@@ -93,10 +107,11 @@ class SignalGenerator:
                 y[i] = d_scalar * u_eff
         return t, u, y, dt
 
-    def relay_test(self, h=1.0, setpoint=0.0, hysteresis=0.0, t_max=80.0) -> Signal:
+    def relay_test(self, h=1.0, setpoint=0.0, hysteresis=0.0, t_max=80.0,
+                   dt=None) -> Signal:
         """Publish a closed-loop relay-feedback experiment signal."""
         t, u, y, dt = self._simulate_relay_response(
-            h=h, setpoint=setpoint, hysteresis=hysteresis, t_max=t_max)
+            h=h, setpoint=setpoint, hysteresis=hysteresis, t_max=t_max, dt=dt)
         return Signal(
             t=t, u=u, y=y, dt=dt, experiment="relay",
             meta={"h": float(h), "setpoint": float(setpoint),

@@ -148,11 +148,45 @@ class BlackBoxTuner:
         Kd = 1.0 / dc if dc > 1e-9 else 1.0
         return StablePoleCancellation(surrogate, p1, p2, Kd=Kd).tune()
 
-    def tune_all(self) -> list[BlackBoxTuningRow]:
+    #: CLI/API slug -> row name, for callers that want a single method instead
+    #: of the full sweep. Mirrors cli.py's --method choices (minus "all").
+    #: "chr" is intentionally absent — it fans out into 4 rows disambiguated
+    #: by chr_response/chr_overshoot instead of a fixed name.
+    METHOD_SLUGS = {
+        "pole_cancellation": "Pole cancellation",
+        "zn1": "ZN-I",
+        "zn2": "ZN-II",
+        "amigo": "AMIGO",
+        "simc": "SIMC",
+        "boyd": "Boyd",
+        "cohen_coon": "Cohen–Coon",
+        "tyreus_luyben": "Tyreus–Luyben",
+    }
+
+    def tune_all(self, method: Optional[str] = None,
+                 chr_response: str = "setpoint", chr_overshoot: int = 0) -> list[BlackBoxTuningRow]:
+        """Run the tuning methods against the identified model.
+
+        `method` (default None == "all") restricts this to a single method,
+        by the same slugs cli.py's --method uses ("zn1", "boyd", "chr", ...).
+        Unknown slugs raise ValueError. Restricting also skips the *work* for
+        the other methods, not just their reporting — e.g. Boyd's Ms/Mt
+        search only runs when it was actually asked for.
+        """
+        if method not in (None, "all") and method not in self.METHOD_SLUGS and method != "chr":
+            raise ValueError(
+                f"Unknown method {method!r}; choose from "
+                f"{sorted(list(self.METHOD_SLUGS) + ['chr'])}")
+
         model = self._model or self.identify()
         rows: list[BlackBoxTuningRow] = []
 
-        def add(name, fn, unavailable_reason):
+        def wanted(slug):
+            return method in (None, "all") or method == slug
+
+        def add(name, slug, fn, unavailable_reason):
+            if not wanted(slug):
+                return
             if unavailable_reason is not None:
                 rows.append(BlackBoxTuningRow(name, None, False, unavailable_reason))
                 return
@@ -172,38 +206,40 @@ class BlackBoxTuner:
         boyd_surrogate = pole_surrogate or (model.fopdt.to_tf() if model.fopdt is not None else None)
 
         seed = None
-        if model.fopdt is not None:
+        if model.fopdt is not None and wanted("boyd"):
             seed, _ = _safe(lambda: Simc(model.fopdt).tune().gains)
 
-        add("Pole cancellation", lambda: self._pole_cancel(pole_surrogate),
+        add("Pole cancellation", "pole_cancellation", lambda: self._pole_cancel(pole_surrogate),
             None if pole_surrogate is not None else
             (model.sopdt_reason or "no SOPDT surrogate available"))
 
-        add("ZN-I", lambda: ZieglerNicholsI(model.fopdt).tune(),
+        add("ZN-I", "zn1", lambda: ZieglerNicholsI(model.fopdt).tune(),
             None if model.fopdt is not None else model.fopdt_reason)
 
-        add("ZN-II", lambda: ZieglerNicholsII(model.Ku, model.Pu).tune(),
+        add("ZN-II", "zn2", lambda: ZieglerNicholsII(model.Ku, model.Pu).tune(),
             None if model.Ku is not None else model.ku_pu_reason)
 
-        add("AMIGO", lambda: Amigo(model.fopdt).tune(),
+        add("AMIGO", "amigo", lambda: Amigo(model.fopdt).tune(),
             None if model.fopdt is not None else model.fopdt_reason)
 
-        add("SIMC", lambda: Simc(model.fopdt, tau2=(model.sopdt.tau2 if model.sopdt else None)).tune(),
+        add("SIMC", "simc", lambda: Simc(model.fopdt, tau2=(model.sopdt.tau2 if model.sopdt else None)).tune(),
             None if model.fopdt is not None else model.fopdt_reason)
 
-        add("Boyd", lambda: Boyd(boyd_surrogate, seed_gains=seed).tune(),
+        add("Boyd", "boyd", lambda: Boyd(boyd_surrogate, seed_gains=seed).tune(),
             None if boyd_surrogate is not None else
             (model.fopdt_reason or "no surrogate model available"))
 
-        add("Cohen–Coon", lambda: CohenCoon(model.fopdt).tune(),
+        add("Cohen–Coon", "cohen_coon", lambda: CohenCoon(model.fopdt).tune(),
             None if model.fopdt is not None else model.fopdt_reason)
 
         for resp, ov, label in [("setpoint", 0, "CHR set 0%"), ("setpoint", 20, "CHR set 20%"),
                                  ("load", 0, "CHR load 0%"), ("load", 20, "CHR load 20%")]:
-            add(label, lambda resp=resp, ov=ov: ChienHronesReswick(model.fopdt, resp, ov).tune(),
+            if method == "chr" and (resp, ov) != (chr_response, chr_overshoot):
+                continue
+            add(label, "chr", lambda resp=resp, ov=ov: ChienHronesReswick(model.fopdt, resp, ov).tune(),
                 None if model.fopdt is not None else model.fopdt_reason)
 
-        add("Tyreus–Luyben", lambda: TyreusLuyben(model.Ku, model.Pu).tune(),
+        add("Tyreus–Luyben", "tyreus_luyben", lambda: TyreusLuyben(model.Ku, model.Pu).tune(),
             None if model.Ku is not None else model.ku_pu_reason)
 
         return rows
