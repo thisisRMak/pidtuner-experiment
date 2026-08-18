@@ -19,8 +19,12 @@ from datetime import datetime, timezone
 import numpy as np
 
 from lqg_examples import list_examples, load_example
-from lqg_design_methods import LQR
+from lqg_design_methods import LQR, add_reference_tracking
 from lqg_checks import checks_for_result
+from lqg_simulate import (simulate_state_feedback, auto_t_end,
+                          compute_regulator_metrics,
+                          format_regulator_metrics, format_tracking_metrics)
+from lqg_frequency import compute_sensitivity
 
 _HERE = os.path.dirname(__file__)
 _JSON_OUT = os.path.join(_HERE, "examples", "lqg", "lqg_professor_review.json")
@@ -60,6 +64,41 @@ def run_all():
         res = LQR(plant, Q=Q, R=R).design()
         checks = checks_for_result(res)
         all_checks = checks["pre"] + checks["post"]
+
+        # Closed-loop step response, control effort, transient metrics —
+        # simulate_state_feedback/compute_*_metrics already existed in
+        # lqg_simulate.py but were never called from this report (2026-08-18).
+        t_end = auto_t_end(res.closed_loop_poles)
+        t = np.linspace(0.0, t_end, 400)
+        reg_sim = simulate_state_feedback(res, t, x0=np.ones(plant.nx))
+        regulator_metrics = compute_regulator_metrics(t, reg_sim.x, reg_sim.u)
+        # Reference-tracking step response requires add_reference_tracking's
+        # N-bar, which in turn requires a square [[A,B],[C,D]] block
+        # (nu == ny and non-singular) — not guaranteed for every plant in
+        # the catalog. Fall back to None + a note rather than failing the
+        # whole report for a non-square plant.
+        tracking_metrics = None
+        tracking_unavailable = None
+        if plant.nu == plant.ny:
+            try:
+                res_rt = add_reference_tracking(res)
+                r_step = np.tile(np.ones(plant.ny), (len(t), 1))
+                step_sim = simulate_state_feedback(res_rt, t, r=r_step)
+                tracking_metrics = step_sim.tracking_metrics
+            except ValueError as e:
+                tracking_unavailable = str(e)
+        else:
+            tracking_unavailable = (f"plant is non-square (nu={plant.nu}, "
+                                    f"ny={plant.ny}) — reference tracking (N̄) "
+                                    f"requires nu == ny")
+
+        # Sensitivity/complementary sensitivity, plant input only — see
+        # lqg_frequency.py's module docstring for the loop-breaking-point
+        # caveat (open question for output-feedback designs; this batch is
+        # all full-state-feedback LQR so it doesn't arise here, but the
+        # field is labeled with loop_point regardless for clarity).
+        sens = compute_sensitivity(res)
+
         rows.append({
             "key": key,
             "name": ex.name,
@@ -75,6 +114,12 @@ def run_all():
                       for c in all_checks],
             "all_checks_passed": all(c.passed for c in all_checks),
             "recently_fixed": _RECENTLY_FIXED.get(key),
+            "regulator_metrics": regulator_metrics,
+            "tracking_metrics": tracking_metrics,
+            "tracking_unavailable": tracking_unavailable,
+            "Ms": sens.Ms,
+            "Mt": sens.Mt,
+            "loop_point": sens.loop_point,
         })
     return rows
 
@@ -107,6 +152,17 @@ def write_markdown(rows):
                  f"(see `docs/lqg_testing.md` for what each check verifies).")
     lines.append("")
     lines.append(f"**Summary: {n_pass}/{len(rows)} plants pass every check.**")
+    lines.append("")
+    lines.append("**Open question — sensitivity/complementary sensitivity (Ms/Mt) "
+                 "loop-breaking point:** all Ms/Mt figures below are evaluated at "
+                 "the plant input (`loop_point = \"plant_input\"`). For this batch "
+                 "every plant is full-state-feedback LQR, where that's the "
+                 "standard place to judge robustness and the classical LQR "
+                 "guarantees (Ms<=2, etc.) do apply. If output-feedback (LQG/"
+                 "Kalman) plants are added to this report later, plant-input Ms/Mt "
+                 "does **not** carry the same guarantee there (see `lqg_frequency.py`'s "
+                 "module docstring) — flagging this now as something to verify with "
+                 "you rather than presenting it as settled.")
     lines.append("")
 
     if _RECENTLY_FIXED:
@@ -158,6 +214,30 @@ def write_markdown(rows):
         for c in r["checks"]:
             mark = "PASS" if c["passed"] else "**FAIL**"
             lines.append(f"- [{mark}] {c['name']} — {c['detail']}")
+        lines.append("")
+
+        lines.append(f"Gain matrix K ({r['nu']}×{r['nx']}):")
+        lines.append("")
+        lines.append("```")
+        lines.append(np.array2string(np.array(r["K"]), precision=4, separator=", "))
+        lines.append("```")
+        lines.append("")
+
+        rm = r["regulator_metrics"]
+        lines.append("Regulator step (x0 = ones): control effort and settling —")
+        lines.append(f"- {format_regulator_metrics(rm)}")
+        lines.append("")
+
+        lines.append("Closed-loop step response (r = ones), per output channel:")
+        if r["tracking_metrics"] is not None:
+            lines.append(format_tracking_metrics(r["tracking_metrics"]))
+        else:
+            lines.append(f"- not available: {r['tracking_unavailable']}")
+        lines.append("")
+
+        lines.append(f"Sensitivity/complementary sensitivity at the plant input "
+                     f"(loop_point={r['loop_point']}): Ms = {r['Ms']:.3g}, "
+                     f"Mt = {r['Mt']:.3g}")
         lines.append("")
 
     os.makedirs(os.path.dirname(_MD_OUT), exist_ok=True)
