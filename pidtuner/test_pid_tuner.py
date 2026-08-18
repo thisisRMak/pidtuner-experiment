@@ -27,29 +27,29 @@ import unittest
 import numpy as np
 
 from plant import TransferFunction, parse_coeff_list
-from identify import (
+from pid_identify import (
     run_step_test, run_relay_test, find_ultimate_gain, FOPDT,
     fit_fopdt_from_step, SOPDT, fit_sopdt_from_step,
     identify_ultimate_gain_from_relay,
 )
-from tune import (
+from pid_tune import (
     PIDGains, halve_gains,
     tune_pole_cancellation, select_slowest_stable_poles,
     tune_zn_method_1, tune_zn_method_2,
     tune_amigo, tune_simc, tune_boyd,
     tune_cohen_coon, tune_chr, tune_tyreus_luyben,
 )
-from simulate import (
+from pid_simulate import (
     simulate_closed_loop, format_metrics, make_setpoint,
     is_closed_loop_stable, compute_metrics, compute_back_calc_Ka,
 )
-from compare import (
+from pid_compare import (
     robustness_metrics, load_rejection_metrics, compare_all_methods,
     normalize_column,
 )
 from signal_format import Signal, save_signal, load_signal
 from signal_source import SignalGenerator
-from blackbox import BlackBoxTuner, identify_from_signals
+from pid_blackbox import BlackBoxTuner, identify_from_signals
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1067,9 +1067,9 @@ class TestBlackBox(unittest.TestCase):
         return step_sig, relay_sig
 
     def test_no_plant_import(self):
-        import blackbox
-        self.assertFalse(_module_imports_plant(blackbox.__file__),
-                          "blackbox.py must never import plant.py directly")
+        import pid_blackbox
+        self.assertFalse(_module_imports_plant(pid_blackbox.__file__),
+                          "pid_blackbox.py must never import plant.py directly")
 
     def test_all_methods_available_on_benchmark(self):
         step_sig, relay_sig = self._signals()

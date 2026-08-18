@@ -3,8 +3,8 @@
 existing PIDTuner benchmark (white-box or black-box, whichever applies),
 and recommends a single technique grounded in the real computed metrics.
 
-Thin over supervisor_session.Session, the same way cli.py/cli_blackbox.py
-are thin over compare.py/blackbox.py.
+Thin over supervisor_session.Session, the same way cli_pid.py/cli_pid_blackbox.py
+are thin over pid_compare.py/pid_blackbox.py.
 """
 
 from __future__ import annotations
@@ -13,9 +13,9 @@ import argparse
 import sys
 
 from supervisor_llm import DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaClient
-from supervisor_session import Session
-from supervisor_tools_blackbox import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
-from supervisor_tools_whitebox import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
+from supervisor_session_pid import Session
+from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
+from supervisor_tools_whitebox_pid import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
 
 WHITEBOX_TOOL = (RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark)
 BLACKBOX_TOOL = (RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark)

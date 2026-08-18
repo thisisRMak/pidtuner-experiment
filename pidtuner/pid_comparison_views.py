@@ -10,8 +10,8 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk,
 )
-from compare import METRIC_TIERS, RADAR_METRICS, METRIC_DIRECTION, normalize_column
-from widgets import add_tooltip
+from pid_compare import METRIC_TIERS, RADAR_METRICS, METRIC_DIRECTION, normalize_column
+from pid_widgets import add_tooltip
 
 # Plain ASCII only — Tkinter's default label font on this platform doesn't
 # render the Unicode subscript block (e.g. "tₛ" silently drops the "s").

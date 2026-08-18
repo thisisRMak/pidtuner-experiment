@@ -17,14 +17,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from plant import TransferFunction
-from identify import run_step_test, find_ultimate_gain
-from tuning_methods import (
+from pid_identify import run_step_test, find_ultimate_gain
+from pid_tuning_methods import (
     PIDGains, TuningResult, halve_gains,
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben
 )
-from compare import metric_row, compare_all_methods, select_slowest_stable_poles
-from simulate import simulate_closed_loop, format_metrics, saturation_mask
+from pid_compare import metric_row, compare_all_methods, select_slowest_stable_poles
+from pid_simulate import simulate_closed_loop, format_metrics, saturation_mask
 from signal_source import SignalGenerator
 from signal_format import save_signal
 
@@ -247,7 +247,7 @@ def main():
         choices=["step", "relay"],
         help="Instead of tuning, run this experiment against --plant and publish "
              "the resulting signal to --out-signal, then exit. This is entity A's "
-             "CLI mode — the black-box tuner (cli_blackbox.py) never sees --plant."
+             "CLI mode — the black-box tuner (cli_pid_blackbox.py) never sees --plant."
     )
     parser.add_argument("--out-signal", type=str, help="Output path for --gen-signal (.npz)")
     parser.add_argument(

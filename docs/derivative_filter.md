@@ -1,25 +1,25 @@
 # Derivative Filtering: When It's Applied and When It Isn't
 
 Short reference for how PIDTuner handles the `Kd` term. See also the
-module docstring in `pidtuner/simulate.py` and the "Derivative filter"
+module docstring in `pidtuner/pid_simulate.py` and the "Derivative filter"
 section of `pidtuner/README.md`.
 
 ## The short version
 
 The derivative is filtered **only in the time-domain simulator**
-(`pidtuner/simulate.py`). Every gain-selection method — Boyd loop-shaping,
+(`pidtuner/pid_simulate.py`). Every gain-selection method — Boyd loop-shaping,
 pole placement/cancellation, Ziegler-Nichols/Tyreus-Luyben, and the
 closed-loop stability check — works with the **unfiltered** ideal term
 `Kd·s`.
 
 | Where | Filtered? | Code |
 |---|---|---|
-| Closed-loop step/ramp/pulse simulation | **Yes** | `simulate.py: pid_step()`, `simulate_closed_loop()` |
-| Boyd loop-shaping (`L(jω)` frequency sweep) | No | `tuning_methods.py:284` |
-| Pole placement / pole cancellation | No | `tune.py:57-63` |
-| Ziegler-Nichols / Tyreus-Luyben rules | No | `tuning_methods.py` (classical formulas) |
-| Frequency-response comparison `C(jω)` (`compare.robustness_metrics`) | **Yes** (default `N=10`, matching sim; pass `N=0` for the ideal comparison) | `compare.py: _controller_response()` |
-| Closed-loop stability check (`closed_loop_poles`) | **Yes** (default `N=10`; `simulate_closed_loop` passes the run's actual `N_eff`) | `simulate.py: closed_loop_poles()`, `is_closed_loop_stable()` |
+| Closed-loop step/ramp/pulse simulation | **Yes** | `pid_simulate.py: pid_step()`, `simulate_closed_loop()` |
+| Boyd loop-shaping (`L(jω)` frequency sweep) | No | `pid_tuning_methods.py:284` |
+| Pole placement / pole cancellation | No | `pid_tune.py:57-63` |
+| Ziegler-Nichols / Tyreus-Luyben rules | No | `pid_tuning_methods.py` (classical formulas) |
+| Frequency-response comparison `C(jω)` (`compare.robustness_metrics`) | **Yes** (default `N=10`, matching sim; pass `N=0` for the ideal comparison) | `pid_compare.py: _controller_response()` |
+| Closed-loop stability check (`closed_loop_poles`) | **Yes** (default `N=10`; `simulate_closed_loop` passes the run's actual `N_eff`) | `pid_simulate.py: closed_loop_poles()`, `is_closed_loop_stable()` |
 
 Only the *gain-selection* methods (Boyd, pole placement, ZN/TL/AMIGO/SIMC/...)
 still solve for `Kp, Ki, Kd` against the ideal `Kd·s` term — see "Why the
@@ -70,7 +70,7 @@ D(s) = -Kd·s / (1 + τ_d·s) · PV(s)      τ_d = Td/N = Kd/(N·Kp)
 ```
 
 `N` is the filter bandwidth ratio (default `N = 10`). Discretized with
-backward-Euler in `pid_step()` (`simulate.py:105-147`):
+backward-Euler in `pid_step()` (`pid_simulate.py:105-147`):
 
 ```python
 tau_d = gains.Kd / (N * abs(gains.Kp))     # if Kp, Kd, N all nonzero
@@ -90,4 +90,4 @@ back to a raw (unfiltered, kick-prone) derivative of error instead.
 
 - CLI/library: `simulate_closed_loop(..., N=10.0, use_d_filter=True)`.
 - GUI: "Derivative filter (N=10) — recommended" checkbox, on by default
-  (`app.py:349-351`).
+  (`pid_app.py:349-351`).

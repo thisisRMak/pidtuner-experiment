@@ -1,5 +1,5 @@
 """Core LQR/LQG design methods and shared infrastructure — the LQG-track
-analog of tuning_methods.py, per docs/lqg_plan.md Phase 1-2.
+analog of pid_tuning_methods.py, per docs/lqg_plan.md Phase 1-2.
 
 Holds the Phase-1 core (`LQR`, `OutputWeightedLQR`, `LQG`) plus everything
 they and the split-out methods share: the result types (`StateFeedbackGains`,

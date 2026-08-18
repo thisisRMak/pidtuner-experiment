@@ -3,7 +3,7 @@ and Tuning, 2nd ed., p. 227) -- 9 parametrized plant families, expanded over
 their listed parameter values, used in the book to validate tuning rules
 across a broad sweep of dynamics rather than to check any single "textbook
 answer." This module only builds the plant expressions; running/tuning them
-is cli_astrom_batch.py's job.
+is cli_pid_astrom_batch.py's job.
 
 Every family reduces to a symbolic expression consumable directly by
 plant.TransferFunction.parse -- no separate delay/gain plumbing needed, the

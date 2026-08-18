@@ -4,7 +4,7 @@ runs the LQR/output-weighted-LQR/Bryson/LQG benchmark against a named preset
 plant, and recommends a single technique grounded in the real computed
 metrics.
 
-Thin over supervisor_session_lqg.LQGSession, the same way cli_supervisor.py
+Thin over supervisor_session_lqg.LQGSession, the same way cli_supervisor_pid.py
 is thin over supervisor_session.Session.
 """
 

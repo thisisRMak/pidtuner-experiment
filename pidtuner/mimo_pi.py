@@ -1,5 +1,5 @@
 """MIMO PI control with multivariable integral anti-windup — Windup_AEN 7.pdf
-§9.3 (pp. 278-283), the multivariable analog of simulate.py's SISO PID
+§9.3 (pp. 278-283), the multivariable analog of pid_simulate.py's SISO PID
 anti-windup.
 
 The controller is the matrix-PI structure the book's Fig 9.31/9.32 actually
@@ -24,13 +24,13 @@ format_tracking_metrics rather than reimplementing them — they're pole- and
 own docstring already calls this out: "previously duplicated ... centralized
 here"). Borrowing them from lqg_simulate.py rather than promoting them to a
 new shared module is a deliberate Phase-1 scope call — that promotion would
-touch simulate.py and lqg_simulate.py, both outside this module's diff.
+touch pid_simulate.py and lqg_simulate.py, both outside this module's diff.
 
 ─────────────────────────────────────────────────────────────────────────────
 ANTI-WINDUP MODES
 ─────────────────────────────────────────────────────────────────────────────
 "conditional" (default): freeze the whole xI vector whenever ANY actuator
-channel saturates. Direct MIMO lift of simulate.py's conditional-integration
+channel saturates. Direct MIMO lift of pid_simulate.py's conditional-integration
 — simplest, no invertibility requirement, but (like its SISO counterpart)
 only stops things from getting worse; it doesn't actively unwind.
 
@@ -43,7 +43,7 @@ should be studied carefully") — this module allows it but reports
 `pinv_used=True` on the result so callers don't mistake it for exact.
 
 "hanus" — Method I (eq. 9.117-9.120): an always-on correction, the MIMO
-analog of simulate.py's back_calc —
+analog of pid_simulate.py's back_calc —
 
     xI(t+dt) = xI(t) + [E + KP⁻¹·(u_sat - u_unsat)] dt
 
@@ -65,7 +65,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from lqg_simulate import auto_t_end, compute_tracking_metrics, format_tracking_metrics
-from simulate import saturation_mask  # noqa: F401 — re-exported, see saturation_mask note below
+from pid_simulate import saturation_mask  # noqa: F401 — re-exported, see saturation_mask note below
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,11 +164,11 @@ def mimo_pi_step(gains, integral, r, y, dt, u_min, u_max,
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Linearized (unsaturated) closed-loop poles — the "as designed" analog of
-# simulate.py's closed_loop_poles() / lqg_simulate's is_stable(), used for
+# pid_simulate.py's closed_loop_poles() / lqg_simulate's is_stable(), used for
 # the stability flag and for auto-sizing t_end. Ignores saturation, same
 # split as both existing tracks between "as designed" and "as simulated".
 # Named mimo_pi_closed_loop_poles (not closed_loop_poles) so it can't be
-# mistaken for simulate.py's same-named-but-different-signature SISO version
+# mistaken for pid_simulate.py's same-named-but-different-signature SISO version
 # if both ever end up imported into the same file.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,7 +199,7 @@ def mimo_pi_closed_loop_poles(plant, gains):
 
 def compute_mimo_pi_metrics(t, r, y, u):
     """IAE/ITAE on the tracking error (L1 norm across channels, matching
-    simulate.py's scalar IAE/ITAE), ISU/u_peak on control effort (same
+    pid_simulate.py's scalar IAE/ITAE), ISU/u_peak on control effort (same
     definitions as lqg_simulate.compute_regulator_metrics — kept as a local
     two-line computation rather than imported, since factoring it out would
     mean editing lqg_simulate.py's existing metrics function), plus
@@ -265,7 +265,7 @@ def simulate_mimo_pi(plant, gains, t=None, t_end=None, r=None, x0=None,
                   unsaturated closed-loop poles via mimo_pi_closed_loop_poles
                   + lqg_simulate.auto_t_end when not given)
     r           : reference — (ny,) for a step to that vector (r[0] forced
-                  to 0, matching simulate.py's step generator), or (n, ny)
+                  to 0, matching pid_simulate.py's step generator), or (n, ny)
                   for a custom trace. Defaults to a unit step on every
                   channel. For a pure regulator test (x0 perturbed, no
                   tracking), pass r=np.zeros(ny) explicitly.
@@ -299,7 +299,7 @@ def simulate_mimo_pi(plant, gains, t=None, t_end=None, r=None, x0=None,
         r_arr = r.copy()
     elif r.size == ny:
         r_arr = np.tile(r.reshape(1, ny), (n, 1))
-        r_arr[0] = 0.0  # discrete step at t=0+, matching simulate.py's make_setpoint
+        r_arr[0] = 0.0  # discrete step at t=0+, matching pid_simulate.py's make_setpoint
     else:
         raise ValueError(
             f"r shape {r.shape} doesn't match ny={ny} (as a step) or "

@@ -3,7 +3,7 @@ gating (which benchmark tool, if any, the model is currently allowed to
 call), and the grounding cache that ties finalize_recommendation to method
 names a benchmark tool actually returned.
 
-No imports from plant.py, signal_format.py, or blackbox.py -- the white-box
+No imports from plant.py, signal_format.py, or pid_blackbox.py -- the white-box
 and black-box tool implementations are injected by the caller as
 (schema, callable) pairs, so this module never has to choose sides on the
 entity-isolation boundary itself.
@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import json
 
-from supervisor_common import (
+from supervisor_common_pid import (
     FINALIZE_RECOMMENDATION_SCHEMA,
     SET_PRIORITIES_SCHEMA,
     PrioritiesWorksheet,
     make_finalize_recommendation_tool,
     make_set_priorities_tool,
 )
-from supervisor_prompts import SYSTEM_PROMPT
+from supervisor_prompts_pid import SYSTEM_PROMPT
 
 MAX_TOOL_HOPS = 6
 

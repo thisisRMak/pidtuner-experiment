@@ -18,23 +18,23 @@ both need a target model (Am, Q1) as a per-design choice with no
 "suggested" value per preset plant the way LQR/output-weighted/Bryson have
 (see docs/lqg_testing.md "Model-following classes") -- there's no way to
 auto-run them the way pole_cancellation auto-derives its poles in
-compare.py, so unlike the other four they're only included when the
+pid_compare.py, so unlike the other four they're only included when the
 caller (the LLM, on the user's behalf) actually supplies am_diag; never
 guessed.
 
 Uses lqg_compare.py (compare_regulator_methods / compare_model_following)
 for the actual design/simulation work -- the same shared-core role
-compare.py plays for cli.py and supervisor_tools_whitebox.py -- and keeps
+pid_compare.py plays for cli_pid.py and supervisor_tools_whitebox_pid.py -- and keeps
 its own rounded/JSON-safe row serialization on top, independent of
-cli_lqg.py's, following the precedent supervisor_tools_whitebox.py already
+cli_lqg.py's, following the precedent supervisor_tools_whitebox_pid.py already
 set ("Independent of cli.serialize_row_json by design").
 
 Imports lqg_examples.py/lqg_compare.py/lqg_explicit.py -- this is the only
 supervisor module allowed to import the lqg_* design/compare modules
-(mirrors supervisor_tools_whitebox.py's plant.py-only-here contract).
+(mirrors supervisor_tools_whitebox_pid.py's plant.py-only-here contract).
 There's no competing black-box LQG tool to isolate this from (see
 supervisor_common_lqg.py's module docstring), so unlike
-supervisor_tools_blackbox.py there's nothing for an isolation test to
+supervisor_tools_blackbox_pid.py there's nothing for an isolation test to
 check here.
 """
 
@@ -187,7 +187,7 @@ def _pole_margin(closed_loop_poles):
     """-max(Re(poles)): distance of the least-stable pole from the
     imaginary axis. A robustness/damping proxy standing in for the Ms/Mt
     metrics the PID track has and the LQG track doesn't compute yet (no
-    MIMO Ms/Mt -- see docs/lqg_plan.md compare.py entry). Larger = more
+    MIMO Ms/Mt -- see docs/lqg_plan.md pid_compare.py entry). Larger = more
     margin before a perturbation could destabilize the design."""
     real_parts = np.real(closed_loop_poles)
     return float(-np.max(real_parts)) if len(real_parts) else float("nan")
@@ -196,7 +196,7 @@ def _pole_margin(closed_loop_poles):
 def _serialize_row(row):
     """row: an lqg_compare.ComparisonRow (already has result/sim/checks
     computed by the shared core) -- this function just rounds it into an
-    LLM-safe dict, the presentation-layer split supervisor_tools_whitebox.py
+    LLM-safe dict, the presentation-layer split supervisor_tools_whitebox_pid.py
     established for the PID side."""
     result, sim, checks = row.result, row.sim, row.checks
     all_checks = checks["pre"] + checks["post"]

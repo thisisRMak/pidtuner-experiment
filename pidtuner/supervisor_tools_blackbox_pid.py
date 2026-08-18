@@ -1,8 +1,8 @@
 """Entity C's supervisor tool: identify a model purely from published
 signals and benchmark all applicable tuning methods against it.
 
-Isolation contract (same as blackbox.py/cli_blackbox.py, and CI-checked the
-same way -- see test_supervisor.py's test_no_plant_import): this module must
+Isolation contract (same as pid_blackbox.py/cli_pid_blackbox.py, and CI-checked the
+same way -- see test_supervisor_pid.py's test_no_plant_import): this module must
 NEVER import plant.py, directly or otherwise. It only ever consumes
 signal_format.Signal objects loaded from disk.
 """
@@ -13,7 +13,7 @@ import math
 
 import numpy as np
 
-from blackbox import BlackBoxTuner
+from pid_blackbox import BlackBoxTuner
 from signal_format import load_signal
 
 RUN_BLACKBOX_BENCHMARK_SCHEMA = {
@@ -30,7 +30,7 @@ RUN_BLACKBOX_BENCHMARK_SCHEMA = {
             "properties": {
                 "step_signal_path": {
                     "type": "string",
-                    "description": "path to a step-test Signal .npz (e.g. from `python cli.py --gen-signal step`)",
+                    "description": "path to a step-test Signal .npz (e.g. from `python cli_pid.py --gen-signal step`)",
                 },
                 "relay_signal_path": {
                     "type": "string",

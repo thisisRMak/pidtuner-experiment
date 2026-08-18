@@ -15,7 +15,7 @@ supervisor also ships for this track (2026-08-02): `cli_supervisor_lqg.py`,
 `supervisor_prompts_lqg.py`, `supervisor_tools_lqg.py`,
 `test_supervisor_lqg.py`, `examples/run_supervisor_lqg_demo.sh` — a
 deliberately separate script/session from the PID supervisor
-(`cli_supervisor.py`), not a mode flag on it; see `docs/cli_guide.md`
+(`cli_supervisor_pid.py`), not a mode flag on it; see `docs/cli_guide.md`
 "Design notes" for why, and for a unified how-to guide across both tracks'
 CLIs (one-off, conversational, and batch runs).
 `ImplicitModelFollowing` is golden-tested against `AILQG.pdf` Example 3
@@ -33,7 +33,7 @@ closed loop) and `lqg_simulate.compute_tracking_metrics`
 shipped alongside this — see `docs/lqg_testing.md` for both.
 `lqg_compare.py` (2026-08-02) adds the two cross-method comparisons —
 `compare_regulator_methods` (LQR/OutputWeightedLQR/BrysonLQR/LQG, the
-`compare.py` analog) and `compare_model_following` (implicit vs. explicit
+`pid_compare.py` analog) and `compare_model_following` (implicit vs. explicit
 against a shared target model) — as the shared core both `cli_lqg.py`
 (`--method all`/`model_following_all`, with optional `--plot` overlays)
 and `supervisor_tools_lqg.py`'s `run_lqg_benchmark` now call into; see
@@ -178,8 +178,8 @@ augmentation) and fewer examples back it, vs. the dozen backing Phase 1.
 
 ## Architecture
 
-Same flat-file, domain-prefixed convention as `cli_blackbox.py`,
-`supervisor_tools_whitebox.py`, etc. — no subpackages, matching the existing
+Same flat-file, domain-prefixed convention as `cli_pid_blackbox.py`,
+`supervisor_tools_whitebox_pid.py`, etc. — no subpackages, matching the existing
 repo style.
 
 | File | Role | Phase |
@@ -188,7 +188,7 @@ repo style.
 | `lqg_design_methods.py` | `BaseControlDesignMethod` (new, independent hierarchy — not force-unified with `BaseTuningMethod`) → `LQR`, `OutputWeightedLQR`, `LQG` (Kalman filter + separation principle), plus `add_reference_tracking`. Also holds the result types (`StateFeedbackGains`, `LQGDesignResult`, `KalmanFilterResult`) and the shared Riccati solvers (`_lqr_core`, `_kalman_core`) — a separate `lqg_gains.py` was originally planned here but the split wasn't worth a second file in practice; they live alongside the design classes instead | 1 |
 | `lqg_examples.py` + `lqg_examples_json/*.json` | The plant preset catalog (all 12 plants, none excluded — see "Known issues"), loadable by name (`--plant-preset aircraft_hall`), each with citation + quirk notes in metadata; source `.m` files live in `lqg_examples_m/` | 1 |
 | `lqg_simulate.py` | State-feedback and output-feedback (Kalman-filtered) closed-loop sim: `ẋ = (A-BK)x`, MIMO trajectories, actuator saturation (plain clip — no back-calc-style anti-windup yet, that's PID-specific machinery) | 1 |
-| `cli_lqg.py` | argparse CLI, same shape as `cli.py` (flat script, matching current per-mode convention — no unified dispatcher yet) | 1 |
+| `cli_lqg.py` | argparse CLI, same shape as `cli_pid.py` (flat script, matching current per-mode convention — no unified dispatcher yet) | 1 |
 | `lqg_checks.py` | Pre-/post-design correctness checks (Q/R well-posedness, stabilizability, detectability, ARE residual, S/P symmetric-PSD, closed-loop stability) — printed by `cli_lqg.py`, see `docs/lqg_testing.md` | 1 |
 | `lqg_bryson.py` — **done** | `BrysonLQR` — split out of `lqg_design_methods.py` (2026-08-02) into its own file, alongside `lqg_implicit.py`/`lqg_explicit.py` below, specifically so the three "how do I pick Q/R" methods are easy to read/diff side by side; all three still subclass `BaseControlDesignMethod` from `lqg_design_methods.py` | 1 |
 | `lqg_implicit.py` — **done** | `ImplicitModelFollowing` | 2 |
@@ -197,10 +197,10 @@ repo style.
 | `cli_lqg.py` (cont.) — **done** | `--method implicit`/`explicit` via `--am-diag`/`--Q1-scale`; `--reference-tracking` now actually simulates tracking `--reference` (previously only computed/printed `N̄` without ever driving a run toward it — a bug fixed alongside this) | 2 |
 | `supervisor_tools_lqg.py` (cont.) — **done** | `run_lqg_benchmark`'s `am_diag`/`q1_scale` parameters — opt-in model-following rows, never guessed (see `docs/lqg_testing.md`) | 2 |
 | `lqg_review.py` — **done** | One-pass LQR sweep + full check suite over the preset catalog, written to `docs/lqg_review.md`/JSON for external review | — |
-| `lqg_compare.py` — **done** | `compare_regulator_methods` (LQR/OutputWeightedLQR/BrysonLQR/LQG, shared time axis for overlay plotting) + `compare_model_following` (implicit vs. explicit against a shared target model's own free response) — the shared core `cli_lqg.py`/`supervisor_tools_lqg.py` both call into. Built as its own new module rather than extending `compare.py` in place (see next row) — no plotting code, matching `compare.py`'s own convention | 2 |
-| `compare.py` (extended) | Generalize `Ms`/`Mt` to MIMO via singular values (SISO formulas are the scalar special case) — **not done**; `lqg_compare.py`'s `pole_margin` (`-max(Re(closed-loop poles))`) stands in as a robustness proxy for now, see `docs/lqg_testing.md`. `ISU=∫u²dt` already matches the LQ cost's control term and is used as-is | whenever true Ms/Mt-for-MIMO is wanted |
+| `lqg_compare.py` — **done** | `compare_regulator_methods` (LQR/OutputWeightedLQR/BrysonLQR/LQG, shared time axis for overlay plotting) + `compare_model_following` (implicit vs. explicit against a shared target model's own free response) — the shared core `cli_lqg.py`/`supervisor_tools_lqg.py` both call into. Built as its own new module rather than extending `pid_compare.py` in place (see next row) — no plotting code, matching `pid_compare.py`'s own convention | 2 |
+| `pid_compare.py` (extended) | Generalize `Ms`/`Mt` to MIMO via singular values (SISO formulas are the scalar special case) — **not done**; `lqg_compare.py`'s `pole_margin` (`-max(Re(closed-loop poles))`) stands in as a robustness proxy for now, see `docs/lqg_testing.md`. `ISU=∫u²dt` already matches the LQ cost's control term and is used as-is | whenever true Ms/Mt-for-MIMO is wanted |
 
-`identify.py`/`blackbox.py`-equivalent work for LQG (subspace identification
+`pid_identify.py`/`pid_blackbox.py`-equivalent work for LQG (subspace identification
 — N4SID/ERA — to get `(A,B,C,D)` from I/O data instead of a known model) is
 explicitly **out of scope for this plan**, same status as the web GUI:
 noted as a future direction, not designed here.
@@ -221,12 +221,12 @@ JSON output, with nothing lost relative to a GUI:
   plant, pick a weight-selection strategy, get `K` + a response plot" — that
   is exactly `cli_lqg.py --plant-preset aircraft_hall --method output_weighted
   --plot out.png`, with matplotlib already forced to the non-interactive
-  `Agg` backend in `cli.py` precedent (save-to-file works fine headless).
-- **Comparison/heatmap value survives without a GUI shell** — `compare.py`
-  already produces JSON rows and PNG figures from `cli.py --method all
-  --json`; the same pattern extends to LQG once its `compare.py` extension
+  `Agg` backend in `cli_pid.py` precedent (save-to-file works fine headless).
+- **Comparison/heatmap value survives without a GUI shell** — `pid_compare.py`
+  already produces JSON rows and PNG figures from `cli_pid.py --method all
+  --json`; the same pattern extends to LQG once its `pid_compare.py` extension
   lands.
-- The **LLM supervisor is CLI-only** on both tracks (`cli_supervisor.py`
+- The **LLM supervisor is CLI-only** on both tracks (`cli_supervisor_pid.py`
   for PID, `cli_supervisor_lqg.py` for this one) and specifically proves the
   "which design is better for my priorities" conversational workflow
   doesn't need a GUI at all.
@@ -237,7 +237,7 @@ JSON output, with nothing lost relative to a GUI:
 **Revisit trigger:** build a GUI (Tkinter or web, TBD) only once real usage
 shows a recurring interactive need the CLI can't serve — e.g., live
 slider-driven `Q`/`R` sensitivity exploration for a teaching demo. Until
-then, `app.py` stays PID-only; no LQG tab is planned in this phase.
+then, `pid_app.py` stays PID-only; no LQG tab is planned in this phase.
 
 ## Validation strategy
 
@@ -298,13 +298,13 @@ Resolved before implementation starts:
 
 1. **Branding**: keep "pidtuner" as the umbrella package/repo name. LQG
    ships as new files inside the existing project — no renaming, no
-   duplication of the reusable infra (`supervisor_*`, `compare.py`,
-   `widgets.py`, CI/PyInstaller scaffolding). Confirmed via `grep` that no
+   duplication of the reusable infra (`supervisor_*`, `pid_compare.py`,
+   `pid_widgets.py`, CI/PyInstaller scaffolding). Confirmed via `grep` that no
    code imports anything as `pidtuner.X` (flat sibling-module imports
    throughout), so this costs nothing now and a rename stays cheap later if
    the tool's identity shifts.
-2. **CLI shape**: flat per-mode scripts, matching `cli.py`/`cli_blackbox.py`/
-   `cli_supervisor.py`/`cli_astrom_batch.py`. `cli_lqg.py` joins them as its
+2. **CLI shape**: flat per-mode scripts, matching `cli_pid.py`/`cli_pid_blackbox.py`/
+   `cli_supervisor_pid.py`/`cli_pid_astrom_batch.py`. `cli_lqg.py` joins them as its
    own script. A unified `pidtuner` subcommand dispatcher is explicitly
    parked, not ruled out — revisit once more modes exist.
 3. **Broken example files**: all 3 initially-broken source files were fixed

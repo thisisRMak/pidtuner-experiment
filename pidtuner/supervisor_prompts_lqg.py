@@ -1,5 +1,5 @@
 """Content-only module: the LQR/LQG supervisor's system prompt. No logic.
-LQG-flavored counterpart to supervisor_prompts.py."""
+LQG-flavored counterpart to supervisor_prompts_pid.py."""
 
 from __future__ import annotations
 

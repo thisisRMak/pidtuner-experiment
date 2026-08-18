@@ -3,7 +3,7 @@
 A practical guide to trying PIDTuner's two anti-windup modes in both the
 CLI and the GUI. For the full explanation and formulas, see the
 "Anti-windup" section of `pidtuner/README.md` and the module docstring in
-`pidtuner/simulate.py`.
+`pidtuner/pid_simulate.py`.
 
 ## The short version
 
@@ -34,10 +34,10 @@ gains small enough that `u_min=-0.003, u_max=0.003` reliably saturates.
 **1. Compare both modes side by side**, same plant/method/saturation:
 
 ```bash
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method zn1 \
   --u-min -0.003 --u-max 0.003 --antiwindup conditional
 
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method zn1 \
   --u-min -0.003 --u-max 0.003 --antiwindup back_calc
 ```
 
@@ -51,18 +51,18 @@ rather than assuming one always wins.
 **2. Override `Ka` by hand:**
 
 ```bash
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method zn1 \
   --u-min -0.003 --u-max 0.003 --antiwindup back_calc --Ka 3.0
 ```
 
 **3. Save plots** of the actual saturated response for a visual diff:
 
 ```bash
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method zn1 \
   --u-min -0.003 --u-max 0.003 --antiwindup back_calc \
   --plot examples/out/antiwindup_backcalc.png
 
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method zn1 \
   --u-min -0.003 --u-max 0.003 --antiwindup conditional \
   --plot examples/out/antiwindup_conditional.png
 ```
@@ -71,7 +71,7 @@ python3 cli.py --plant "1000/((s+1)(10s+1))" --method zn1 \
 (each stable row gets an extra `saturated_sim` key):
 
 ```bash
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method all \
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method all \
   --u-min -0.003 --u-max 0.003 --antiwindup back_calc --json
 ```
 
@@ -96,16 +96,16 @@ silently doing nothing:
 
 ```bash
 # back_calc with no saturation bounds set:
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method simc --antiwindup back_calc
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method simc --antiwindup back_calc
 
 # --Ka with the default (conditional) mode:
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method simc --Ka 0.5
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method simc --Ka 0.5
 ```
 
 ## GUI walkthrough
 
 ```bash
-python3 app.py
+python3 pid_app.py
 ```
 
 1. Plant tab: enter `1000/((s+1)(10s+1))` (or use the default).

@@ -1,6 +1,6 @@
 """Cross-method comparison for the LQR/LQG design track — the LQG-track
-analog of compare.py. Pure data/logic, no plotting (same convention
-compare.py follows — cli.py owns all matplotlib code; cli_lqg.py does too).
+analog of pid_compare.py. Pure data/logic, no plotting (same convention
+pid_compare.py follows — cli_pid.py owns all matplotlib code; cli_lqg.py does too).
 
 Two comparisons, not one, because they answer different questions:
   - compare_regulator_methods: LQR / OutputWeightedLQR / BrysonLQR / LQG,
@@ -18,7 +18,7 @@ Two comparisons, not one, because they answer different questions:
 
 Used by both cli_lqg.py (--method all / model_following_all) and
 supervisor_tools_lqg.py (run_lqg_benchmark) — the shared core, same role
-compare.py plays for cli.py/supervisor_tools_whitebox.py. Each caller does
+pid_compare.py plays for cli_pid.py/supervisor_tools_whitebox_pid.py. Each caller does
 its own presentation on top (CLI text/plot, or LLM-safe rounded JSON).
 """
 

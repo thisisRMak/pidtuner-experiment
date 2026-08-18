@@ -11,7 +11,7 @@ same plant.
 ```bash
 conda env create -f environment.yml
 conda activate pidtuner
-python app.py
+python pid_app.py
 ```
 
 Or without the `environment.yml`, in one line:
@@ -19,7 +19,7 @@ Or without the `environment.yml`, in one line:
 ```bash
 conda create -n pidtuner python numpy scipy matplotlib -y
 conda activate pidtuner
-python app.py
+python pid_app.py
 ```
 
 Tkinter is bundled with conda's Python on all platforms — no extra step
@@ -37,7 +37,7 @@ conda env remove -n pidtuner
 
 ```bash
 pip install numpy scipy matplotlib
-python app.py
+python pid_app.py
 ```
 
 On Linux you'll also need `sudo apt install python3-tk` (Debian/Ubuntu)
@@ -188,7 +188,7 @@ reverses sign. They differ in how they prevent it:
 This is orthogonal to which of the 9 tuning methods produced the gains —
 none of them know about actuator limits, so anti-windup is purely a
 property of the simulation step that follows tuning, not of tuning
-itself. See `simulate.py`'s module docstring for the full derivation.
+itself. See `pid_simulate.py`'s module docstring for the full derivation.
 
 CLI: `--u-min`/`--u-max` set the saturation bounds (default: unbounded,
 i.e. no saturation — unchanged from before); `--antiwindup
@@ -232,7 +232,7 @@ Compare all methods:
     smoothness), scaled so the outer edge is best.
 - A single **Tune & simulate** also populates all three tabs (heatmap and
   radar then reflect whatever is in the session). The metrics live in
-  `compare.py`; Ms/Mt come from the loop frequency response L = C·P, and
+  `pid_compare.py`; Ms/Mt come from the loop frequency response L = C·P, and
   the load-rejection IAE from a unit step injected at the plant input.
 
 ## File layout
@@ -240,11 +240,11 @@ Compare all methods:
 | File | Role |
 |------|------|
 | `plant.py` | Transfer-function parser (symbolic + MATLAB), simulation, frequency response, stability |
-| `identify.py` | FOPDT step-fit, relay test, Bode-crossover ultimate gain |
-| `tune.py` | Nine tuning methods + `halve_gains` post-processor |
-| `simulate.py` | Closed-loop PID simulation (anti-windup + D-filter), setpoint waveforms (step/ramp/pulse), load-disturbance injection, performance metrics |
-| `compare.py` | Cross-method comparison: robustness metrics (Ms, Mt, gain/phase margin), load-rejection IAE, and the `compare_all_methods` driver |
-| `app.py` | Tkinter UI, method dispatch, and the Compare-all-methods window (heatmap table + radar) |
+| `pid_identify.py` | FOPDT step-fit, relay test, Bode-crossover ultimate gain |
+| `pid_tune.py` | Nine tuning methods + `halve_gains` post-processor |
+| `pid_simulate.py` | Closed-loop PID simulation (anti-windup + D-filter), setpoint waveforms (step/ramp/pulse), load-disturbance injection, performance metrics |
+| `pid_compare.py` | Cross-method comparison: robustness metrics (Ms, Mt, gain/phase margin), load-rejection IAE, and the `compare_all_methods` driver |
+| `pid_app.py` | Tkinter UI, method dispatch, and the Compare-all-methods window (heatmap table + radar) |
 | `test_pid_tuner.py` | unittest suite — 90 tests, no Tkinter dependency, includes a benchmark summary table |
 | `pidtuner.spec` | PyInstaller spec for building a standalone executable |
 | `.github/workflows/build.yml` | GitHub Actions: builds Windows/macOS/Linux executables on every tag |
@@ -254,9 +254,9 @@ or notebook without the UI:
 
 ```python
 from plant import TransferFunction
-from identify import run_step_test
-from tune import tune_simc
-from simulate import simulate_closed_loop, format_metrics
+from pid_identify import run_step_test
+from pid_tune import tune_simc
+from pid_simulate import simulate_closed_loop, format_metrics
 
 plant = TransferFunction.parse("1000/((s+1)(10s+1))", L=0.5)
 _, _, _, _, fopdt = run_step_test(plant)

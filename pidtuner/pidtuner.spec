@@ -26,7 +26,7 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ["app.py"],
+    ["pid_app.py"],
     pathex=[],
     binaries=[],
     datas=datas,

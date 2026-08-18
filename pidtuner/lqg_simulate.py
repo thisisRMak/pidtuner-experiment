@@ -1,5 +1,5 @@
 """Closed-loop simulation for the LQR/LQG design track — the LQG-track
-analog of simulate.py.
+analog of pid_simulate.py.
 
 Three simulation modes, matching the shapes an LQGDesignResult/
 ExplicitModelFollowingResult can take:
@@ -16,7 +16,7 @@ ExplicitModelFollowingResult can take:
     autonomously under Am (eq. 48 — no exogenous input to the model).
 
 Actuator saturation is a plain clip (no back-calculation-style anti-windup —
-that machinery is PID-specific, see simulate.py's module docstring).
+that machinery is PID-specific, see pid_simulate.py's module docstring).
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class LQGSimResult:
 
 def auto_t_end(closed_loop_poles, extra_poles=None):
     """15x the slowest closed-loop time constant, floor 5s — same spirit as
-    plant.auto_dt()/simulate.py's t_end heuristic (duration scales with the
+    plant.auto_dt()/pid_simulate.py's t_end heuristic (duration scales with the
     actual dynamics rather than a fixed guess). extra_poles lets a second
     pole set (e.g. explicit model-following's Am, which can be slower than
     the plant) factor into the duration too."""
@@ -70,7 +70,7 @@ def auto_t_end(closed_loop_poles, extra_poles=None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Metrics — the LQ-cost-native analog of simulate.py's compute_metrics
+# Metrics — the LQ-cost-native analog of pid_simulate.py's compute_metrics
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_regulator_metrics(t, x, u):
@@ -106,8 +106,8 @@ def format_regulator_metrics(m):
 
 def _step_channel_metrics(t, y_col, final):
     """One output channel's step-response metrics (Overshoot%, Rise 10-90%,
-    Settling 2%) — same definitions as simulate.py's compute_metrics, but
-    sign-aware: simulate.py's version silently assumes a positive-going
+    Settling 2%) — same definitions as pid_simulate.py's compute_metrics, but
+    sign-aware: pid_simulate.py's version silently assumes a positive-going
     step (`np.max(y)` for overshoot), which breaks for a negative reference
     (the LQG track's own reference-tracking test uses r=[1.0, -0.5] — a
     mixed-sign command, exactly the case that would misfire). Overshoot is
@@ -136,7 +136,7 @@ def _step_channel_metrics(t, y_col, final):
 def compute_tracking_metrics(t, y, r):
     """Per-output-channel step-response metrics (Overshoot%, Rise, Settling)
     for a reference-tracking simulation — the MIMO/LQG-track analog of
-    simulate.py's step-response branch of compute_metrics. Only meaningful
+    pid_simulate.py's step-response branch of compute_metrics. Only meaningful
     when y is actually being driven toward a nonzero constant r (see
     simulate_state_feedback's r parameter) — there's no equivalent for the
     plain regulator case (driving x to 0 has no "final value" to overshoot

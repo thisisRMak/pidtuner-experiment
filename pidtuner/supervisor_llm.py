@@ -6,7 +6,7 @@ Empirically verified against the locally installed `ollama` package
 `resp.message.tool_calls`, each a `ToolCall(function=Function(name=...,
 arguments=<dict>))` -- this package version does NOT expose a per-call id,
 unlike Ollama's raw HTTP /api/chat response. Tool results are threaded back
-by `tool_name`, not by call id (see supervisor_session.py).
+by `tool_name`, not by call id (see supervisor_session_pid.py).
 """
 
 from __future__ import annotations

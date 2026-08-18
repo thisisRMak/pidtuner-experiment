@@ -2,7 +2,7 @@
 """Runnable example for the MIMO-PI track (mimo_pi.py) — Windup_AEN 7.pdf
 §9.3 multivariable integral anti-windup, Phase 1.
 
-Not a full CLI (no argparse, no --json/--plot flags like cli.py/cli_lqg.py
+Not a full CLI (no argparse, no --json/--plot flags like cli_pid.py/cli_lqg.py
 have) — this is a quick, self-contained demonstration you can point at
 directly:
 

@@ -79,7 +79,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from plant import TransferFunction, poly_mul, poly_add
-from tuning_methods import PIDGains
+from pid_tuning_methods import PIDGains
 
 
 # ─────────────────────────────────────────────────────────────────────────────

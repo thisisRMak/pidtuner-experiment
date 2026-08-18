@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import (
     FigureCanvasTkAgg, NavigationToolbar2Tk,
 )
 
-from simulate import saturation_mask
+from pid_simulate import saturation_mask
 
 
 def create_response_figure(parent):

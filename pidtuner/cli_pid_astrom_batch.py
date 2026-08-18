@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-off batch runner over Astrom & Hagglund's 133-process test batch
-(see astrom_test_batch.py; PID Controllers: Theory, Design, and Tuning,
+(see pid_astrom_test_batch.py; PID Controllers: Theory, Design, and Tuning,
 2nd ed., p. 227).
 
 Runs every one of the 9 tuning methods (compare_all_methods) against every
@@ -12,14 +12,14 @@ stays a batch job.
 
 Commands
 --------
-    python cli_astrom_batch.py run  --out-dir <dir> [--plot] [--families P1,P7] [--overwrite]
-    python cli_astrom_batch.py list --out-dir <dir> [--family P7]
-    python cli_astrom_batch.py show --out-dir <dir> <path>
+    python cli_pid_astrom_batch.py run  --out-dir <dir> [--plot] [--families P1,P7] [--overwrite]
+    python cli_pid_astrom_batch.py list --out-dir <dir> [--family P7]
+    python cli_pid_astrom_batch.py show --out-dir <dir> <path>
 
 `run` executes the batch once and writes the folder hierarchy below.
 `list` walks an existing run's manifest and prints what's available.
 `show` pretty-prints one saved result (same text format as
-`cli.py --method all`), given a path relative to --out-dir, e.g.
+`cli_pid.py --method all`), given a path relative to --out-dir, e.g.
 `P7/T=5/L1=0.3` or `P1/T=0.3`.
 
 Folder hierarchy written by `run`
@@ -29,8 +29,8 @@ Folder hierarchy written by `run`
       summary.json / summary.txt  per-method stability rate + Ms/Mt/IAE/OS%/ts stats across the batch
       P1/
         T=0.02/
-          plant.json               {family, params, expr} -- reproducible via cli.py --plant
-          result.json              compare_all_methods() rows, serialized (same shape as cli.py --json)
+          plant.json               {family, params, expr} -- reproducible via cli_pid.py --plant
+          result.json              compare_all_methods() rows, serialized (same shape as cli_pid.py --json)
           step_response.png        only with --plot
         T=0.05/
           ...
@@ -61,10 +61,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from astrom_test_batch import FAMILY_DOCS, BatchPlant, iter_batch
-from compare import TABLE_METRICS, compare_all_methods
+from pid_astrom_test_batch import FAMILY_DOCS, BatchPlant, iter_batch
+from pid_compare import TABLE_METRICS, compare_all_methods
 from plant import TransferFunction
-from simulate import simulate_closed_loop
+from pid_simulate import simulate_closed_loop
 
 MANIFEST_NAME = "manifest.json"
 SUMMARY_JSON_NAME = "summary.json"
@@ -76,7 +76,7 @@ PLOT_NAME = "step_response.png"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Row (de)serialization -- own copy, following the precedent already set by
-# cli.py/cli_blackbox.py/supervisor_tools_whitebox.py: each entity keeps its
+# cli_pid.py/cli_pid_blackbox.py/supervisor_tools_whitebox_pid.py: each entity keeps its
 # own serializer rather than sharing one.
 # ─────────────────────────────────────────────────────────────────────────────
 

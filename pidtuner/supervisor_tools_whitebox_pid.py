@@ -2,10 +2,10 @@
 transfer function.
 
 Imports plant.TransferFunction — this module is the ONLY supervisor tool
-module allowed to. supervisor_tools_blackbox.py must never import from here
-or from plant.py directly (enforced by test_supervisor.py's
+module allowed to. supervisor_tools_blackbox_pid.py must never import from here
+or from plant.py directly (enforced by test_supervisor_pid.py's
 test_no_plant_import, mirroring test_pid_tuner.py's existing isolation
-tests for signal_format.py/blackbox.py).
+tests for signal_format.py/pid_blackbox.py).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 
-from compare import compare_all_methods
+from pid_compare import compare_all_methods
 from plant import TransferFunction
 
 RUN_WHITEBOX_BENCHMARK_SCHEMA = {
@@ -66,7 +66,7 @@ def _sig_round(x, sig=4):
 def _serialize_row(row: dict) -> dict:
     """Compact, rounded, JSON-safe row for LLM consumption. Independent of
     cli.serialize_row_json by design -- see plan: each entity keeps its own
-    serializer, following the precedent cli.py/cli_blackbox.py already set."""
+    serializer, following the precedent cli_pid.py/cli_pid_blackbox.py already set."""
     gains = row.get("gains")
     out = {}
     for k, v in row.items():

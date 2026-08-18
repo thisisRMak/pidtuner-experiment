@@ -1,5 +1,5 @@
 """The LQR/LQG supervisor conversation loop -- LQG-flavored counterpart to
-supervisor_session.py.
+supervisor_session_pid.py.
 
 Deliberately a separate, smaller class rather than a reuse of
 supervisor_session.Session: Session's constructor hardcodes two named tool
@@ -10,7 +10,7 @@ benchmark tool here, always available, nothing to gate. Forcing this
 through Session's two-slot shape would mean either faking a boolean that
 means nothing or reworking Session's gating logic and risking the
 (tested, working) PID path. This mirrors the project's existing choice to
-keep cli.py/cli_blackbox.py/cli_lqg.py as separate flat scripts rather than
+keep cli_pid.py/cli_pid_blackbox.py/cli_lqg.py as separate flat scripts rather than
 a unified dispatcher (docs/lqg_plan.md "Decisions") -- same tradeoff, same
 call: duplication now over a shared abstraction bent to fit a shape it
 wasn't designed for. Revisit if a third domain needs this pattern too.
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 
-from supervisor_common import FINALIZE_RECOMMENDATION_SCHEMA, make_finalize_recommendation_tool
+from supervisor_common_pid import FINALIZE_RECOMMENDATION_SCHEMA, make_finalize_recommendation_tool
 from supervisor_common_lqg import (
     SET_PRIORITIES_LQG_SCHEMA,
     LQGPrioritiesWorksheet,

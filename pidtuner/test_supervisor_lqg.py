@@ -1,5 +1,5 @@
 """Unit tests for the LQR/LQG supervisor layer -- no live Ollama required.
-LQG-flavored counterpart to test_supervisor.py; same structure (tool
+LQG-flavored counterpart to test_supervisor_pid.py; same structure (tool
 wrapper tests, priorities worksheet tests, session loop tests via a
 scripted fake LLM client), no live-model end-to-end coverage.
 

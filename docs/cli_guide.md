@@ -7,7 +7,7 @@ environment is active and you're running from the `pidtuner/` directory
 (see `pidtuner/README.md` for environment setup).
 
 There isn't a single unified `pidtuner` command — each mode is its own flat
-script (`cli.py`, `cli_lqg.py`, ...), a deliberate choice (see
+script (`cli_pid.py`, `cli_lqg.py`, ...), a deliberate choice (see
 `docs/lqg_plan.md` "Decisions") kept consistent across both tracks. This
 guide is the thing that ties them together narratively; `--help` on any
 script is the source of truth for its exact flags.
@@ -16,28 +16,28 @@ script is the source of truth for its exact flags.
 
 | I want to... | PID (transfer function) | LQR/LQG (state-space) |
 |---|---|---|
-| Tune one plant, one method, right now | `cli.py` | `cli_lqg.py` |
-| Tune from signal data only (no known TF) | `cli_blackbox.py` | — (not built; see `docs/lqg_testing.md`) |
-| Talk through tradeoffs conversationally | `cli_supervisor.py` | `cli_supervisor_lqg.py` |
-| Run everything, save a report to review later | `cli_astrom_batch.py` | `lqg_review.py` |
+| Tune one plant, one method, right now | `cli_pid.py` | `cli_lqg.py` |
+| Tune from signal data only (no known TF) | `cli_pid_blackbox.py` | — (not built; see `docs/lqg_testing.md`) |
+| Talk through tradeoffs conversationally | `cli_supervisor_pid.py` | `cli_supervisor_lqg.py` |
+| Run everything, save a report to review later | `cli_pid_astrom_batch.py` | `lqg_review.py` |
 
 ## One-off runs
 
-### PID — `cli.py`
+### PID — `cli_pid.py`
 
 ```bash
 # One method, human-readable text
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method simc
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method simc
 
 # One method, JSON, with a step-response plot
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method boyd --Ms 1.6 --Mt 1.6 --json --plot out.png
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method boyd --Ms 1.6 --Mt 1.6 --json --plot out.png
 
 # All 9 methods at once (used as the basis for the batch runner below)
-python3 cli.py --plant "1000/((s+1)(10s+1))" --method all --json > all_methods.json
+python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method all --json > all_methods.json
 ```
 
 Plant syntax, dead time (`--L`), post-processing (`--halve`), and the
-black-box two-step pipeline (`cli.py --gen-signal` + `cli_blackbox.py`) are
+black-box two-step pipeline (`cli_pid.py --gen-signal` + `cli_pid_blackbox.py`) are
 covered with worked examples in `pidtuner/examples/run_whitebox_demo.sh` /
 `run_blackbox_demo.sh`.
 
@@ -116,7 +116,7 @@ Both require a local [Ollama](https://ollama.com) daemon with a
 tool-calling model pulled (`ollama pull qwen3-coder:30b`).
 
 ```bash
-python3 cli_supervisor.py        # PID: describe your plant/priorities in chat
+python3 cli_supervisor_pid.py        # PID: describe your plant/priorities in chat
 python3 cli_supervisor_lqg.py    # LQR/LQG: name a preset plant + priorities in chat
 ```
 
@@ -128,15 +128,15 @@ merged supervisor — see "Design notes" below for why.
 
 ## Batch runs (produce a log file to review)
 
-### PID — `cli_astrom_batch.py`
+### PID — `cli_pid_astrom_batch.py`
 
 Runs all 9 tuning methods against Åström & Hägglund's 133-process test
 batch (*PID Controllers: Theory, Design, and Tuning*, 2nd ed., p. 227):
 
 ```bash
-python3 cli_astrom_batch.py run --out-dir examples/out/astrom --plot
-python3 cli_astrom_batch.py list --out-dir examples/out/astrom
-python3 cli_astrom_batch.py show --out-dir examples/out/astrom P7/T=5/L1=0.3
+python3 cli_pid_astrom_batch.py run --out-dir examples/out/astrom --plot
+python3 cli_pid_astrom_batch.py list --out-dir examples/out/astrom
+python3 cli_pid_astrom_batch.py show --out-dir examples/out/astrom P7/T=5/L1=0.3
 ```
 
 Writes `manifest.json` (every plant → path, timestamp, git commit),
@@ -173,7 +173,7 @@ individual output along the way.
   plant representations (transfer function vs. state-space), different
   metric vocabularies, no shared math beyond both ultimately producing a
   gain to apply. See `docs/lqg_plan.md` "Decisions".
-- **`cli_supervisor_lqg.py` is a separate script from `cli_supervisor.py`**,
+- **`cli_supervisor_lqg.py` is a separate script from `cli_supervisor_pid.py`**,
   not a mode flag on the same one: the PID supervisor's `Session` class
   gates its one-of-two benchmark tools on `tf_known` (does the user know
   their transfer function?) — a concept with no LQG analog, since there's

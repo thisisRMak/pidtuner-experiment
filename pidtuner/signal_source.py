@@ -64,7 +64,7 @@ class SignalGenerator:
         `dt` overrides the auto-picked sample time (plant.auto_dt(), which
         gives only L/5 samples across the dead time). Denser sampling
         (smaller dt) meaningfully improves delay-sensitive identification —
-        see cli.py --gen-signal --dt."""
+        see cli_pid.py --gen-signal --dt."""
         t, u, y_true, y_meas, dt = self._simulate_step_response(
             step_amp=step_amp, t_max=t_max, noise_sigma=noise_sigma, seed=seed, dt=dt)
         return Signal(

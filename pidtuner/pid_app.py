@@ -30,25 +30,25 @@ import matplotlib
 matplotlib.use("TkAgg")
 
 from plant import TransferFunction, parse_coeff_list
-from identify import (
+from pid_identify import (
     run_step_test, run_relay_test, find_ultimate_gain, FOPDT,
 )
-from widgets import ClosableNotebook
-from tune import select_slowest_stable_poles
-from tuning_methods import (
+from pid_widgets import ClosableNotebook
+from pid_tune import select_slowest_stable_poles
+from pid_tuning_methods import (
     PIDGains, TuningResult, halve_gains,
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
-from compare import compare_all_methods, metric_row
-from comparison_views import draw_heatmap_tab, draw_radar_tab
-from response_plotting import create_response_figure, draw_response_tab
-from parameter_panels import (
+from pid_compare import compare_all_methods, metric_row
+from pid_comparison_views import draw_heatmap_tab, draw_radar_tab
+from pid_response_plotting import create_response_figure, draw_response_tab
+from pid_parameter_panels import (
     build_pole_cancel_panel, build_zn1_panel, build_zn2_panel,
     build_amigo_panel, build_simc_panel, build_boyd_panel,
     build_cohen_coon_panel, build_chr_panel, build_tyreus_luyben_panel,
 )
-from simulate import simulate_closed_loop, format_metrics, saturation_mask
+from pid_simulate import simulate_closed_loop, format_metrics, saturation_mask
 
 
 METHODS = [
@@ -356,7 +356,7 @@ class PIDTunerApp:
                   ).pack(anchor="w", pady=(2, 0))
 
         # Anti-windup: only visible/relevant once u min/u max above can
-        # actually saturate the actuator (see simulate.py module docstring).
+        # actually saturate the actuator (see pid_simulate.py module docstring).
         aw_row = ttk.Frame(sf)
         aw_row.pack(fill="x", pady=(4, 0))
         ttk.Label(aw_row, text="Anti-windup", width=18).pack(side="left")

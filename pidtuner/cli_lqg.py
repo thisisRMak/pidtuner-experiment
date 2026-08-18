@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Command-line interface for the LQR/LQG design track (docs/lqg_plan.md
-Phase 1). Same shape/conventions as cli.py — flat script, --json output,
+Phase 1). Same shape/conventions as cli_pid.py — flat script, --json output,
 --plot saves a matplotlib figure headlessly (Agg backend) — but over
 StateSpacePlant/LQGDesignResult instead of TransferFunction/PIDGains.
 
@@ -137,7 +137,7 @@ def _auto_t_end(res):
 def format_regulator_comparison_table(rows):
     """Text table for --method all: the regulator-family comparison
     (LQR/OutputWeightedLQR/BrysonLQR/LQG[/Custom]), same shape/columns as
-    cli.py's --method all text output for the PID side. When
+    cli_pid.py's --method all text output for the PID side. When
     reference-tracking is active, appends each row's per-channel
     Overshoot/Rise/Settling underneath the table (too many extra columns
     to fit inline for MIMO plants)."""
@@ -219,7 +219,7 @@ def plot_regulator_comparison(rows, ex, path, reference=None):
     norms, not individual channels — MIMO state counts vary a lot across
     the catalog, up to 15, so per-channel legends across 4/5 methods
     wouldn't stay readable) for all regulator-family methods on shared
-    axes, the LQG-track analog of cli.py's --method all overlay plot.
+    axes, the LQG-track analog of cli_pid.py's --method all overlay plot.
 
     When --reference-tracking is active (reference given), the norm plot
     isn't useful (x doesn't go to 0), so this switches to one panel per

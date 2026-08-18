@@ -2,9 +2,9 @@
 """Command-line interface for the black-box PID tuner (entity C).
 
 Deliberately has no --plant/--L flag: this script can only ever consume a
-previously-published Signal (via cli.py --gen-signal, or any other producer
+previously-published Signal (via cli_pid.py --gen-signal, or any other producer
 of the signal_format.Signal .npz format), never the ground-truth transfer
-function. This is a process-boundary reinforcement of blackbox.py's
+function. This is a process-boundary reinforcement of pid_blackbox.py's
 isolation contract, not just a code-level one.
 """
 
@@ -17,7 +17,7 @@ import sys
 import numpy as np
 
 from signal_format import load_signal
-from blackbox import BlackBoxTuner
+from pid_blackbox import BlackBoxTuner
 
 
 def _fmt(v):
@@ -63,10 +63,10 @@ def main():
     )
     parser.add_argument("--in-signal-step", type=str,
                          help="Path to a step-test Signal .npz (e.g. produced by "
-                              "cli.py --gen-signal step)")
+                              "cli_pid.py --gen-signal step)")
     parser.add_argument("--in-signal-relay", type=str,
                          help="Path to a relay-test Signal .npz (e.g. produced by "
-                              "cli.py --gen-signal relay). Enables ZN-II/Tyreus-Luyben "
+                              "cli_pid.py --gen-signal relay). Enables ZN-II/Tyreus-Luyben "
                               "via direct empirical Ku,Pu measurement.")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
     parser.add_argument(
@@ -77,7 +77,7 @@ def main():
             "simc", "boyd", "cohen_coon", "chr", "tyreus_luyben"
         ],
         help="Restrict to a single tuning method instead of running all of "
-             "them (default: all). Same slugs as cli.py --method."
+             "them (default: all). Same slugs as cli_pid.py --method."
     )
     parser.add_argument(
         "--response",

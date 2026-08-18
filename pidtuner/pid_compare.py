@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from identify import run_step_test, find_ultimate_gain
-from simulate import simulate_closed_loop
-from tune import select_slowest_stable_poles
-from tuning_methods import (
+from pid_identify import run_step_test, find_ultimate_gain
+from pid_simulate import simulate_closed_loop
+from pid_tune import select_slowest_stable_poles
+from pid_tuning_methods import (
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
@@ -48,7 +48,7 @@ from tuning_methods import (
 def _controller_response(gains, omega, N=10.0):
     """C(jω) = Kp + Ki/(jω) + Kd·(jω)/(1 + τ_d·jω) for the parallel-form
     PID, with the same derivative filter (τ_d = Kd/(N·|Kp|)) that
-    simulate.py's pid_step()/closed_loop_poles() use — see
+    pid_simulate.py's pid_step()/closed_loop_poles() use — see
     docs/derivative_filter.md. Pass N=0 for the ideal (unfiltered) Kd·jω
     term the tuning methods themselves are derived against.
     """
@@ -82,7 +82,7 @@ def robustness_metrics(plant, gains, N=10.0):
     """Return {Ms, Mt, GM_dB, PM_deg} from L(jω) = C(jω)·P(jω).
 
     C(jω) includes the derivative filter (N=10 default, matching
-    simulate.py's default) so margins reflect the as-simulated loop, not
+    pid_simulate.py's default) so margins reflect the as-simulated loop, not
     the ideal Kd·jω design model. Pass N=0 for the old ideal comparison.
     """
     omega = _robustness_grid(plant)

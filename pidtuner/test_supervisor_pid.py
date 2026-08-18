@@ -1,13 +1,13 @@
 """Unit tests for the LLM supervisor layer -- no live Ollama required.
 
 Run with:
-    python test_supervisor.py
+    python test_supervisor_pid.py
 or:
     python -m unittest test_supervisor -v
 
 Covers everything deterministic: the tool wrapper functions, entity
-isolation (supervisor_tools_blackbox.py must never import plant.py, same
-contract as blackbox.py/signal_format.py), the priorities worksheet, and the
+isolation (supervisor_tools_blackbox_pid.py must never import plant.py, same
+contract as pid_blackbox.py/signal_format.py), the priorities worksheet, and the
 Session tool-call loop plumbing via a scripted fake LLM client. End-to-end
 behavior against the real local qwen3-coder:30b model is a separate, manual
 verification step (see docs/refactor_prompt.md discussion / plan) -- it
@@ -21,15 +21,15 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from compare import compare_all_methods
+from pid_compare import compare_all_methods
 from plant import TransferFunction
 from signal_format import save_signal
 from signal_source import SignalGenerator
 
-from supervisor_common import PRIORITY_CATEGORIES, PrioritiesWorksheet
-from supervisor_session import FALLBACK_MESSAGE, Session
-from supervisor_tools_blackbox import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
-from supervisor_tools_whitebox import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
+from supervisor_common_pid import PRIORITY_CATEGORIES, PrioritiesWorksheet
+from supervisor_session_pid import FALLBACK_MESSAGE, Session
+from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
+from supervisor_tools_whitebox_pid import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
 from test_pid_tuner import _module_imports_plant, benchmark_plant
 
 
@@ -39,10 +39,10 @@ from test_pid_tuner import _module_imports_plant, benchmark_plant
 
 class TestSupervisorToolIsolation(unittest.TestCase):
     def test_no_plant_import(self):
-        import supervisor_tools_blackbox
+        import supervisor_tools_blackbox_pid
         self.assertFalse(
-            _module_imports_plant(supervisor_tools_blackbox.__file__),
-            "supervisor_tools_blackbox.py must never import plant.py",
+            _module_imports_plant(supervisor_tools_blackbox_pid.__file__),
+            "supervisor_tools_blackbox_pid.py must never import plant.py",
         )
 
 

@@ -9,7 +9,7 @@ import numpy as np
 from typing import Optional
 
 from plant import TransferFunction
-from identify import FOPDT
+from pid_identify import FOPDT
 from dataclasses import dataclass, field
 
 @dataclass

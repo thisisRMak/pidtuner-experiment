@@ -10,17 +10,17 @@ metadata for the UI to display the identified parameters that drove them
 pole-cancellation).
 
 Each function is a thin wrapper instantiating the corresponding class in
-tuning_methods.py and calling .tune(). app.py, cli.py, and compare.py now
+pid_tuning_methods.py and calling .tune(). pid_app.py, cli_pid.py, and pid_compare.py now
 call the tuning_methods classes directly; these wrappers remain only
 because test_pid_tuner.py's ~72 assertions call them by name.
 
 TODO(future): consider deleting these wrapper functions and rewriting
 test_pid_tuner.py to instantiate tuning_methods classes directly instead
 (e.g. Simc(fopdt, tau_c=...).tune() rather than tune_simc(fopdt, tau_c=...)),
-then relocate select_slowest_stable_poles into tuning_methods.py (e.g. as a
+then relocate select_slowest_stable_poles into pid_tuning_methods.py (e.g. as a
 StablePoleCancellation staticmethod) so this module can shrink or go away
 entirely. Deferred because it touches every test call site and requires
-explicitly relaxing the original invariant that tune.py's public functions
+explicitly relaxing the original invariant that pid_tune.py's public functions
 must keep working unchanged for existing callers.
 
 Methods implemented:
@@ -42,8 +42,8 @@ from typing import Optional
 import numpy as np
 
 from plant import TransferFunction, poly_mul
-from identify import FOPDT
-from tuning_methods import (
+from pid_identify import FOPDT
+from pid_tuning_methods import (
     PIDGains, TuningResult, halve_gains,
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben

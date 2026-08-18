@@ -1,8 +1,8 @@
-"""LQG-flavored counterpart to supervisor_common.py: the priorities
+"""LQG-flavored counterpart to supervisor_common_pid.py: the priorities
 vocabulary and worksheet for the LQR/LQG supervisor.
 
 `FINALIZE_RECOMMENDATION_SCHEMA`/`make_finalize_recommendation_tool` from
-supervisor_common.py are domain-agnostic (method_name + rationale, grounded
+supervisor_common_pid.py are domain-agnostic (method_name + rationale, grounded
 against whatever names a benchmark tool returned) and are reused as-is by
 supervisor_session_lqg.py — no LQG-specific version needed. Only the
 priorities side needs its own vocabulary: PID's PRIORITY_CATEGORIES maps to

@@ -169,10 +169,10 @@ questions, so merging them would compare apples to oranges:
   optional `am_diag` rows come from the same function.
 
 Both `cli_lqg.py` and `supervisor_tools_lqg.py` call into `lqg_compare.py`
-as the shared core (mirroring `compare.py`'s role for `cli.py`/
-`supervisor_tools_whitebox.py`) and do their own presentation on top (CLI
+as the shared core (mirroring `pid_compare.py`'s role for `cli_pid.py`/
+`supervisor_tools_whitebox_pid.py`) and do their own presentation on top (CLI
 text/plot vs. the supervisor's rounded/JSON-safe rows) — `lqg_compare.py`
-itself has no plotting code, matching `compare.py`'s convention.
+itself has no plotting code, matching `pid_compare.py`'s convention.
 
 ### Custom weights and reference-tracking on the regulator comparison
 
@@ -221,10 +221,10 @@ intuition for a decoupled SISO system).
 ## Reference-tracking step metrics (Overshoot/Rise/Settling)
 
 `lqg_simulate.compute_tracking_metrics(t, y, r)` — the MIMO/LQG-track
-analog of `simulate.py`'s step-response metrics, computed per output
+analog of `pid_simulate.py`'s step-response metrics, computed per output
 channel when `simulate_state_feedback` is given a nonzero constant `r`
 (i.e. an actual reference-tracking simulation, not the plain regulator
-case). **Sign-aware**, unlike `simulate.py`'s original (which silently
+case). **Sign-aware**, unlike `pid_simulate.py`'s original (which silently
 assumes a positive-going step via `np.max(y)`): for a negative reference,
 overshoot is measured against `np.min(y)` (how far below the negative
 target the response dips), not `np.max(y)`. This matters concretely here —
@@ -248,7 +248,7 @@ automatically whenever they're present.
 ## LLM supervisor (`cli_supervisor_lqg.py`)
 
 A conversational layer over the same techniques, mirroring
-`cli_supervisor.py`'s PID supervisor but as a separate script/session — see
+`cli_supervisor_pid.py`'s PID supervisor but as a separate script/session — see
 `docs/cli_guide.md` "Design notes" for why it's not a mode flag on the PID
 one. `supervisor_tools_lqg.run_lqg_benchmark(plant_preset, x_max=None,
 u_max=None, Q_diag=None, R_diag=None, reference=None, am_diag=None,
@@ -274,7 +274,7 @@ at what changed, and propose again, empirically, rather than reasoning
 abstractly about which direction to move a weight. Tested in
 `test_supervisor_lqg.py` (scripted fake-LLM session tests,
 no live Ollama needed, same pattern as
-`test_supervisor.py`).
+`test_supervisor_pid.py`).
 
 ## `AIExample2RTP.m` — fixed, no longer excluded
 

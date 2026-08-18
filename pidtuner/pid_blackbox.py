@@ -1,4 +1,4 @@
-"""blackbox.py — Entity C: the black-box PID tuner.
+"""pid_blackbox.py — Entity C: the black-box PID tuner.
 
 Isolation contract: this module never imports `plant.py` and never receives
 a `plant.TransferFunction` built from ground-truth coefficients — it only
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from signal_format import Signal
-from identify import (
+from pid_identify import (
     FOPDT,
     SOPDT,
     fit_fopdt_from_step,
@@ -28,8 +28,8 @@ from identify import (
     identify_ultimate_gain_from_relay,
     find_ultimate_gain,
 )
-from tune import select_slowest_stable_poles
-from tuning_methods import (
+from pid_tune import select_slowest_stable_poles
+from pid_tuning_methods import (
     StablePoleCancellation,
     ZieglerNicholsI,
     ZieglerNicholsII,
@@ -149,7 +149,7 @@ class BlackBoxTuner:
         return StablePoleCancellation(surrogate, p1, p2, Kd=Kd).tune()
 
     #: CLI/API slug -> row name, for callers that want a single method instead
-    #: of the full sweep. Mirrors cli.py's --method choices (minus "all").
+    #: of the full sweep. Mirrors cli_pid.py's --method choices (minus "all").
     #: "chr" is intentionally absent — it fans out into 4 rows disambiguated
     #: by chr_response/chr_overshoot instead of a fixed name.
     METHOD_SLUGS = {
@@ -168,7 +168,7 @@ class BlackBoxTuner:
         """Run the tuning methods against the identified model.
 
         `method` (default None == "all") restricts this to a single method,
-        by the same slugs cli.py's --method uses ("zn1", "boyd", "chr", ...).
+        by the same slugs cli_pid.py's --method uses ("zn1", "boyd", "chr", ...).
         Unknown slugs raise ValueError. Restricting also skips the *work* for
         the other methods, not just their reporting — e.g. Boyd's Ms/Mt
         search only runs when it was actually asked for.

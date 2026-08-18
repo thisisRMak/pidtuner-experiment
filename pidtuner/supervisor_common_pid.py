@@ -3,7 +3,7 @@ families: the priorities worksheet, the priority-category vocabulary, and the
 two tools (`set_priorities`, `finalize_recommendation`) that never need to
 touch a plant or a signal.
 
-No imports from plant.py, signal_format.py, or blackbox.py — this module is
+No imports from plant.py, signal_format.py, or pid_blackbox.py — this module is
 safe for both tool families to depend on.
 """
 
