@@ -1,7 +1,7 @@
 name: Build desktop executables
 
 # Location: this file MUST live at  REPO/.github/workflows/build.yml  (repo root).
-# Application code is in REPO/pidtuner/ (build steps use working-directory: pidtuner);
+# Application code is in REPO/src/ (build steps use working-directory: src);
 # documentation PDF is committed at REPO/docs/PIDTuner_Methods_Reference.pdf and
 # attached to the Release by the separate `docs` job below.
 
@@ -15,7 +15,7 @@ permissions:
 
 defaults:
   run:
-    working-directory: pidtuner   # affects `run:` steps only (not `uses:` actions)
+    working-directory: src   # affects `run:` steps only (not `uses:` actions)
 
 jobs:
   build:

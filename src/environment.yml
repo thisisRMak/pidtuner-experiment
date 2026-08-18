@@ -2,7 +2,7 @@
 #
 # Create:    conda env create -f environment.yml
 # Activate:  conda activate pidtuner
-# Run app:   python app.py
+# Run app:   python pid_app.py
 # Run tests: python test_pid_tuner.py
 #
 # Tkinter is bundled with conda's Python build on all platforms — no

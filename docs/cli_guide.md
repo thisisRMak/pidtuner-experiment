@@ -3,8 +3,8 @@
 One place covering both tracks' command-line tools: one-off runs,
 conversational (LLM supervisor) runs, and batch runs that produce a log
 file to review. Everything below assumes the `pidtuner` conda/pip
-environment is active and you're running from the `pidtuner/` directory
-(see `pidtuner/README.md` for environment setup).
+environment is active and you're running from the `src/` directory
+(see `src/README.md` for environment setup).
 
 There isn't a single unified `pidtuner` command — each mode is its own flat
 script (`cli_pid.py`, `cli_lqg.py`, ...), a deliberate choice (see
@@ -38,7 +38,7 @@ python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method all --json > all_metho
 
 Plant syntax, dead time (`--L`), post-processing (`--halve`), and the
 black-box two-step pipeline (`cli_pid.py --gen-signal` + `cli_pid_blackbox.py`) are
-covered with worked examples in `pidtuner/examples/run_whitebox_demo.sh` /
+covered with worked examples in `src/examples/run_whitebox_demo.sh` /
 `run_blackbox_demo.sh`.
 
 ### LQR/LQG — `cli_lqg.py`
@@ -121,7 +121,7 @@ python3 cli_supervisor_lqg.py    # LQR/LQG: name a preset plant + priorities in 
 ```
 
 Both are thin conversational layers over the same benchmarks the one-off
-CLIs run — see `pidtuner/examples/run_supervisor_demo.sh` /
+CLIs run — see `src/examples/run_supervisor_demo.sh` /
 `run_supervisor_lqg_demo.sh` for scripted (non-interactive) example
 sessions piped via stdin. The two are separate scripts/sessions, not one
 merged supervisor — see "Design notes" below for why.
@@ -162,7 +162,7 @@ covers `LQR` only, not all four methods — extend `lqg_review.py`'s
 `supervisor_tools_lqg.run_lqg_benchmark` function already runs all four
 per plant and is a ready-made reference for how to build those rows).
 
-`pidtuner/examples/run_lqg_demo.sh` exercises every `cli_lqg.py` method
+`src/examples/run_lqg_demo.sh` exercises every `cli_lqg.py` method
 individually first, then calls `lqg_review.py` as its last step — run that
 instead of `lqg_review.py` directly if you want to see each method's
 individual output along the way.

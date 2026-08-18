@@ -2,8 +2,8 @@
 
 A practical guide to trying PIDTuner's two anti-windup modes in both the
 CLI and the GUI. For the full explanation and formulas, see the
-"Anti-windup" section of `pidtuner/README.md` and the module docstring in
-`pidtuner/pid_simulate.py`.
+"Anti-windup" section of `src/README.md` and the module docstring in
+`src/pid_simulate.py`.
 
 ## The short version
 
@@ -27,7 +27,7 @@ Neither mode does anything unless the actuator actually saturates —
 
 ## CLI examples
 
-All commands run from the `pidtuner/` directory. They use the course's
+All commands run from the `src/` directory. They use the course's
 benchmark plant, `1000/((s+1)(10s+1))`, tuned with Ziegler-Nichols I —
 gains small enough that `u_min=-0.003, u_max=0.003` reliably saturates.
 

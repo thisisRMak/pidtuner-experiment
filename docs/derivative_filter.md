@@ -1,13 +1,13 @@
 # Derivative Filtering: When It's Applied and When It Isn't
 
 Short reference for how PIDTuner handles the `Kd` term. See also the
-module docstring in `pidtuner/pid_simulate.py` and the "Derivative filter"
-section of `pidtuner/README.md`.
+module docstring in `src/pid_simulate.py` and the "Derivative filter"
+section of `src/README.md`.
 
 ## The short version
 
 The derivative is filtered **only in the time-domain simulator**
-(`pidtuner/pid_simulate.py`). Every gain-selection method — Boyd loop-shaping,
+(`src/pid_simulate.py`). Every gain-selection method — Boyd loop-shaping,
 pole placement/cancellation, Ziegler-Nichols/Tyreus-Luyben, and the
 closed-loop stability check — works with the **unfiltered** ideal term
 `Kd·s`.

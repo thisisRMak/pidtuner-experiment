@@ -3,7 +3,7 @@
 A desktop PID-tuning tool (ENGR105). Nine tuning methods, closed-loop
 simulation, and a side-by-side method comparison (heatmap + radar).
 
-Developer/build docs live in [`pidtuner/README.md`](pidtuner/README.md).
+Developer/build docs live in [`src/README.md`](src/README.md).
 
 ## Download
 
@@ -33,4 +33,4 @@ Unzip and run `./PIDTuner/PIDTuner`. The binary needs GLIBC ≥ 2.35
 older, build from source instead (see the developer README).
 
 ## Build from source
-See [`pidtuner/README.md`](pidtuner/README.md).
+See [`src/README.md`](src/README.md).

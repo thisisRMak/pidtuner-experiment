@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Demonstrates cli_supervisor.py: a conversational REPL that asks about your
+# Demonstrates cli_supervisor_pid.py: a conversational REPL that asks about your
 # plant/priorities, runs the same white-box/black-box benchmark under the
 # hood, and recommends one tuning technique grounded in the real metrics.
 #
@@ -28,7 +28,7 @@ if ! ollama list 2>/dev/null | grep -q "qwen3-coder"; then
 fi
 
 echo "### Scripted supervisor session (white-box plant, prioritizing low overshoot) ###"
-python3 cli_supervisor.py <<'EOF'
+python3 cli_supervisor_pid.py <<'EOF'
 My plant is 1000/((s+1)(10s+1)). I care most about minimizing overshoot, settling time is secondary.
 /quit
 EOF
