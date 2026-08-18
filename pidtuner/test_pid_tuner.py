@@ -284,6 +284,36 @@ class TestTuningMethods(unittest.TestCase):
         with self.assertRaises(ValueError):
             tune_pole_cancellation(self.plant, p1=-0.5, p2=1.0)
 
+    def test_pole_cancel_complex_pair_auto_select(self):
+        """G = 5/(s^2+2s+5) has poles at -1+-2j. Auto-select must return
+        them as a complex-conjugate pair (not silently drop the imaginary
+        part), and cancelling them must give real Kp=2, Ki=5 (Kd=1):
+        Kp = -2*Re(p)*Kd, Ki = |p|^2*Kd, per the coefficient-matching
+        identity for a complex-conjugate pole pair."""
+        plant = TransferFunction.from_coeffs(num=[5], den=[1, 2, 5])
+        p1, p2 = select_slowest_stable_poles(plant)
+        self.assertAlmostEqual(p1.imag, -p2.imag, places=6)  # conjugates
+        self.assertAlmostEqual(p1.real, 1.0, places=6)
+        self.assertAlmostEqual(abs(p1.imag), 2.0, places=6)
+
+        res = tune_pole_cancellation(plant, p1=p1, p2=p2, Kd=1.0)
+        self.assertIsInstance(res.gains.Kp, float)
+        self.assertIsInstance(res.gains.Ki, float)
+        self.assertAlmostEqual(res.gains.Kp, 2.0, places=6)
+        self.assertAlmostEqual(res.gains.Ki, 5.0, places=6)
+
+    def test_pole_cancel_refuses_rhp_complex(self):
+        """A complex p1 with negative real part is an RHP pole — refuse it
+        same as the real-pole case."""
+        with self.assertRaises(ValueError):
+            tune_pole_cancellation(self.plant, p1=complex(-1, 2), p2=complex(-1, -2))
+
+    def test_pole_cancel_refuses_non_conjugate_complex(self):
+        """p1, p2 that aren't a real pair or complex-conjugate pair would
+        give complex Kp/Ki — refuse rather than silently return nonsense."""
+        with self.assertRaises(ValueError):
+            tune_pole_cancellation(self.plant, p1=complex(1, 2), p2=complex(1, 3))
+
     def test_pole_cancel_refuses_insufficient_poles(self):
         """1st-order plant has only 1 stable pole — auto-select must refuse."""
         plant = TransferFunction.parse("1/(s+1)")

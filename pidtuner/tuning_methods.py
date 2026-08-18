@@ -103,19 +103,29 @@ class StablePoleCancellation(BaseTuningMethod):
         self.Kd = Kd
 
     def tune(self) -> TuningResult:
+        # p1/p2 are real for two real poles, or a complex-conjugate pair
+        # when cancelling a complex pole pair (see select_slowest_stable_poles).
+        # np.real() handles both uniformly for the RHP check.
         for p, name in ((self.p1, "p1"), (self.p2, "p2")):
-            if p <= 0:
+            if np.real(p) <= 0:
                 raise ValueError(
                     f"Pole-cancellation requires a stable pole, but {name}={p} "
                     f"corresponds to an RHP or imaginary-axis pole. "
                     f"Refusing — see lecture: 'never, ever do RHP cancellations.'"
                 )
-        Kp = (self.p1 + self.p2) * self.Kd
-        Ki = self.p1 * self.p2 * self.Kd
+        Kp_raw = (self.p1 + self.p2) * self.Kd
+        Ki_raw = self.p1 * self.p2 * self.Kd
+        if abs(np.imag(Kp_raw)) > 1e-9 or abs(np.imag(Ki_raw)) > 1e-9:
+            raise ValueError(
+                f"p1={self.p1!r} and p2={self.p2!r} are not real or a "
+                f"complex-conjugate pair — the resulting gains would be complex."
+            )
+        Kp = float(np.real(Kp_raw))
+        Ki = float(np.real(Ki_raw))
         return TuningResult(
             method=self.name,
             gains=PIDGains(Kp=Kp, Ki=Ki, Kd=self.Kd),
-            cancelled_poles=[-float(self.p1), -float(self.p2)],
+            cancelled_poles=[-self.p1, -self.p2],
             free_param={"Kd": float(self.Kd)},
             notes=(f"Controller zeros placed at s = -{self.p1:g}, s = -{self.p2:g} to "
                    f"cancel chosen plant poles. Kd is free and sets the "

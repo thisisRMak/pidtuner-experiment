@@ -79,9 +79,10 @@ def tune_pole_cancellation(plant, p1, p2, Kd=1.0):
 def select_slowest_stable_poles(plant):
     """Pick the two slowest stable real-part poles for default cancellation.
 
-    Returns (p1, p2) as positive values (so the pole is at s = -p1).
-    For complex-conjugate pairs we cancel the pair together (using both
-    members of the pair), so we look for real-pole pairs first.
+    Returns (p1, p2) such that the pole(s) are at s = -p1, s = -p2. For two
+    real poles these are positive floats; for a complex-conjugate pair
+    they're complex (conjugates of each other) — StablePoleCancellation
+    handles both. We look for real-pole pairs first.
     """
     poles = plant.poles()
     if len(poles) == 0:
@@ -107,10 +108,10 @@ def select_slowest_stable_poles(plant):
                     # cancel this pair
                     # (s + p1)(s + p2) where p1 = -p, p2 = -conj(p)
                     # -> s^2 - 2*Re(p)*s + |p|^2
-                    # For our API we return (p1, p2) such that
-                    # we'll need to handle complex pair specially.
-                    return float(-np.real(p) + abs(np.imag(p)) * 1j), \
-                           float(-np.real(p) - abs(np.imag(p)) * 1j)
+                    # p1, p2 are complex conjugates of each other, so Kp/Ki
+                    # (computed from their sum/product) come out real.
+                    return (-np.real(p) + abs(np.imag(p)) * 1j), \
+                           (-np.real(p) - abs(np.imag(p)) * 1j)
 
     # Pick two slowest *real* poles
     real_only = [float(-np.real(p)) for p in sorted_by_speed
