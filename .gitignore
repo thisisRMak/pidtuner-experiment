@@ -217,3 +217,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 *.npz
+
+# MISC
+docs/memos
+docs/course_handouts
+docs/course_homeworks
+docs/project_related_handouts
