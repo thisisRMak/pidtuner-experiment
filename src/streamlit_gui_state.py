@@ -41,6 +41,8 @@ class ControllerEntry:
     sim: Any = None
     enabled: bool = True
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    mrow: Any = None    # cached pid_compare.metric_row() (SISO), for heatmap/radar
+    checks: Any = None  # cached lqg_checks.checks_for_result() (MIMO)
 
 
 def init_state() -> None:
@@ -81,6 +83,34 @@ def set_enabled(entry_id: str, value: bool) -> None:
 def set_all_enabled(value: bool) -> None:
     for e in st.session_state[CONTROLLERS_KEY]:
         e.enabled = value
+
+
+# ── kind-scoped variants ────────────────────────────────────────────────
+# A panel (SISO, MIMO) only ever wants to touch its own entries — these
+# spare each panel from filtering st.session_state[CONTROLLERS_KEY] by
+# hand, which is easy to duplicate once a second panel needs the same
+# "select all/deselect all/clear/remove unchecked, but only mine" logic.
+def get_by_kind(kind: str) -> list[ControllerEntry]:
+    return [e for e in st.session_state[CONTROLLERS_KEY] if e.kind == kind]
+
+
+def clear_by_kind(kind: str) -> None:
+    st.session_state[CONTROLLERS_KEY] = [
+        e for e in st.session_state[CONTROLLERS_KEY] if e.kind != kind
+    ]
+
+
+def remove_unchecked_by_kind(kind: str) -> None:
+    st.session_state[CONTROLLERS_KEY] = [
+        e for e in st.session_state[CONTROLLERS_KEY]
+        if e.kind != kind or e.enabled
+    ]
+
+
+def set_all_enabled_by_kind(kind: str, value: bool) -> None:
+    for e in st.session_state[CONTROLLERS_KEY]:
+        if e.kind == kind:
+            e.enabled = value
 
 
 def append_chat_message(role: Literal["user", "assistant"], content: str) -> None:

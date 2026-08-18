@@ -3,10 +3,10 @@
 Ports pid_app.py's controls/tune/simulate/session-list flow onto
 Streamlit widgets, calling the same UI-agnostic backend functions
 (pid_tuning_methods.py, pid_simulate.py, pid_compare.py). Session
-state (tuned-controllers list) goes through gui_state.py rather than
+state (tuned-controllers list) goes through streamlit_gui_state.py rather than
 Tkinter instance attributes.
 
-Heatmap/radar comparison views live in siso_comparison_views.py — a
+Heatmap/radar comparison views live in streamlit_siso_comparison_views.py — a
 Streamlit-native reimplementation of pid_comparison_views.py's drawing
 code (which is Tk-widget-specific), reusing the same plain
 pid_compare.py data functions.
@@ -22,15 +22,15 @@ from plant import TransferFunction, parse_coeff_list
 from pid_identify import run_step_test, run_relay_test, find_ultimate_gain
 from pid_tune import select_slowest_stable_poles
 from pid_tuning_methods import (
-    PIDGains, halve_gains,
+    halve_gains,
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
 from pid_compare import compare_all_methods, metric_row
 from pid_simulate import simulate_closed_loop, format_metrics, saturation_mask
 
-import gui_state as gs
-import siso_comparison_views as scv
+import streamlit_gui_state as gs
+import streamlit_siso_comparison_views as scv
 
 METHODS = [
     "1. Stable pole cancellation",
@@ -51,7 +51,7 @@ PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
 
 # ── plant ────────────────────────────────────────────────────────────────
 def _build_plant():
-    L = st.session_state.get("siso_L", 0.0)
+    L = st.session_state["siso_L"]
     form = st.session_state["siso_plant_form"]
     if form == "Symbolic":
         return TransferFunction.parse(st.session_state["siso_tf_expr"], L=L)
@@ -102,8 +102,9 @@ def _render_method_args(method):
     if method.startswith("1."):
         mode = st.radio("Pole selection", ["auto", "manual"], key="pc_mode",
                         horizontal=True)
-        st.number_input("pole 1", value=-1.0, key="pc_p1", disabled=mode == "auto")
-        st.number_input("pole 2", value=-2.0, key="pc_p2", disabled=mode == "auto")
+        st.caption("Cancel poles at s = −p₁, s = −p₂")
+        st.number_input("p₁ (positive)", value=0.1, key="pc_p1", disabled=mode == "auto")
+        st.number_input("p₂ (positive)", value=1.0, key="pc_p2", disabled=mode == "auto")
         st.text_input("Kd (blank/1.0 = auto-scaled)", value="1.0", key="pc_kd")
     elif method.startswith("2."):
         st.number_input("step amplitude", value=1.0, key="zn1_step")
@@ -269,7 +270,7 @@ def _next_label(method, halved, sim):
     if kind != "step":
         base = f"{base} ({kind})"
     base += _antiwindup_tag(sim)
-    siso_entries = [e for e in st.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso"]
+    siso_entries = gs.get_by_kind("siso")
     count = sum(1 for e in siso_entries if e.label.split(" #")[0] == base)
     return base if count == 0 else f"{base} #{count + 1}"
 
@@ -304,9 +305,7 @@ def _do_compare_all(plant):
     except Exception as exc:
         st.error(f"Comparison failed: {exc}")
         return
-    st.session_state[gs.CONTROLLERS_KEY] = [
-        e for e in st.session_state[gs.CONTROLLERS_KEY] if e.kind != "siso"
-    ]
+    gs.clear_by_kind("siso")
     n_ok = 0
     for row in rows:
         gains = row.get("gains")
@@ -328,36 +327,53 @@ def _do_compare_all(plant):
 # ── session list ─────────────────────────────────────────────────────────
 def _render_session_list():
     st.subheader("Tuned controllers (session overlay)")
-    siso_entries = [e for e in st.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso"]
+    siso_entries = gs.get_by_kind("siso")
     if not siso_entries:
         st.caption("Tune a method (or Compare all methods) to populate this list.")
         return
 
+    # No st.rerun() needed after these — they mutate state that the rest
+    # of this same render() pass (the checkbox loop right below, and the
+    # plots column after it) reads fresh, so the mutation is already
+    # reflected by the time this script run finishes. Clear/remove-unchecked
+    # replace the list itself rather than mutating entries in place, so
+    # siso_entries is re-fetched afterward instead of relying on the
+    # now-stale snapshot from the top of this function.
+    #
+    # Select/Deselect all also have to force-write each checkbox's own
+    # session_state key (siso_en_<id>), not just entry.enabled: once a
+    # checkbox with a given key has rendered once, Streamlit ignores a
+    # later value= on that same key and keeps the widget's own recorded
+    # state — so without this, the checkbox loop below would read back
+    # its own stale True/False and immediately overwrite entry.enabled
+    # right back to what it was before the click (via the "enabled !=
+    # entry.enabled" sync a few lines down).
     cols = st.columns(4)
     if cols[0].button("Select all", key="siso_select_all"):
+        gs.set_all_enabled_by_kind("siso", True)
         for e in siso_entries:
-            e.enabled = True
-        st.rerun()
+            st.session_state[f"siso_en_{e.id}"] = True
     if cols[1].button("Deselect all", key="siso_deselect_all"):
+        gs.set_all_enabled_by_kind("siso", False)
         for e in siso_entries:
-            e.enabled = False
-        st.rerun()
+            st.session_state[f"siso_en_{e.id}"] = False
     if cols[2].button("Clear all", key="siso_clear_all"):
-        st.session_state[gs.CONTROLLERS_KEY] = [
-            e for e in st.session_state[gs.CONTROLLERS_KEY] if e.kind != "siso"
-        ]
-        st.rerun()
+        gs.clear_by_kind("siso")
     if cols[3].button("Remove unchecked", key="siso_remove_unchecked"):
-        st.session_state[gs.CONTROLLERS_KEY] = [
-            e for e in st.session_state[gs.CONTROLLERS_KEY]
-            if e.kind != "siso" or e.enabled
-        ]
-        st.rerun()
+        gs.remove_unchecked_by_kind("siso")
+    siso_entries = gs.get_by_kind("siso")
 
     for i, entry in enumerate(siso_entries):
         entry.color = PALETTE[i % len(PALETTE)]
         c1, c2, c3 = st.columns([1, 3, 4])
-        enabled = c1.checkbox("enabled", value=entry.enabled, key=f"siso_en_{entry.id}",
+        checkbox_key = f"siso_en_{entry.id}"
+        # Once a widget's key has a value in session_state, Streamlit warns
+        # (and eventually ignores) a value= passed alongside it — so this
+        # only seeds the key the first time this entry is ever rendered;
+        # every rerun after that reads through the key alone, and the bulk
+        # actions above write straight into this same key to change it.
+        st.session_state.setdefault(checkbox_key, entry.enabled)
+        enabled = c1.checkbox("enabled", key=checkbox_key,
                               label_visibility="collapsed")
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
@@ -381,20 +397,17 @@ def _session_rows():
     """Metric rows for the enabled SISO session entries — mirrors
     pid_app.py's _session_rows()."""
     rows = []
-    for e in st.session_state[gs.CONTROLLERS_KEY]:
-        if e.kind != "siso" or not e.enabled:
+    for e in gs.get_by_kind("siso"):
+        if not e.enabled:
             continue
-        row = getattr(e, "mrow", None)
-        if row is None:
-            row = {"name": e.label, "stable": False, "error": "no metrics"}
+        row = e.mrow or {"name": e.label, "stable": False, "error": "no metrics"}
         rows.append(row)
     return rows
 
 
 # ── response plot ────────────────────────────────────────────────────────
 def _render_response_plot():
-    active = [e for e in st.session_state[gs.CONTROLLERS_KEY]
-              if e.kind == "siso" and e.enabled and e.sim is not None]
+    active = [e for e in gs.get_by_kind("siso") if e.enabled and e.sim is not None]
     fig = Figure(figsize=(9, 8), dpi=100)
     ax_y = fig.add_subplot(311)
     ax_u = fig.add_subplot(312, sharex=ax_y)

@@ -1,10 +1,10 @@
 # GUI Strategy — Streamlit plan
 
-**Status: decision made (Streamlit). Build plan Steps 1-3 are done and
-committed (skeleton, session-state schema, SISO PID panel + heatmap/
-radar comparison views). Steps 4-7 (MIMO LQR/LQG, LLM chat, packaging,
-container check) are next. See "Testing debt" below for what's still
-unverified in what's shipped so far.**
+**Status: decision made (Streamlit). Build plan Steps 1-4 are done
+(skeleton, session-state schema, SISO PID panel + heatmap/radar, MIMO
+LQR/LQG panel). Steps 5-7 (LLM chat, packaging, container check) are
+next. See "Testing debt" below for what's still unverified in what's
+shipped so far.**
 
 ## Decision
 
@@ -106,10 +106,24 @@ executable. This changes what "accessible" means here:
    test_streamlit_siso_panel.py`), not one-off scratch scripts — extend
    it rather than re-deriving this coverage by hand when Step 4's MIMO
    panel needs the analogous tests.*
-4. **NEXT.** MIMO LQR/LQG panel, scalar/broadcast `Q`/`R`/`N` knobs per
-   the existing LQG-track backend. *Check: a known-good LQG example from
-   `test_lqg_frequency.py` or equivalent reproduces matching
-   gains/plots through the UI.*
+4. **DONE.** MIMO LQR/LQG panel (`streamlit_mimo_panel.py`), scalar/
+   broadcast `Q`/`R`/`N` knobs (a scale on `Qy=I`, a diagonal broadcast,
+   Bryson's `x_max`/`u_max`) — never raw matrix editors, per this doc's
+   own "CLI vs. GUI" reasoning in `docs/lqg_plan.md`. Covers the
+   regulator family only (LQR/output-weighted/Bryson/LQG via
+   `lqg_compare.compare_regulator_methods`) plus reference tracking.
+   Deliberately deferred, flagged in the module docstring rather than
+   silently dropped: output-feedback (Kalman-driven) simulation,
+   implicit/explicit model-following, and a MIMO heatmap/radar (blocked
+   on `pid_compare.py`'s Ms/Mt-for-MIMO generalization, not done yet
+   per `docs/lqg_plan.md`). *Check: all 5 design methods exercised
+   end-to-end through the UI (`AppTest`), compare-all producing the
+   expected 4 regulator-family rows, reference tracking on both a
+   square and non-square plant (the latter failing cleanly), malformed/
+   wrong-length broadcast fields failing cleanly, session-list bulk
+   actions, and SISO/MIMO state isolation (one shared controllers list,
+   keyed by `kind` — a MIMO clear-all must never touch SISO entries).
+   All in `test_streamlit_mimo_panel.py`.*
 5. **LLM chat panel**, wired to the multi-provider supervisor
    (`docs/aituner_plan.md`), sharing the Step 2 session-state pattern
    for chat history. *Check: a conversational tuning request actually

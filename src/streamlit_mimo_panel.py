@@ -1,0 +1,355 @@
+"""Streamlit MIMO LQR/LQG panel — Build plan Step 4 (docs/gui_plan.md).
+
+Same structure as streamlit_siso_panel.py (plant → method → args → tune
+→ simulate → session list → plot), calling the same UI-agnostic backend
+(lqg_design_methods.py, lqg_bryson.py, lqg_simulate.py, lqg_compare.py,
+lqg_checks.py). Session state goes through streamlit_gui_state.py the
+same way, using kind="mimo".
+
+Per docs/lqg_plan.md "CLI vs. GUI", Q/R/N are exposed as scalar/broadcast
+knobs (a scale on Qy=I, a diagonal broadcast, Bryson's x_max/u_max), never
+raw matrix editors — a form full of spinboxes for a plant with up to 15
+states doesn't reduce cognitive load the way the low-dimensional PID
+panels did.
+
+Deliberately out of scope for this first pass (flagged, not silently
+dropped — same spirit as the SISO panel's heatmap/radar gap early on):
+  - output-feedback (Kalman-driven) simulation — only the state-feedback
+    regulator response is simulated here, matching --sim state_feedback's
+    default in cli_lqg.py.
+  - implicit/explicit model-following (--method implicit/explicit/
+    model_following_all) — a genuinely different workflow (track a target
+    model, not regulate to 0) that deserves its own follow-up rather than
+    a bolted-on fifth method here.
+  - a MIMO heatmap/radar comparison view — pid_compare.py's Ms/Mt-for-MIMO
+    generalization is explicitly not done yet (docs/lqg_plan.md), so
+    there's no tiered-metric data to draw one from.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import streamlit as st
+from matplotlib.figure import Figure
+
+from lqg_examples import list_examples, load_example
+from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracking
+from lqg_bryson import BrysonLQR
+from lqg_simulate import simulate_state_feedback, format_regulator_metrics, auto_t_end
+from lqg_compare import compare_regulator_methods
+from lqg_checks import checks_for_result
+
+import streamlit_gui_state as gs
+
+METHODS = [
+    "LQR (suggested Q/R)",
+    "LQR (custom Q/R diagonal)",
+    "Output-weighted LQR",
+    "Bryson's rule",
+    "LQG (Kalman filter)",
+]
+
+PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
+           "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
+           "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
+
+
+def _broadcast(text, n):
+    """Parse a comma/space-separated numeric text field into an array of
+    length n — one value broadcasts to all n, matching cli_lqg.py's
+    --Q-diag/--x-max convention (one value or exactly n)."""
+    text = text.strip()
+    if not text:
+        return None
+    parts = [p for p in text.replace(",", " ").split() if p]
+    values = [float(p) for p in parts]
+    if len(values) == 1:
+        return np.full(n, values[0])
+    if len(values) != n:
+        raise ValueError(f"needs 1 value (broadcast) or {n} values, got {len(values)}")
+    return np.array(values, dtype=float)
+
+
+# ── plant preset ─────────────────────────────────────────────────────────
+def _render_plant_controls():
+    st.subheader("Plant preset")
+    presets = list_examples()
+    if not presets:
+        st.error("No LQG example plants found (lqg_examples_json/ missing or empty).")
+        return None
+    st.selectbox("Preset", presets, key="mimo_preset")
+    try:
+        ex = load_example(st.session_state["mimo_preset"])
+    except Exception as exc:
+        st.error(str(exc))
+        return None
+    st.success(f"{ex.name}\n\nnx={ex.plant.nx}  nu={ex.plant.nu}  ny={ex.plant.ny}")
+    st.caption(f"{ex.citation}" + (f" — {ex.notes}" if ex.notes else ""))
+    return ex
+
+
+# ── method-specific args ────────────────────────────────────────────────
+def _render_method_args(method, ex):
+    if method == "LQR (custom Q/R diagonal)":
+        st.text_input(f"Q diagonal ({ex.plant.nx} value(s), or 1 to broadcast)",
+                      value="1.0", key="mimo_Q_diag")
+        st.text_input(f"R diagonal ({ex.plant.nu} value(s), or 1 to broadcast)",
+                      value="1.0", key="mimo_R_diag")
+    elif method == "Output-weighted LQR":
+        st.number_input("Qy scale (Qy = scale·I)", value=1.0, key="mimo_Qy_scale")
+        st.number_input("R scale (R = scale·I)", value=1.0, key="mimo_ow_R_scale")
+    elif method == "Bryson's rule":
+        st.text_input(f"x_max ({ex.plant.nx} value(s), or 1 to broadcast)",
+                      value="1.0", key="mimo_x_max")
+        st.text_input(f"u_max ({ex.plant.nu} value(s), or 1 to broadcast)",
+                      value="1.0", key="mimo_u_max")
+    elif method == "LQG (Kalman filter)":
+        st.number_input("Qw scale (process-noise covariance = scale·I)",
+                        value=0.01, key="mimo_Qw_scale")
+        st.number_input("Rv scale (measurement-noise covariance = scale·I)",
+                        value=0.1, key="mimo_Rv_scale")
+
+
+def _design_dispatch(method, ex):
+    plant = ex.plant
+    if method == "LQR (suggested Q/R)":
+        Q, R = ex.build_suggested_Q(), ex.build_suggested_R()
+        return LQR(plant, Q=Q, R=R).design()
+
+    if method == "LQR (custom Q/R diagonal)":
+        Q_diag = _broadcast(st.session_state["mimo_Q_diag"], plant.nx)
+        R_diag = _broadcast(st.session_state["mimo_R_diag"], plant.nu)
+        if Q_diag is None or R_diag is None:
+            raise ValueError("Both Q diagonal and R diagonal are required.")
+        return LQR(plant, Q=np.diag(Q_diag), R=np.diag(R_diag)).design()
+
+    if method == "Output-weighted LQR":
+        Qy = st.session_state["mimo_Qy_scale"] * np.eye(plant.ny)
+        R = st.session_state["mimo_ow_R_scale"] * np.eye(plant.nu)
+        return OutputWeightedLQR(plant, Qy=Qy, R=R).design()
+
+    if method == "Bryson's rule":
+        x_max = _broadcast(st.session_state["mimo_x_max"], plant.nx)
+        u_max = _broadcast(st.session_state["mimo_u_max"], plant.nu)
+        if x_max is None or u_max is None:
+            raise ValueError("Both x_max and u_max are required.")
+        return BrysonLQR(plant, x_max=x_max, u_max=u_max).design()
+
+    if method == "LQG (Kalman filter)":
+        Q, R = ex.build_suggested_Q(), ex.build_suggested_R()
+        Qw = st.session_state["mimo_Qw_scale"] * np.eye(plant.nx)
+        Rv = st.session_state["mimo_Rv_scale"] * np.eye(plant.ny)
+        return LQG(plant, Q=Q, R=R, Qw=Qw, Rv=Rv).design()
+
+    raise RuntimeError(f"unknown method {method}")
+
+
+# ── simulation ───────────────────────────────────────────────────────────
+def _render_sim_settings():
+    st.subheader("Simulation")
+    st.text_input("t_end (blank = auto)", value="", key="mimo_t_end")
+    st.number_input("dt", value=0.01, key="mimo_dt", format="%.4f")
+    st.checkbox("Reference tracking", value=False, key="mimo_ref_tracking")
+    st.text_input("reference (blank = all-ones, ny values or 1 to broadcast)",
+                  value="", key="mimo_reference")
+    st.caption("Reference tracking requires a square plant (nu == ny) and adds "
+               "the N̄ feedforward gain, then simulates tracking that constant "
+               "reference instead of the default unit-perturbation regulator "
+               "response.")
+
+
+def _run_sim(result, ex):
+    t_end_str = st.session_state["mimo_t_end"].strip()
+    t_end = float(t_end_str) if t_end_str else auto_t_end(result.closed_loop_poles)
+    dt = st.session_state["mimo_dt"]
+    t = np.arange(0.0, t_end + dt, dt)
+
+    if st.session_state["mimo_ref_tracking"]:
+        if ex.plant.nu != ex.plant.ny:
+            raise ValueError(
+                f"Reference tracking requires a square plant (nu == ny); "
+                f"{ex.name} has nu={ex.plant.nu}, ny={ex.plant.ny}")
+        ref_str = st.session_state["mimo_reference"].strip()
+        reference = _broadcast(ref_str, ex.plant.ny) if ref_str else np.ones(ex.plant.ny)
+        result = add_reference_tracking(result)
+        r_arr = np.tile(reference, (len(t), 1))
+        sim = simulate_state_feedback(result, t, r=r_arr)
+    else:
+        sim = simulate_state_feedback(result, t)
+    return result, sim
+
+
+# ── actions ──────────────────────────────────────────────────────────────
+def _next_label(method, ex):
+    base = method
+    mimo_entries = gs.get_by_kind("mimo")
+    count = sum(1 for e in mimo_entries if e.label.split(" #")[0] == f"{base} ({ex.key})")
+    label = f"{base} ({ex.key})"
+    return label if count == 0 else f"{label} #{count + 1}"
+
+
+def _do_design(method, ex):
+    try:
+        result = _design_dispatch(method, ex)
+    except Exception as exc:
+        st.error(f"Design failed: {exc}")
+        return
+    try:
+        result, sim = _run_sim(result, ex)
+    except Exception as exc:
+        st.error(f"Simulation failed: {exc}")
+        return
+    label = _next_label(method, ex)
+    entry = gs.ControllerEntry(kind="mimo", label=label, params=result,
+                               result=result, sim=sim)
+    entry.checks = checks_for_result(result)
+    gs.add_controller(entry)
+    st.session_state["mimo_last_result"] = (result, sim, entry.checks)
+    st.success(f"Designed: {label}")
+
+
+def _do_compare_all(ex):
+    try:
+        rows = compare_regulator_methods(ex, t_end=None, dt=st.session_state["mimo_dt"])
+    except Exception as exc:
+        st.error(f"Comparison failed: {exc}")
+        return
+    gs.clear_by_kind("mimo")
+    for row in rows:
+        entry = gs.ControllerEntry(
+            kind="mimo", label=f"{row.name} ({ex.key})",
+            params=row.result, result=row.result, sim=row.sim)
+        entry.checks = row.checks
+        gs.add_controller(entry)
+    st.success(f"Compared {len(rows)} regulator-family methods. Untick any below to declutter.")
+
+
+# ── session list ─────────────────────────────────────────────────────────
+def _render_session_list():
+    st.subheader("Designed controllers (session overlay)")
+    mimo_entries = gs.get_by_kind("mimo")
+    if not mimo_entries:
+        st.caption("Design a method (or Compare all methods) to populate this list.")
+        return
+
+    cols = st.columns(4)
+    if cols[0].button("Select all", key="mimo_select_all"):
+        gs.set_all_enabled_by_kind("mimo", True)
+        for e in mimo_entries:
+            st.session_state[f"mimo_en_{e.id}"] = True
+    if cols[1].button("Deselect all", key="mimo_deselect_all"):
+        gs.set_all_enabled_by_kind("mimo", False)
+        for e in mimo_entries:
+            st.session_state[f"mimo_en_{e.id}"] = False
+    if cols[2].button("Clear all", key="mimo_clear_all"):
+        gs.clear_by_kind("mimo")
+    if cols[3].button("Remove unchecked", key="mimo_remove_unchecked"):
+        gs.remove_unchecked_by_kind("mimo")
+    mimo_entries = gs.get_by_kind("mimo")
+
+    for i, entry in enumerate(mimo_entries):
+        entry.color = PALETTE[i % len(PALETTE)]
+        c1, c2, c3 = st.columns([1, 3, 4])
+        checkbox_key = f"mimo_en_{entry.id}"
+        st.session_state.setdefault(checkbox_key, entry.enabled)
+        enabled = c1.checkbox("enabled", key=checkbox_key, label_visibility="collapsed")
+        if enabled != entry.enabled:
+            gs.set_enabled(entry.id, enabled)
+        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}")
+        stable = "stable" if entry.result.is_stable() else "UNSTABLE"
+        checks_ok = all(c.passed for cs in (entry.checks or {}).values() for c in cs)
+        c3.caption(f"{stable}, checks {'PASS' if checks_ok else 'FAIL'}")
+
+
+def _palette_name(hex_color):
+    names = {"#1f77b4": "blue", "#d62728": "red", "#2ca02c": "green",
+             "#9467bd": "purple", "#ff7f0e": "orange", "#17becf": "blue",
+             "#8c564b": "brown", "#e377c2": "purple", "#7f7f7f": "black",
+             "#bcbd22": "yellow", "#393b79": "blue", "#ad494a": "red"}
+    return names.get(hex_color, "blue")
+
+
+# ── response plot ────────────────────────────────────────────────────────
+def _render_response_plot():
+    active = [e for e in gs.get_by_kind("mimo") if e.enabled and e.sim is not None]
+    fig = Figure(figsize=(9, 6), dpi=100)
+    if not active:
+        ax = fig.add_subplot(111)
+        ax.set_title("No designed controllers shown — design a method or "
+                     "tick one in the session list.")
+        st.pyplot(fig)
+        return
+
+    if any(e.sim.tracking_metrics is not None for e in active):
+        ny = active[0].sim.y.shape[1]
+        axes = fig.subplots(ny, 1, sharex=True)
+        axes = np.atleast_1d(axes)
+        for j in range(ny):
+            ax = axes[j]
+            for e in active:
+                ax.plot(e.sim.t, e.sim.y[:, j], color=e.color, label=e.label, linewidth=1.3)
+            ax.set_ylabel(f"y{j}(t)")
+            ax.grid(True, alpha=0.3)
+        axes[0].legend(fontsize=7, loc="lower right")
+        axes[-1].set_xlabel("time (s)")
+    else:
+        ax1, ax2 = fig.subplots(2, 1, sharex=True)
+        for e in active:
+            x_norm = np.linalg.norm(e.sim.x, axis=1)
+            u_norm = np.linalg.norm(e.sim.u, axis=1)
+            label = e.label + ("  [UNSTABLE]" if e.sim.metrics.get("unstable") else "")
+            ax1.plot(e.sim.t, x_norm, color=e.color, label=label, linewidth=1.3)
+            ax2.plot(e.sim.t, u_norm, color=e.color, label=e.label, linewidth=1.3)
+        ax1.set_ylabel("||x(t)||")
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(fontsize=7, loc="upper right")
+        ax2.set_ylabel("||u(t)||")
+        ax2.set_xlabel("time (s)")
+        ax2.grid(True, alpha=0.3)
+    fig.tight_layout()
+    st.pyplot(fig)
+
+
+def _render_last_result():
+    last = st.session_state.get("mimo_last_result")
+    if last is None:
+        return
+    result, sim, checks = last
+    parts = [f"**{result.method}**", "", result.notes]
+    K_str = np.array2string(result.gains.K, precision=4, separator=', ')
+    parts.append(f"\nK =\n```\n{K_str}\n```")
+    poles_str = ", ".join(f"{p.real:.4g}{'+' if p.imag >= 0 else ''}{p.imag:.4g}j"
+                          for p in result.closed_loop_poles)
+    parts.append(f"\nClosed-loop poles: {poles_str}")
+    parts.append(f"\nStable: {result.is_stable()}")
+    all_checks = checks.get("pre", []) + checks.get("post", [])
+    parts.append(f"\nChecks: {'PASS' if all(c.passed for c in all_checks) else 'FAIL'}")
+    parts.append("\n\nMetrics: " + format_regulator_metrics(sim.metrics))
+    st.info("\n".join(parts))
+
+
+# ── entry point ──────────────────────────────────────────────────────────
+def render():
+    controls, plots = st.columns([2, 3])
+
+    with controls:
+        ex = _render_plant_controls()
+
+        st.subheader("Compare all methods")
+        if st.button("⊞  Compare all methods", key="mimo_compare_all",
+                    disabled=ex is None):
+            _do_compare_all(ex)
+
+        st.subheader("Design one method at a time")
+        method = st.selectbox("Method", METHODS, key="mimo_method")
+        if ex is not None:
+            _render_method_args(method, ex)
+        if st.button("Design & simulate", key="mimo_design", disabled=ex is None):
+            _do_design(method, ex)
+
+        _render_sim_settings()
+        _render_session_list()
+        _render_last_result()
+
+    with plots:
+        _render_response_plot()

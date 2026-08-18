@@ -13,6 +13,8 @@ those and re-implements only the rendering, once per view:
 
 from __future__ import annotations
 
+import html
+
 import numpy as np
 import streamlit as st
 import matplotlib
@@ -75,7 +77,12 @@ def render_heatmap(rows):
     header_cells = [th("Metric")]
     for r in rows:
         stable = r.get("stable")
-        name = r["name"]
+        # r["name"] and r.get("error") are currently always drawn from the
+        # fixed method registry in pid_compare.py, never free text — escaped
+        # anyway since this string is spliced into raw HTML, so a future
+        # source of these values (a user-entered label, say) can't break
+        # the table or inject markup.
+        name = html.escape(r["name"])
         if r.get("black_box"):
             name += ' <span style="background:#5b3a9e;color:#fff;font-size:0.7em;' \
                     'padding:1px 4px;border-radius:3px;">BB</span>'
@@ -83,7 +90,8 @@ def render_heatmap(rows):
             name += ' <span style="background:#a6621a;color:#fff;font-size:0.7em;' \
                     'padding:1px 4px;border-radius:3px;">L</span>'
         if not stable:
-            name += f' <span title="{r.get("error", "failed")}" style="color:#a00;">⚠</span>'
+            err = html.escape(r.get("error", "failed"))
+            name += f' <span title="{err}" style="color:#a00;">⚠</span>'
         header_cells.append(th(name, bg="#ffffff" if stable else "#dddddd"))
 
     norm = {}
@@ -110,12 +118,12 @@ def render_heatmap(rows):
                 cells.append(td(txt, bg=color))
             body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
-    html = (
+    table_html = (
         '<table style="border-collapse:collapse;width:100%;font-size:0.85em;">'
         f'<thead><tr>{"".join(header_cells)}</tr></thead>'
         f'<tbody>{"".join(body_rows)}</tbody></table>'
     )
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(table_html, unsafe_allow_html=True)
     st.caption(_FOOTNOTE)
 
 
