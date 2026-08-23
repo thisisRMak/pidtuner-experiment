@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from lqg_examples import list_examples, load_example
+from lqg_examples import list_examples, load_example, LQGExample
 from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracking
 from lqg_bryson import BrysonLQR
 from lqg_implicit import ImplicitModelFollowing
@@ -29,7 +29,8 @@ from lqg_simulate import (
     format_regulator_metrics, format_tracking_metrics, auto_t_end,
 )
 from lqg_checks import checks_for_result, format_checks
-from lqg_compare import compare_regulator_methods, compare_model_following
+from lqg_compare import compare_regulator_methods, compare_model_following, compare_bryson_output_modelfollowing
+from matrix_io import load_plant_file
 
 
 def _array_json(a):
@@ -307,10 +308,18 @@ def main():
     parser.add_argument("--list-plants", action="store_true",
                        help="List the available preset plants and exit.")
     parser.add_argument("--plant-preset", choices=list_examples(),
-                       help="Preset plant key, e.g. 'aircraft_hall'. See --list-plants.")
+                       help="Preset plant key, e.g. 'aircraft_hall'. See --list-plants. "
+                            "Mutually exclusive with --plant-file.")
+    parser.add_argument("--plant-file", type=str, default=None,
+                       help="Load a custom plant's A/B/C/D from a file instead of a "
+                            "preset: .json (same schema as lqg_examples_json/ presets — "
+                            "bare A/B/C/D keys) or .mat (scipy.io.loadmat, expects "
+                            "A/B/C/D variables). Mutually exclusive with --plant-preset. "
+                            "Has no suggested Q/R (uses Q=R=I) since there's no textbook "
+                            "default for a custom plant.")
     parser.add_argument("--method", default="lqr",
                        choices=["lqr", "output_weighted", "bryson", "lqg", "implicit", "explicit",
-                                "all", "model_following_all"],
+                                "all", "model_following_all", "four_curve"],
                        help="Design method (default: lqr, using the preset's "
                             "suggested Q/R). 'implicit'/'explicit' are the two "
                             "model-following techniques (AILQG.pdf §4) and require "
@@ -319,7 +328,11 @@ def main():
                             "directly comparable); 'model_following_all' compares "
                             "implicit vs. explicit given the same --am-diag (a "
                             "different objective -- see docs/lqg_testing.md for why "
-                            "these are two separate comparisons, not six-in-one).")
+                            "these are two separate comparisons, not six-in-one). "
+                            "'four_curve' compares Bryson / Output-weighted / Implicit / "
+                            "Explicit on one plot/table (2026-08-18 meeting notes item 5); "
+                            "--am-diag is optional here and auto-derived from the plant "
+                            "if omitted (see lqg_compare.default_model_am).")
     parser.add_argument("--x-max", type=float, nargs="+", default=None,
                        help="Bryson's rule: max desired state deviation(s) "
                             "(one value broadcasts to all states).")
@@ -345,11 +358,13 @@ def main():
                        help="lqr/all: custom diagonal R weight per input (length nu). "
                             "See --Q-diag.")
     parser.add_argument("--am-diag", type=float, nargs="+", default=None,
-                       help="implicit/explicit: desired model pole magnitudes "
-                            "(positive numbers; Am = diag(-values)), one per output "
-                            "(one value broadcasts to all ny outputs). Required for "
-                            "--method implicit/explicit -- there's no 'suggested' "
-                            "target model the way there's a suggested Q/R.")
+                       help="implicit/explicit/model_following_all: desired model pole "
+                            "magnitudes (positive numbers; Am = diag(-values)), one per "
+                            "output (one value broadcasts to all ny outputs). Required "
+                            "for --method implicit/explicit/model_following_all -- "
+                            "there's no 'suggested' target model the way there's a "
+                            "suggested Q/R. Optional for --method four_curve, which "
+                            "auto-derives Am from the plant if this is omitted.")
     parser.add_argument("--Q1-scale", type=float, default=1.0,
                        help="implicit/explicit: scalar multiplier on Q1=I, the "
                             "model-tracking-error weight (default: 1.0).")
@@ -393,11 +408,21 @@ def main():
                  f"ny={ex.plant.ny:<3d} {ex.name}  [{ex.citation}]")
         sys.exit(0)
 
-    if not args.plant_preset:
-        parser.error("--plant-preset is required (see --list-plants)")
+    if bool(args.plant_preset) == bool(args.plant_file):
+        parser.error("exactly one of --plant-preset (see --list-plants) or "
+                     "--plant-file is required")
 
     try:
-        ex = load_example(args.plant_preset)
+        if args.plant_file:
+            plant = load_plant_file(args.plant_file)
+            ex = LQGExample(
+                key="custom", name=plant.name or "Custom plant",
+                citation="user-supplied", source_file=args.plant_file, plant=plant,
+                suggested_Q_kind="identity", suggested_R_kind="identity",
+                suggested_R_scale=1.0, notes="Loaded via --plant-file; no textbook "
+                                             "suggested Q/R, using Q=R=I.")
+        else:
+            ex = load_example(args.plant_preset)
         plant = ex.plant
 
         if args.method == "all":
@@ -442,6 +467,31 @@ def main():
             if args.json:
                 print(json.dumps(model_following_comparison_json(rows, t, xm_ref), indent=2))
             else:
+                print(format_model_following_comparison_table(rows, t, xm_ref))
+            if args.plot:
+                plot_model_following_comparison(rows, t, xm_ref, ex, args.plot)
+            return
+
+        if args.method == "four_curve":
+            x_max = _broadcast(args.x_max, plant.nx, "x-max") if args.x_max is not None else None
+            u_max = _broadcast(args.u_max, plant.nu, "u-max") if args.u_max is not None else None
+            Am = None
+            if args.am_diag is not None:
+                am_diag = _broadcast(args.am_diag, plant.ny, "am-diag")
+                if np.any(am_diag <= 0):
+                    raise ValueError(
+                        "--am-diag values must be strictly positive (they're pole "
+                        "magnitudes; Am = diag(-am_diag))")
+                Am = np.diag(-am_diag)
+            rows, Am_used, (t, xm_ref) = compare_bryson_output_modelfollowing(
+                ex, x_max=x_max, u_max=u_max, Qy_scale=args.Qy_scale, R_scale=args.R_scale,
+                Am=Am, Q1_scale=args.Q1_scale, t_end=args.t_end, dt=args.dt)
+            if args.json:
+                out = {"Am_used": _array_json(Am_used), "rows": model_following_comparison_json(rows, t, xm_ref)}
+                print(json.dumps(out, indent=2))
+            else:
+                print(f"Am used (target model, {'auto-derived' if Am is None else 'from --am-diag'}) =\n"
+                     f"{np.array2string(Am_used, precision=4, separator=', ')}")
                 print(format_model_following_comparison_table(rows, t, xm_ref))
             if args.plot:
                 plot_model_following_comparison(rows, t, xm_ref, ex, args.plot)

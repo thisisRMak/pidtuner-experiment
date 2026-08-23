@@ -8,22 +8,25 @@ same way, using kind="mimo".
 
 Per docs/lqg_plan.md "CLI vs. GUI", Q/R/N are exposed as scalar/broadcast
 knobs (a scale on Qy=I, a diagonal broadcast, Bryson's x_max/u_max), never
-raw matrix editors — a form full of spinboxes for a plant with up to 15
-states doesn't reduce cognitive load the way the low-dimensional PID
-panels did.
+raw matrix editors for the *preset* plants — a form full of spinboxes for
+a plant with up to 15 states doesn't reduce cognitive load the way the
+low-dimensional PID panels did. Custom-entered plants (below) are the
+exception: there's no preset to spinbox-tune against, so the plant itself
+is the thing the user types in.
 
 Deliberately out of scope for this first pass (flagged, not silently
 dropped — same spirit as the SISO panel's heatmap/radar gap early on):
   - output-feedback (Kalman-driven) simulation — only the state-feedback
     regulator response is simulated here, matching --sim state_feedback's
     default in cli_lqg.py.
-  - implicit/explicit model-following (--method implicit/explicit/
-    model_following_all) — a genuinely different workflow (track a target
-    model, not regulate to 0) that deserves its own follow-up rather than
-    a bolted-on fifth method here.
   - a MIMO heatmap/radar comparison view — pid_compare.py's Ms/Mt-for-MIMO
     generalization is explicitly not done yet (docs/lqg_plan.md), so
     there's no tiered-metric data to draw one from.
+
+Implicit/explicit model-following now has a GUI entry point after all —
+see "4-curve comparison" below (2026-08-18 meeting notes item 5) — but only
+through that bundled comparison, not as a standalone method in the
+"Design one method at a time" list.
 """
 
 from __future__ import annotations
@@ -32,12 +35,14 @@ import numpy as np
 import streamlit as st
 from matplotlib.figure import Figure
 
-from lqg_examples import list_examples, load_example
+from lqg_examples import list_examples, load_example, LQGExample
 from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracking
 from lqg_bryson import BrysonLQR
 from lqg_simulate import simulate_state_feedback, format_regulator_metrics, auto_t_end
-from lqg_compare import compare_regulator_methods
+from lqg_compare import compare_regulator_methods, compare_bryson_output_modelfollowing
 from lqg_checks import checks_for_result
+from matrix_io import parse_matlab_literal
+from plant import StateSpacePlant
 
 import streamlit_gui_state as gs
 
@@ -70,9 +75,41 @@ def _broadcast(text, n):
     return np.array(values, dtype=float)
 
 
-# ── plant preset ─────────────────────────────────────────────────────────
+# ── plant preset / custom entry ─────────────────────────────────────────
+def _render_custom_plant_controls():
+    st.caption("Enter each matrix in MATLAB literal syntax: rows separated by "
+              "';', entries by spaces or commas, e.g. `[0 1; -2 -3]`.")
+    st.text_input("Plant name (optional)", value="", key="mimo_custom_name")
+    st.text_area("A (nx × nx)", value="[0 1; -2 -3]", key="mimo_custom_A")
+    st.text_area("B (nx × nu)", value="[0; 1]", key="mimo_custom_B")
+    st.text_area("C (ny × nx)", value="[1 0]", key="mimo_custom_C")
+    st.text_area("D (ny × nu)", value="[0]", key="mimo_custom_D")
+    try:
+        A = parse_matlab_literal(st.session_state["mimo_custom_A"])
+        B = parse_matlab_literal(st.session_state["mimo_custom_B"])
+        C = parse_matlab_literal(st.session_state["mimo_custom_C"])
+        D = parse_matlab_literal(st.session_state["mimo_custom_D"])
+        plant = StateSpacePlant(A=A, B=B, C=C, D=D,
+                                name=st.session_state["mimo_custom_name"] or "Custom plant")
+    except Exception as exc:
+        st.error(f"Could not build plant: {exc}")
+        return None
+    ex = LQGExample(
+        key="custom", name=plant.name, citation="user-entered", source_file="",
+        plant=plant, suggested_Q_kind="identity", suggested_R_kind="identity",
+        suggested_R_scale=1.0, notes="Custom-entered plant; no textbook suggested "
+                                     "Q/R, using Q=R=I.")
+    st.success(f"{ex.name}\n\nnx={plant.nx}  nu={plant.nu}  ny={plant.ny}")
+    return ex
+
+
 def _render_plant_controls():
-    st.subheader("Plant preset")
+    st.subheader("Plant")
+    st.radio("Source", ["Preset", "Custom (MATLAB matrix entry)"],
+             key="mimo_plant_source", horizontal=True)
+    if st.session_state["mimo_plant_source"] == "Custom (MATLAB matrix entry)":
+        return _render_custom_plant_controls()
+
     presets = list_examples()
     if not presets:
         st.error("No LQG example plants found (lqg_examples_json/ missing or empty).")
@@ -208,6 +245,52 @@ def _do_design(method, ex):
     st.success(f"Designed: {label}")
 
 
+def _do_four_curve(ex):
+    """2026-08-18 meeting notes item 5: Bryson / Output-weighted /
+    Implicit / Explicit model-following, one plot, per-output-channel y(t)
+    against the (auto-derived) target model's own response — a different
+    shape than the session-overlay ||x||/||u|| plot below, so it gets its
+    own comparison button and its own plot rather than feeding into the
+    session list."""
+    try:
+        rows, Am_used, (t, xm_ref) = compare_bryson_output_modelfollowing(
+            ex, t_end=None, dt=st.session_state["mimo_dt"])
+    except Exception as exc:
+        st.error(f"4-curve comparison failed: {exc}")
+        return
+    st.session_state["mimo_four_curve"] = (rows, Am_used, t, xm_ref, ex.name)
+    st.success("4-curve comparison ready (Bryson / Output-weighted / "
+              "Implicit / Explicit) — see plot below. Am auto-derived from "
+              "the plant; confirm with Prof Emami-Naeini whether this "
+              "default is the right behavior.")
+
+
+def _render_four_curve_plot():
+    cached = st.session_state.get("mimo_four_curve")
+    if cached is None:
+        return
+    rows, Am_used, t, xm_ref, plant_name = cached
+    st.subheader("4-curve comparison: Bryson / Output-weighted / Implicit / Explicit")
+    st.caption("Am (target model, auto-derived) =\n" +
+              np.array2string(Am_used, precision=4, separator=", "))
+    ny = xm_ref.shape[1]
+    fig = Figure(figsize=(9, 4 * ny), dpi=100)
+    axes = fig.subplots(ny, 1, sharex=True)
+    axes = np.atleast_1d(axes)
+    for j in range(ny):
+        ax = axes[j]
+        ax.plot(t, xm_ref[:, j], "k--", linewidth=1.5, label="target model xm")
+        for row, color in zip(rows, PALETTE):
+            ax.plot(row.sim.t, row.sim.y[:, j], color=color, label=row.name, linewidth=1.3)
+        ax.set_ylabel(f"y{j}(t)")
+        ax.grid(True, alpha=0.3)
+    axes[0].legend(fontsize=7, loc="lower right")
+    axes[0].set_title(plant_name)
+    axes[-1].set_xlabel("time (s)")
+    fig.tight_layout()
+    st.pyplot(fig)
+
+
 def _do_compare_all(ex):
     try:
         rows = compare_regulator_methods(ex, t_end=None, dt=st.session_state["mimo_dt"])
@@ -340,6 +423,14 @@ def render():
                     disabled=ex is None):
             _do_compare_all(ex)
 
+        st.subheader("4-curve comparison")
+        st.caption("Bryson's rule / Output-weighted LQR / Implicit / Explicit "
+                  "model-following, step response overlaid per output channel "
+                  "(2026-08-18 meeting notes item 5).")
+        if st.button("⊞  4-curve comparison", key="mimo_four_curve_btn",
+                    disabled=ex is None):
+            _do_four_curve(ex)
+
         st.subheader("Design one method at a time")
         method = st.selectbox("Method", METHODS, key="mimo_method")
         if ex is not None:
@@ -353,3 +444,4 @@ def render():
 
     with plots:
         _render_response_plot()
+        _render_four_curve_plot()

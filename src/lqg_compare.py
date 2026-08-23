@@ -123,7 +123,7 @@ def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=
     return rows
 
 
-def _model_reference_response(Am, xm0, t):
+def model_reference_response(Am, xm0, t):
     """The target model's own free response, ẋm = Am·xm — what both
     model-following designs are actually trying to make the plant's output
     resemble. Not a ComparisonRow (no plant/checks/gains involved), just
@@ -172,5 +172,81 @@ def compare_model_following(plant, Am, Q1, R, t_end=None, dt=0.01):
                       sim=explicit_sim, checks=checks_for_result(explicit_result)),
     ]
     nxm = Am.shape[0]
-    xm_ref = _model_reference_response(Am, np.ones(nxm), t)
+    xm_ref = model_reference_response(Am, np.ones(nxm), t)
     return rows, (t, xm_ref)
+
+
+def default_model_am(plant, speedup=2.0):
+    """Auto-derived target model Am for compare_bryson_output_modelfollowing
+    below, when the caller hasn't supplied one — there's no textbook
+    "suggested Am" the way there's a suggested Q/R (AILQG.pdf's own worked
+    examples always hand-pick Am). Built as a diagonal (ny, ny) target:
+    -speedup/tau_dominant on every channel, where tau_dominant is the time
+    constant of the plant's slowest *stable* open-loop pole (1.0s if none
+    are stable) — i.e. "aim for a decoupled, first-order response about
+    `speedup`x faster than the plant's own slowest dynamics."
+
+    This is a convenience default, not a validated design choice — flagged
+    as a follow-up to confirm with Prof Emami-Naeini whether it's the right
+    behavior before it's relied on for the paper."""
+    poles = np.linalg.eigvals(plant.A)
+    stable_rates = -np.real(poles[np.real(poles) < -1e-9])
+    tau_dominant = 1.0 / np.min(stable_rates) if len(stable_rates) else 1.0
+    return -(speedup / tau_dominant) * np.eye(plant.ny)
+
+
+def compare_bryson_output_modelfollowing(ex, x_max=None, u_max=None, Qy_scale=1.0,
+                                         R_scale=1.0, Am=None, Q1_scale=1.0,
+                                         t_end=None, dt=0.01):
+    """The LQG-UI "4-curve" comparison from the 2026-08-18 meeting notes
+    (item 5: "step response ... 3 curves, Bryson, Implicit/Explicit, Output
+    weights") — Bryson's rule / Output-weighted LQR / Implicit
+    model-following / Explicit model-following, all simulated as a
+    regulator response (x0=ones(nx)) on a shared time axis. A different
+    bundle than compare_regulator_methods (LQR/OutputWeighted/Bryson/LQG)
+    or compare_model_following (Implicit/Explicit only) above — this one
+    exists specifically for that meeting-notes request, not as a
+    general-purpose comparison.
+
+    Am: target model dynamics for Implicit/Explicit, shape (ny, ny). If
+    None, auto-derived via default_model_am(plant) — see its docstring;
+    this is a convenience default, not a validated design choice.
+
+    Returns (rows, Am_used, (t, xm_ref)): rows is a list of 4 ComparisonRow
+    in fixed order [Bryson, Output-weighted, Implicit, Explicit]; Am_used is
+    whichever Am ended up being used; (t, xm_ref) is the target model's own
+    free response for plotting a dashed reference line, same shape as
+    compare_model_following's second return value."""
+    plant = ex.plant
+    x_max_ = np.ones(plant.nx) if x_max is None else np.asarray(x_max, dtype=float)
+    u_max_ = np.ones(plant.nu) if u_max is None else np.asarray(u_max, dtype=float)
+    Am_used = default_model_am(plant) if Am is None else np.atleast_2d(np.asarray(Am, dtype=float))
+    Q1 = Q1_scale * np.eye(plant.ny)
+    R = R_scale * np.eye(plant.nu)
+
+    designs = [
+        ("Bryson's rule", BrysonLQR(plant, x_max=x_max_, u_max=u_max_).design()),
+        ("Output-weighted LQR",
+         OutputWeightedLQR(plant, Qy=Qy_scale * np.eye(plant.ny), R=R_scale * np.eye(plant.nu)).design()),
+        ("Implicit model-following", ImplicitModelFollowing(plant, Am=Am_used, Q1=Q1, R=R).design()),
+    ]
+    explicit_result = ExplicitModelFollowing(plant, Am=Am_used, Q1=Q1, R=R).design()
+
+    if t_end is None:
+        t_end = max(
+            *(auto_t_end(result.closed_loop_poles) for _, result in designs),
+            auto_t_end(explicit_result.closed_loop_poles, extra_poles=np.linalg.eigvals(Am_used)),
+        )
+    t = np.arange(0.0, t_end + dt, dt)
+
+    rows = []
+    for name, result in designs:
+        sim = simulate_state_feedback(result, t)
+        rows.append(ComparisonRow(name=name, result=result, sim=sim, checks=checks_for_result(result)))
+    explicit_sim = simulate_explicit_model_following(explicit_result, t)
+    rows.append(ComparisonRow(name="Explicit model-following", result=explicit_result,
+                              sim=explicit_sim, checks=checks_for_result(explicit_result)))
+
+    nxm = Am_used.shape[0]
+    xm_ref = model_reference_response(Am_used, np.ones(nxm), t)
+    return rows, Am_used, (t, xm_ref)
