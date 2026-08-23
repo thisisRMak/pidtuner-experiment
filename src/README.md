@@ -44,6 +44,19 @@ On Linux you'll also need `sudo apt install python3-tk` (Debian/Ubuntu)
 or `sudo dnf install python3-tkinter` (Fedora). On Windows/macOS the
 official python.org installer includes Tk.
 
+### Option C — Docker (CLI + Streamlit GUI, no conda needed)
+
+```bash
+docker build -t controldesign .
+docker run controldesign python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method simc
+docker run -p 8501:8501 controldesign streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+# then open http://localhost:8501
+```
+
+Doesn't run the Tkinter GUI (`pid_app.py`) — no display server in a
+container — but every CLI script, the ollama-backed LLM supervisor, and
+the Streamlit GUI all work. See `docs/docker_plan.md`.
+
 ### Run tests
 
 No Tkinter needed — pure stdlib `unittest`:
