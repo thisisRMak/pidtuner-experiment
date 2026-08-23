@@ -229,7 +229,7 @@ def _render_sim_settings():
     st.text_input("duration (blank=auto)", value="", key="sp_t_end")
     st.number_input("u min", value=-100.0, key="u_min")
     st.number_input("u max", value=100.0, key="u_max")
-    st.checkbox("Derivative filter (N=80) — recommended", value=True, key="d_filter")
+    st.number_input("Derivative filter N (0=disable)", value=80.0, min_value=0.0, key="N")
     st.caption("ramp: linear 0→amp over duration. pulse: amp during [25%, 50%] of duration.")
     st.radio("Anti-windup", ["conditional", "back_calc"], key="antiwindup",
              horizontal=True)
@@ -248,7 +248,7 @@ def _run_closed_loop(plant, gains):
         plant, gains, t_end=t_end, setpoint=st.session_state["sp_amp"],
         setpoint_kind=st.session_state["sp_kind"],
         u_min=st.session_state["u_min"], u_max=st.session_state["u_max"],
-        use_d_filter=st.session_state["d_filter"],
+        N=st.session_state["N"],
         antiwindup=st.session_state["antiwindup"], Ka=Ka,
     )
 

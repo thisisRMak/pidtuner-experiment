@@ -346,9 +346,8 @@ class PIDTunerApp:
         self._labeled_entry(sf, "duration (blank=auto)", self.t_end_var, width=12)
         self._labeled_entry(sf, "u min", self.umin_var, width=12)
         self._labeled_entry(sf, "u max", self.umax_var, width=12)
-        self.d_filter_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(sf, text="Derivative filter (N=80) — recommended",
-                        variable=self.d_filter_var).pack(anchor="w")
+        self.N_var = tk.StringVar(value="80")
+        self._labeled_entry(sf, "Derivative filter N (0=disable)", self.N_var, width=12)
         ttk.Label(sf,
                   text="ramp: linear 0 → amp over duration.   "
                        "pulse: amp during [25%, 50%] of duration.",
@@ -729,10 +728,12 @@ class PIDTunerApp:
         antiwindup = self.antiwindup_var.get()
         ka_str = self.ka_var.get().strip()
         Ka = float(ka_str) if ka_str else None
+        N_str = self.N_var.get().strip()
+        N = float(N_str) if N_str else 80.0
         return simulate_closed_loop(
             plant, gains, t_end=t_end, setpoint=sp,
             setpoint_kind=kind,
-            u_min=umin, u_max=umax, use_d_filter=self.d_filter_var.get(),
+            u_min=umin, u_max=umax, N=N,
             antiwindup=antiwindup, Ka=Ka,
         )
 

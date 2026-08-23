@@ -95,7 +95,7 @@ def saturated_sim_info(plant, gains, args):
     u_min = args.u_min if args.u_min is not None else -1e6
     u_max = args.u_max if args.u_max is not None else 1e6
     sim = simulate_closed_loop(plant, gains, setpoint=1.0, setpoint_kind="step",
-                               u_min=u_min, u_max=u_max,
+                               u_min=u_min, u_max=u_max, N=args.N,
                                antiwindup=args.antiwindup, Ka=args.Ka)
     saturated = bool(np.any(saturation_mask(sim)))
     engaged = saturated and sim.antiwindup == "back_calc"
@@ -231,6 +231,14 @@ def main():
         help="Back-calculation anti-windup gain override (default: "
              "auto-derived per method from Ka=1/Tt, Tt=sqrt(Ti*Td)). "
              "Ignored unless --antiwindup back_calc."
+    )
+    parser.add_argument(
+        "--N",
+        type=float,
+        default=80.0,
+        help="Derivative filter bandwidth used for the simulated response "
+             "(default: 80.0). Pass --N 0 to disable the filter and use "
+             "the ideal derivative instead."
     )
     parser.add_argument(
         "--json",
@@ -373,7 +381,7 @@ def main():
                 for r in rows:
                     if r.get("stable", False) and r.get("gains"):
                         sim = (sat_infos[r["name"]]["sim"] if r["name"] in sat_infos
-                              else simulate_closed_loop(plant, r["gains"], setpoint=1.0, setpoint_kind="step"))
+                              else simulate_closed_loop(plant, r["gains"], setpoint=1.0, setpoint_kind="step", N=args.N))
                         ax1.plot(sim.t, sim.y, label=r["name"])
                         ax2.plot(sim.t, sim.u)
                 
@@ -499,7 +507,7 @@ def main():
         # 5. Plot
         if args.plot:
             sim = (sat_info["sim"] if sat_info is not None else
-                  simulate_closed_loop(plant, res.gains, setpoint=1.0, setpoint_kind="step"))
+                  simulate_closed_loop(plant, res.gains, setpoint=1.0, setpoint_kind="step", N=args.N))
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
             ax1.plot(sim.t, sim.y, label=res.method)
             ax1.axhline(1.0, color="k", linestyle="--", alpha=0.5, label="Setpoint")

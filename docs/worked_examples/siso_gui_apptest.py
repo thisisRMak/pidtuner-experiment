@@ -27,8 +27,8 @@ for t in at.text:
 for cap in at.caption:
     print(cap.value)
 
-print("=== session state d_filter, N default check ===")
-print("d_filter:", at.session_state["d_filter"])
+print("=== session state N default check ===")
+print("N:", at.session_state["N"])
 import inspect
 import pid_simulate
 print("simulate_closed_loop default N:", inspect.signature(pid_simulate.simulate_closed_loop).parameters["N"].default)

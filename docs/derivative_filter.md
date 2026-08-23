@@ -82,12 +82,13 @@ d_term = -gains.Kd * state.d_filt
 
 `alpha = dt/(τ_d+dt)` is the exact backward-Euler discretization of the
 lag `τ_d·ẏ + y = u`, so `d_filt` tracks a low-pass-filtered estimate of
-`d(pv)/dt`. If `Kp≈0`, `Kd≈0`, or `N=0` (filter explicitly disabled —
-`use_d_filter=False` in `simulate_closed_loop()`), `pid_step()` falls
-back to a raw (unfiltered, kick-prone) derivative of error instead.
+`d(pv)/dt`. If `Kp≈0`, `Kd≈0`, or `N=0` (filter explicitly disabled),
+`pid_step()` falls back to a raw (unfiltered, kick-prone) derivative of
+error instead.
 
 ## Toggling it
 
-- CLI/library: `simulate_closed_loop(..., N=80.0, use_d_filter=True)`.
-- GUI: "Derivative filter (N=80) — recommended" checkbox, on by default
-  (`pid_app.py:349-351`).
+- CLI: `--N` (default 80.0); pass `--N 0` to disable the filter.
+- CLI/library: `simulate_closed_loop(..., N=80.0)`; pass `N=0` to disable.
+- GUI: "Derivative filter N (0=disable)" numeric entry, defaulting to 80
+  (`pid_app.py:349-350`).

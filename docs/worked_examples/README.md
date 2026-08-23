@@ -34,8 +34,8 @@ python3 siso_gui_apptest.py
 
 `siso_gui_apptest.py` boots `src/streamlit_app.py`, selects the SISO tab's
 "Ziegler-Nichols II" method with `L=0.5`, clicks "Tune & simulate", and
-prints the resulting gains plus the `d_filter` checkbox state and the live
-`simulate_closed_loop` default `N`. Output: `siso_gui_apptest.log`.
+prints the resulting gains plus the `N` filter-bandwidth session-state value
+and the live `simulate_closed_loop` default `N`. Output: `siso_gui_apptest.log`.
 
 The GUI run reproduces the same gains as the CLI (Kp=0.0143, Ki=0.00634,
 Kd=0.00809), confirming both entry points hit the same tuning code

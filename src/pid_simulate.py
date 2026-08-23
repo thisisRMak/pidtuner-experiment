@@ -295,7 +295,7 @@ def make_setpoint(t, kind, amplitude=1.0):
 
 def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                          setpoint_kind="step", sp_array=None,
-                         u_min=-1e6, u_max=1e6, N=80.0, use_d_filter=True,
+                         u_min=-1e6, u_max=1e6, N=80.0,
                          load_step=None, load_step_time=0.0,
                          antiwindup="conditional", Ka=None):
     """Simulate the unity-feedback loop with PID controller.
@@ -319,6 +319,9 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
     Ka            : back-calculation gain override; None (default) derives
                     it from `gains` via compute_back_calc_Ka(). Ignored
                     when antiwindup='conditional'.
+    N             : derivative filter bandwidth (default 80.0). Pass N=0 to
+                    disable the filter and use the ideal derivative instead
+                    (same convention as pid_step()/closed_loop_poles()).
     """
     dt = plant.auto_dt()
     if t_end is None:
@@ -351,10 +354,7 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
 
     # PID state
     state = PIDState()
-    if not use_d_filter:
-        N_eff = 0.0
-    else:
-        N_eff = N
+    N_eff = N
 
     x = np.zeros(nx)
     y = np.zeros(len(t))
