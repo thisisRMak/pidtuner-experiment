@@ -45,7 +45,7 @@ from pid_tuning_methods import (
 # Robustness from the loop frequency response
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _controller_response(gains, omega, N=10.0):
+def _controller_response(gains, omega, N=80.0):
     """C(jω) = Kp + Ki/(jω) + Kd·(jω)/(1 + τ_d·jω) for the parallel-form
     PID, with the same derivative filter (τ_d = Kd/(N·|Kp|)) that
     pid_simulate.py's pid_step()/closed_loop_poles() use — see
@@ -78,10 +78,10 @@ def _robustness_grid(plant, n=2000):
     return np.logspace(np.log10(lo), np.log10(hi), n)
 
 
-def robustness_metrics(plant, gains, N=10.0):
+def robustness_metrics(plant, gains, N=80.0):
     """Return {Ms, Mt, GM_dB, PM_deg} from L(jω) = C(jω)·P(jω).
 
-    C(jω) includes the derivative filter (N=10 default, matching
+    C(jω) includes the derivative filter (N=80 default, matching
     pid_simulate.py's default) so margins reflect the as-simulated loop, not
     the ideal Kd·jω design model. Pass N=0 for the old ideal comparison.
     """
