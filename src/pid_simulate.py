@@ -8,7 +8,7 @@ The PID is implemented in parallel form with:
     per Astrom & Hagglund). See ANTI-WINDUP section below for the
     rationale and formula. Both are no-ops when the actuator never
     saturates (u_min/u_max wide enough that u_sat == u_unsat always).
-  - First-order derivative filter with bandwidth N/Td (default N = 10):
+  - First-order derivative filter with bandwidth N/Td (default N = 80):
     the pure D term is replaced by Kd*s / (1 + (Kd/(N*Kp))*s). Without
     this, a step setpoint hits the controller with an infinite derivative
     and the response is dominated by the actuator spike rather than the
@@ -122,7 +122,7 @@ def compute_back_calc_Ka(gains, Ka=None):
     return float(1.0 / Tt), float(Tt)
 
 
-def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=10.0,
+def pid_step(gains, state, sp, pv, dt, u_min, u_max, N=80.0,
              antiwindup="conditional", Ka=0.0):
     """One PID timestep with anti-windup + derivative filter.
 
@@ -194,7 +194,7 @@ def _filter_tau_d(gains, N):
     return 0.0
 
 
-def closed_loop_poles(plant, gains, N=10.0):
+def closed_loop_poles(plant, gains, N=80.0):
     """Roots of the closed-loop characteristic polynomial, with dead time
     approximated by 2nd-order Pade and the derivative low-pass filter
     folded into C(s) so this matches what pid_step()/simulate_closed_loop()
@@ -235,7 +235,7 @@ def closed_loop_poles(plant, gains, N=10.0):
     return np.roots(char)
 
 
-def is_closed_loop_stable(plant, gains, N=10.0):
+def is_closed_loop_stable(plant, gains, N=80.0):
     poles = closed_loop_poles(plant, gains, N=N)
     if len(poles) == 0:
         return True
@@ -295,7 +295,7 @@ def make_setpoint(t, kind, amplitude=1.0):
 
 def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                          setpoint_kind="step", sp_array=None,
-                         u_min=-1e6, u_max=1e6, N=10.0, use_d_filter=True,
+                         u_min=-1e6, u_max=1e6, N=80.0, use_d_filter=True,
                          load_step=None, load_step_time=0.0,
                          antiwindup="conditional", Ka=None):
     """Simulate the unity-feedback loop with PID controller.

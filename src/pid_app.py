@@ -347,7 +347,7 @@ class PIDTunerApp:
         self._labeled_entry(sf, "u min", self.umin_var, width=12)
         self._labeled_entry(sf, "u max", self.umax_var, width=12)
         self.d_filter_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(sf, text="Derivative filter (N=10) — recommended",
+        ttk.Checkbutton(sf, text="Derivative filter (N=80) — recommended",
                         variable=self.d_filter_var).pack(anchor="w")
         ttk.Label(sf,
                   text="ramp: linear 0 → amp over duration.   "

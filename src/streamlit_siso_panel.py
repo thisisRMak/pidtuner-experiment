@@ -229,7 +229,7 @@ def _render_sim_settings():
     st.text_input("duration (blank=auto)", value="", key="sp_t_end")
     st.number_input("u min", value=-100.0, key="u_min")
     st.number_input("u max", value=100.0, key="u_max")
-    st.checkbox("Derivative filter (N=10) — recommended", value=True, key="d_filter")
+    st.checkbox("Derivative filter (N=80) — recommended", value=True, key="d_filter")
     st.caption("ramp: linear 0→amp over duration. pulse: amp during [25%, 50%] of duration.")
     st.radio("Anti-windup", ["conditional", "back_calc"], key="antiwindup",
              horizontal=True)

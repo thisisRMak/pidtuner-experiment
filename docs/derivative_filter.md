@@ -18,8 +18,8 @@ closed-loop stability check — works with the **unfiltered** ideal term
 | Boyd loop-shaping (`L(jω)` frequency sweep) | No | `pid_tuning_methods.py:284` |
 | Pole placement / pole cancellation | No | `pid_tune.py:57-63` |
 | Ziegler-Nichols / Tyreus-Luyben rules | No | `pid_tuning_methods.py` (classical formulas) |
-| Frequency-response comparison `C(jω)` (`compare.robustness_metrics`) | **Yes** (default `N=10`, matching sim; pass `N=0` for the ideal comparison) | `pid_compare.py: _controller_response()` |
-| Closed-loop stability check (`closed_loop_poles`) | **Yes** (default `N=10`; `simulate_closed_loop` passes the run's actual `N_eff`) | `pid_simulate.py: closed_loop_poles()`, `is_closed_loop_stable()` |
+| Frequency-response comparison `C(jω)` (`compare.robustness_metrics`) | **Yes** (default `N=80`, matching sim; pass `N=0` for the ideal comparison) | `pid_compare.py: _controller_response()` |
+| Closed-loop stability check (`closed_loop_poles`) | **Yes** (default `N=80`; `simulate_closed_loop` passes the run's actual `N_eff`) | `pid_simulate.py: closed_loop_poles()`, `is_closed_loop_stable()` |
 
 Only the *gain-selection* methods (Boyd, pole placement, ZN/TL/AMIGO/SIMC/...)
 still solve for `Kp, Ki, Kd` against the ideal `Kd·s` term — see "Why the
@@ -52,10 +52,10 @@ what's actually simulated, filter pole included.
   solving for `Kp/Ki/Kd` — they're checking gains that already exist, so
   there's no chicken-and-egg problem: `τ_d = Kd/(N·|Kp|)` is just a number
   once `Kp`/`Kd` are known. Both now fold `Kd·s/(1+τ_d·s)` into `C(s)`
-  (`N=10` default; `simulate_closed_loop` passes its actual `N_eff` so the
+  (`N=80` default; `simulate_closed_loop` passes its actual `N_eff` so the
   reported `stable` flag matches what was simulated). Pass `N=0` to either
   function to get the old ideal-`Kd·s` comparison. With the default
-  `N=10` the filter pole sits roughly a decade past the derivative zero
+  `N=80` the filter pole sits well past the derivative zero
   (`ω = N·Kp/Kd`), so the correction is usually small — but it stops being
   small for aggressive filtering (low `N`) or gains with small `Kp`/large
   `Kd`, which is exactly when it's worth having gotten right.
@@ -69,7 +69,7 @@ rather than `-e` to avoid "derivative kick" on setpoint steps:
 D(s) = -Kd·s / (1 + τ_d·s) · PV(s)      τ_d = Td/N = Kd/(N·Kp)
 ```
 
-`N` is the filter bandwidth ratio (default `N = 10`). Discretized with
+`N` is the filter bandwidth ratio (default `N = 80`). Discretized with
 backward-Euler in `pid_step()` (`pid_simulate.py:105-147`):
 
 ```python
@@ -88,6 +88,6 @@ back to a raw (unfiltered, kick-prone) derivative of error instead.
 
 ## Toggling it
 
-- CLI/library: `simulate_closed_loop(..., N=10.0, use_d_filter=True)`.
-- GUI: "Derivative filter (N=10) — recommended" checkbox, on by default
+- CLI/library: `simulate_closed_loop(..., N=80.0, use_d_filter=True)`.
+- GUI: "Derivative filter (N=80) — recommended" checkbox, on by default
   (`pid_app.py:349-351`).
