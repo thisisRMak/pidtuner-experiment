@@ -26,7 +26,7 @@ from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing, ExplicitModelFollowingResult
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
-    format_regulator_metrics, format_tracking_metrics, auto_t_end,
+    simulate_per_channel_step, format_regulator_metrics, format_tracking_metrics, auto_t_end,
 )
 from lqg_checks import checks_for_result, format_checks
 from lqg_compare import compare_regulator_methods, compare_model_following, compare_bryson_output_modelfollowing
@@ -290,6 +290,58 @@ def plot_model_following_comparison(rows, t, xm_ref, ex, path):
     plt.close()
 
 
+def per_channel_step_json(per_channel_sims):
+    """JSON serialization for --sim per_channel_step: one entry per
+    reference channel j, each with that channel's regulator metrics and
+    per-output-channel tracking metrics (Overshoot/Rise/Settling)."""
+    out = []
+    for j, s in enumerate(per_channel_sims):
+        m = dict(s.metrics)
+        for k, v in list(m.items()):
+            if isinstance(v, (np.floating, float)) and not np.isfinite(v):
+                m[k] = None
+        out.append({"channel": j, "stable": s.stable, "metrics": m,
+                    "tracking_metrics": s.tracking_metrics})
+    return out
+
+
+def format_per_channel_step_text(per_channel_sims):
+    lines = ["Per-channel step response (MATLAB step()-style grid -- each "
+             "block below steps one reference channel, others held at 0):"]
+    for j, s in enumerate(per_channel_sims):
+        lines.append(f"  channel {j}: {format_regulator_metrics(s.metrics)}")
+        lines.append(format_tracking_metrics(s.tracking_metrics))
+    return "\n".join(lines)
+
+
+def plot_per_channel_step(per_channel_sims, res, ex, path):
+    """--sim per_channel_step's grid plot: ny (outputs) rows by ny
+    (reference channels) columns, matching MATLAB's default step() grid
+    layout (step(A-B*K, B*Nbar, C, D) on a system with ny inputs and ny
+    outputs). Column j is the response to stepping reference channel j
+    alone; row i is output i. The diagonal cells show each channel tracking
+    its own step; off-diagonal cells show cross-channel coupling."""
+    ny = len(per_channel_sims)
+    fig, axes = plt.subplots(ny, ny, figsize=(3.2 * ny, 2.6 * ny), sharex=True)
+    axes = np.atleast_2d(axes)
+    for j, sim in enumerate(per_channel_sims):
+        for i in range(ny):
+            ax = axes[i, j]
+            ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
+            ax.plot(sim.t, sim.y[:, i])
+            ax.grid(True, alpha=0.3)
+            if i == 0:
+                ax.set_title(f"from r{j}")
+            if j == 0:
+                ax.set_ylabel(f"y{i}(t)")
+            if i == ny - 1:
+                ax.set_xlabel("Time (s)")
+    fig.suptitle(f"{res.method} on {ex.name} -- per-channel step response")
+    plt.tight_layout()
+    plt.savefig(path)
+    plt.close()
+
+
 def _broadcast(values, n, name):
     if values is None:
         return None
@@ -378,12 +430,20 @@ def main():
                        help="Constant reference command r for --reference-tracking's "
                             "simulation, one value per output (default: all-ones). "
                             "Only used with --sim state_feedback.")
-    parser.add_argument("--sim", choices=["none", "state_feedback", "output_feedback", "model_following"],
+    parser.add_argument("--sim", choices=["none", "state_feedback", "output_feedback",
+                                         "model_following", "per_channel_step"],
                        default="state_feedback",
                        help="Which closed-loop simulation to run and report "
                             "(default: state_feedback, a unit-perturbation regulator "
                             "response, or a --reference step if --reference-tracking is "
-                            "set). 'output_feedback' requires --method lqg. For "
+                            "set). 'output_feedback' requires --method lqg. "
+                            "'per_channel_step' requires --reference-tracking (not "
+                            "--method explicit) and steps each reference channel "
+                            "individually (others held at 0), reporting/plotting the "
+                            "response across all outputs -- matching MATLAB's default "
+                            "step() grid on a MIMO state-space system, as opposed to "
+                            "'state_feedback' with --reference-tracking's single "
+                            "combined simultaneous step across all channels. For "
                             "--method explicit, any value other than 'none' runs the "
                             "model-following simulation regardless (there's only one "
                             "simulation shape for that method).")
@@ -554,8 +614,12 @@ def main():
         is_explicit = isinstance(res, ExplicitModelFollowingResult)
         if args.sim == "output_feedback" and (is_explicit or res.kalman is None):
             raise ValueError("--sim output_feedback requires --method lqg")
+        if args.sim == "per_channel_step" and (is_explicit or res.Nbar is None):
+            raise ValueError("--sim per_channel_step requires --reference-tracking "
+                             "(not --method explicit)")
 
         sim = None
+        per_channel_sims = None
         t_end = args.t_end if args.t_end is not None else _auto_t_end(res)
         t = np.arange(0.0, t_end + args.dt, args.dt)
         if is_explicit:
@@ -570,15 +634,25 @@ def main():
             sim = simulate_state_feedback(res, t, r=r_arr)
         elif args.sim == "output_feedback":
             sim = simulate_output_feedback(res, t, x0=np.ones(plant.nx))
+        elif args.sim == "per_channel_step":
+            per_channel_sims = simulate_per_channel_step(res, t)
 
         if args.json:
-            print(json.dumps(serialize_result_json(res, sim, checks), indent=2))
+            out = serialize_result_json(res, sim, checks)
+            if per_channel_sims is not None:
+                out["per_channel_step"] = per_channel_step_json(per_channel_sims)
+            print(json.dumps(out, indent=2))
         else:
             print(format_result_text(res, sim, checks))
+            if per_channel_sims is not None:
+                print(format_per_channel_step_text(per_channel_sims))
 
         if args.plot:
-            if sim is None:
+            if sim is None and per_channel_sims is None:
                 raise ValueError("--plot requires --sim to not be 'none'")
+            if per_channel_sims is not None:
+                plot_per_channel_step(per_channel_sims, res, ex, args.plot)
+                return
             nx, nu = plant.nx, plant.nu
             n_panels = 3 if sim.xm is not None else 2
             fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4 * n_panels), sharex=True)

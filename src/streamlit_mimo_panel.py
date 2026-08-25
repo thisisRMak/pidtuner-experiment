@@ -38,7 +38,9 @@ from matplotlib.figure import Figure
 from lqg_examples import list_examples, load_example, LQGExample
 from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracking
 from lqg_bryson import BrysonLQR
-from lqg_simulate import simulate_state_feedback, format_regulator_metrics, auto_t_end
+from lqg_simulate import (
+    simulate_state_feedback, simulate_per_channel_step, format_regulator_metrics, auto_t_end,
+)
 from lqg_compare import compare_regulator_methods, compare_bryson_output_modelfollowing
 from lqg_checks import checks_for_result
 from matrix_io import parse_matlab_literal
@@ -245,6 +247,64 @@ def _do_design(method, ex):
     st.success(f"Designed: {label}")
 
 
+def _do_per_channel_step():
+    """Per-reference-channel step response, matching MATLAB's default
+    step() grid behavior: steps each reference channel individually
+    (others held at 0) and shows the response across all outputs.
+    Operates on the last design from "Design one method at a time"
+    (st.session_state["mimo_last_result"]) -- requires that design to have
+    been run with Reference tracking checked (result.Nbar populated).
+    Additive alongside the existing "Reference tracking" combined-step
+    simulation (_run_sim), which stays exactly as it was -- this is a
+    separate grid view, not a replacement."""
+    last = st.session_state.get("mimo_last_result")
+    if last is None:
+        st.error("Design a method first (with Reference tracking checked) "
+                 "before requesting the per-channel step grid.")
+        return
+    result, sim, checks = last
+    if result.Nbar is None:
+        st.error("Per-channel step response requires Reference tracking to "
+                 "be checked when designing.")
+        return
+    t_end_str = st.session_state["mimo_t_end"].strip()
+    t_end = float(t_end_str) if t_end_str else auto_t_end(result.closed_loop_poles)
+    dt = st.session_state["mimo_dt"]
+    t = np.arange(0.0, t_end + dt, dt)
+    try:
+        per_channel_sims = simulate_per_channel_step(result, t)
+    except Exception as exc:
+        st.error(f"Per-channel step response failed: {exc}")
+        return
+    st.session_state["mimo_per_channel_step"] = (per_channel_sims, result.method)
+    st.success("Per-channel step response ready — see grid plot below.")
+
+
+def _render_per_channel_step_plot():
+    cached = st.session_state.get("mimo_per_channel_step")
+    if cached is None:
+        return
+    per_channel_sims, method_name = cached
+    ny = len(per_channel_sims)
+    st.subheader("Per-channel step response (MATLAB step() grid)")
+    fig = Figure(figsize=(3.2 * ny, 2.6 * ny), dpi=100)
+    axes = fig.subplots(ny, ny, sharex=True)
+    axes = np.atleast_2d(axes)
+    for j, sim in enumerate(per_channel_sims):
+        for i in range(ny):
+            ax = axes[i, j]
+            ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
+            ax.plot(sim.t, sim.y[:, i])
+            ax.grid(True, alpha=0.3)
+            if i == 0:
+                ax.set_title(f"from r{j}", fontsize=9)
+            if j == 0:
+                ax.set_ylabel(f"y{i}(t)")
+    fig.suptitle(f"{method_name} — per-channel step response")
+    fig.tight_layout()
+    st.pyplot(fig)
+
+
 def _do_four_curve(ex):
     """2026-08-18 meeting notes item 5: Bryson / Output-weighted /
     Implicit / Explicit model-following, one plot, per-output-channel y(t)
@@ -439,9 +499,20 @@ def render():
             _do_design(method, ex)
 
         _render_sim_settings()
+
+        st.subheader("Per-channel step response")
+        st.caption("Steps each reference channel individually (others held at 0), "
+                  "reporting the response across all outputs — matching MATLAB's "
+                  "default step() grid, as opposed to the combined simultaneous "
+                  "step above. Requires the last design above to have been run "
+                  "with Reference tracking checked.")
+        if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
+            _do_per_channel_step()
+
         _render_session_list()
         _render_last_result()
 
     with plots:
         _render_response_plot()
         _render_four_curve_plot()
+        _render_per_channel_step_plot()

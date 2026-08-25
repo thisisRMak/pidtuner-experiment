@@ -28,7 +28,7 @@ from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
-    compute_tracking_metrics,
+    simulate_per_channel_step, compute_tracking_metrics,
 )
 
 
@@ -426,6 +426,45 @@ class TestReferenceTracking(unittest.TestCase):
         res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
         with self.assertRaises(ValueError):
             add_reference_tracking(res)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-channel step response (MATLAB step() grid)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSimulatePerChannelStep(unittest.TestCase):
+    def test_rejects_missing_nbar(self):
+        ex = load_example("aircraft_hall")
+        res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
+        with self.assertRaises(ValueError):
+            simulate_per_channel_step(res, np.arange(0.0, 1.0, 0.1))
+
+    def test_returns_one_result_per_channel(self):
+        ex = load_example("aircraft_hall")  # square: nu == ny == 2
+        res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
+        rt = add_reference_tracking(res)
+        t = np.arange(0.0, 200.0, 0.05)
+        results = simulate_per_channel_step(rt, t)
+        self.assertEqual(len(results), 2)
+        for j, sim in enumerate(results):
+            self.assertIsNotNone(sim.tracking_metrics)
+            expected_final = [1.0 if k == j else 0.0 for k in range(2)]
+            np.testing.assert_allclose(sim.y[-1], expected_final, atol=1e-3)
+
+    def test_superposition_matches_combined_step(self):
+        # The closed loop is linear, so a combined step r=[1,1] must equal
+        # the sum of the per-channel (r=e_j) responses -- confirming the
+        # per-channel grid decomposes the same combined response that
+        # simulate_state_feedback's r=ones(...) mode reports as one curve,
+        # rather than simulating something unrelated.
+        ex = load_example("aircraft_hall")
+        res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
+        rt = add_reference_tracking(res)
+        t = np.arange(0.0, 200.0, 0.05)
+        per_channel = simulate_per_channel_step(rt, t)
+        combined = simulate_state_feedback(rt, t, r=np.tile([1.0, 1.0], (len(t), 1)))
+        summed_y = per_channel[0].y + per_channel[1].y
+        np.testing.assert_allclose(summed_y, combined.y, atol=1e-6)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

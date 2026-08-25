@@ -299,6 +299,43 @@ def simulate_output_feedback(result: LQGDesignResult, t, x0=None, x0_hat=None,
 # Explicit model-following (u = -K1·x - K2·xm, xm autonomous under Am)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def simulate_per_channel_step(result: LQGDesignResult, t,
+                              u_min=-1e9, u_max=1e9) -> list:
+    """Per-reference-channel step response, matching MATLAB's default
+    step() behavior on a MIMO state-space system: step(A-B*K, B*Nbar, C, D)
+    steps each column of B*Nbar (i.e. each reference channel) individually,
+    holding the others at zero, and reports the response across all
+    outputs -- a ny-by-ny grid of single-channel step responses (ny
+    reference channels since add_reference_tracking() requires nu == ny).
+
+    This is different from simulate_state_feedback's r=ones(...) combined
+    simultaneous-step simulation, which drives all channels at once: any
+    cross-channel coupling in K/N̄ can make the combined response overshoot
+    in a way that doesn't appear in any individual per-channel response
+    here (see the 2026-08-25 genericRTP worked-example memo).
+
+    Requires add_reference_tracking(result) to have set result.Nbar first
+    (same precondition as simulate_state_feedback's r parameter). Returns a
+    list of ny LQGSimResult, one per reference channel j, each simulated
+    with r = e_j (unit step on channel j, all others held at 0) -- reuses
+    simulate_state_feedback rather than a new lsim call."""
+    if result.Nbar is None:
+        raise ValueError(
+            "result.Nbar is None -- call add_reference_tracking(result) first"
+        )
+    ny = result.plant.ny
+    t = np.asarray(t, dtype=float)
+    n = len(t)
+    results = []
+    for j in range(ny):
+        e_j = np.zeros(ny)
+        e_j[j] = 1.0
+        r_arr = np.tile(e_j, (n, 1))
+        results.append(simulate_state_feedback(result, t, r=r_arr,
+                                                u_min=u_min, u_max=u_max))
+    return results
+
+
 def simulate_explicit_model_following(result: ExplicitModelFollowingResult, t,
                                       x0=None, xm0=None,
                                       u_min=-1e9, u_max=1e9) -> LQGSimResult:
