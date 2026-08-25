@@ -1,8 +1,8 @@
 {
   "key": "rpv",
   "name": "RPV (Maciejowski)",
-  "citation": "Maciejowski (via AIRPV.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIRPV.m",
+  "citation": "Maciejowski (via AIRPV2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIRPV2.m",
   "A": [
     [
       -0.02567,

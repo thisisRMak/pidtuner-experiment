@@ -1,8 +1,8 @@
 {
   "key": "airc",
   "name": "Aircraft (Maciejowski)",
-  "citation": "Maciejowski (via AIAIRC.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIAIRC.m",
+  "citation": "Maciejowski (via AIAIRC2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIAIRC2.m",
   "A": [
     [
       0.0,

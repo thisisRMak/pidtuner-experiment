@@ -1,8 +1,11 @@
 """One-off generator for the lqg_examples_json/*.json preset catalog.
 
-Transcribes all 12 directly-runnable plants from lqg_examples_m/*.m (see
-docs/lqg_plan.md "Known issues in the source material" — none excluded as
-of 2026-08-02, AIExample2RTP.m having been the last one fixed). Kept in the
+Transcribes all 12 directly-runnable plants from lqg_examples_m_revised/*2.m
+(see docs/lqg_plan.md "Known issues in the source material" — none excluded
+as of 2026-08-02, AIExample2RTP.m having been the last one fixed; the *2
+revision, sent 2026-08-14/confirmed 2026-08-24, adds a Kalman filter/S/T/
+PM-GM section on top of the same LQR-only content and is a byte-identical
+carryover for most plants — see lqg_revisedexamples_plan.md). Kept in the
 repo for provenance — rerun this if a transcription error is found here.
 
 Run:  python lqg_examples_gen.py
@@ -17,7 +20,7 @@ import numpy as np
 
 _HERE = os.path.dirname(__file__)
 _OUT_DIR = os.path.join(_HERE, "lqg_examples_json")
-_SOURCE_DIR = os.path.join(_HERE, "lqg_examples_m")
+_SOURCE_DIR = os.path.join(_HERE, "lqg_examples_m_revised")
 
 
 def _dump(key, name, citation, source_file, A, B, C, D,
@@ -57,13 +60,15 @@ def build_chemical_reactor():
          [1.067, 4.273, -6.654, 5.893],
          [0.0480, 4.273, 1.343, -2.104]]
     B = [[0, 0], [5.679, 0], [1.136, -3.146], [1.136, 0]]
-    C = np.eye(4)
-    D = np.zeros((4, 2))
+    C = [[1, 0, 0, 0], [0, 1, 0, 0]]
+    D = np.zeros((2, 2))
     _dump("chemical_reactor", "Chemical reactor (Munro)",
-         "Munro (via AIChemicalReactor1.m)", "pidtuner/lqg_examples_m/AIChemicalReactor1.m",
+         "Munro (via AIChemicalReactor12.m)", "pidtuner/lqg_examples_m_revised/AIChemicalReactor12.m",
          A, B, C, D, "identity", "identity",
-         "Q=I(4), R=I(2) in the source. No output map given (Q isn't "
-         "output-weighted), so C defaults to I(4).")
+         "Q=I(4), R=I(2) in the source. The *2 revision adds an explicit "
+         "output map, C=[[1,0,0,0],[0,1,0,0]] (2 outputs: states 1 and 2); "
+         "the original .m had none, so this catalog previously defaulted "
+         "C to I(4) — that default is now replaced by the source's own C.")
 
 
 def build_airc():
@@ -76,7 +81,7 @@ def build_airc():
     C = [[1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0]]
     D = np.zeros((3, 3))
     _dump("airc", "Aircraft (Maciejowski)",
-         "Maciejowski (via AIAIRC.m)", "pidtuner/lqg_examples_m/AIAIRC.m",
+         "Maciejowski (via AIAIRC2.m)", "pidtuner/lqg_examples_m_revised/AIAIRC2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(3) in the source.")
 
@@ -92,7 +97,7 @@ def build_drone():
     C = [[0, 1, 0, 0, 0, 0], [0, 0.07, 1, 0, 0, 0]]
     D = np.zeros((2, 2))
     _dump("drone", "Drone",
-         "(via AIDrone.m)", "pidtuner/lqg_examples_m/AIDrone.m",
+         "(via AIDrone2.m)", "pidtuner/lqg_examples_m_revised/AIDrone2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(2) in the source.")
 
@@ -108,7 +113,7 @@ def build_rpv():
     C = [[0, 1, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0]]
     D = np.zeros((2, 2))
     _dump("rpv", "RPV (Maciejowski)",
-         "Maciejowski (via AIRPV.m)", "pidtuner/lqg_examples_m/AIRPV.m",
+         "Maciejowski (via AIRPV2.m)", "pidtuner/lqg_examples_m_revised/AIRPV2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(2) in the source.")
 
@@ -126,7 +131,7 @@ def build_tgen():
          [3.1013, 9.3422, -5.6000, -0.7490, 2.9974, 10.5719]]
     D = np.zeros((2, 2))
     _dump("tgen", "Turbo-generator (Maciejowski)",
-         "Maciejowski (via AITGEN.m)", "pidtuner/lqg_examples_m/AITGEN.m",
+         "Maciejowski (via AITGEN2.m)", "pidtuner/lqg_examples_m_revised/AITGEN2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(2) in the source.")
 
@@ -143,8 +148,8 @@ def build_aircraft_hall():
     Q = [[1, 0, 0, 0, 1], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0],
          [0, 0, 0, 1, 0], [1, 0, 0, 0, 1]]
     _dump("aircraft_hall", "Aircraft (Hall)",
-         "Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall.m)",
-         "pidtuner/lqg_examples_m/AIAircraftHall.m",
+         "Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall2.m)",
+         "pidtuner/lqg_examples_m_revised/AIAircraftHall2.m",
          A, B, C, D, "custom", "identity",
          "GOLDEN TEST CASE: matches AILQG.pdf Example 1 exactly. LQR(Q, "
          "R=I(2)) on this plant reproduces the PDF's printed S (eq. 25), K "
@@ -172,7 +177,7 @@ def build_autm():
          [0, 0, 0, 0, 0, 4.9, 2.12, 1.95, 9.35, 25.8, 7.14, 0]]
     D = np.zeros((2, 2))
     _dump("autm", "AUTM",
-         "(via AIAUTM.m)", "pidtuner/lqg_examples_m/AIAUTM.m",
+         "(via AIAUTM2.m)", "pidtuner/lqg_examples_m_revised/AIAUTM2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(2) in the source. 12 states — the largest of the "
          "hand-transcribed plants.")
@@ -197,15 +202,16 @@ def build_distillation_column():
         [-0.05, 50], [-0.10, 50], [-0.4, 25], [-0.2, 25], [4.6, 0],
     ])
     C = [[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
-         [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]]
-    D = np.zeros((3, 2))
+         [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]
+    D = np.zeros((2, 2))
     _dump("distillation_column", "Distillation column (Davison)",
-         "Davison 2011 (via AIDistillationColumn.m)",
-         "pidtuner/lqg_examples_m/AIDistillationColumn.m",
+         "Davison 2011 (via AIDistillationColumn2.m)",
+         "pidtuner/lqg_examples_m_revised/AIDistillationColumn2.m",
          A, B, C, D, "identity", "scaled_identity",
-         "Q = I(11), R = 0.1·I(2) in the source. Non-square C (3 outputs, "
-         "2 inputs).", suggested_R_scale=0.1)
+         "Q = I(11), R = 0.1·I(2) in the source. The *2 revision drops C's "
+         "third row (the original 3-output C=[[...,1,0],[1,...],[...,0,1]] "
+         "is now square, 2 outputs matching 2 inputs) — the third row is "
+         "left commented out in the source, not deleted.", suggested_R_scale=0.1)
 
 
 def build_furnace_model():
@@ -233,8 +239,8 @@ def build_furnace_model():
          [-0.2685, 0.2041, -0.2276, 0.0027, -0.0905, 0.0186, 0.0195, -0.0247]]
     D = np.zeros((4, 4))
     _dump("furnace_model", "Furnace (Davison 2011 / Rosenbrock)",
-         "Davison 2011 / Rosenbrock (via AIFurnaceModel.m)",
-         "pidtuner/lqg_examples_m/AIFurnaceModel.m",
+         "Davison 2011 / Rosenbrock (via AIFurnaceModel2.m)",
+         "pidtuner/lqg_examples_m_revised/AIFurnaceModel2.m",
          A, B, C, D, "identity", "scaled_identity",
          "Q=I(8), R=0.1·I(4) in the source. Was excluded (stray trailing "
          "')' broke the .m file's lqr() call); re-added once the source "
@@ -262,7 +268,7 @@ def build_f100_engine():
          [9.7674e-01, -5.7450e+00, -3.8500e-01, 9.5762e-03, -2.2963e-02],
          [7.1316e+00, 5.5560e-01, 1.3247e-01, 1.5533e-01, 4.8290e-02]]
     _dump("f100_engine", "F-100 Engine",
-         "(via AIF100Engine.m)", "pidtuner/lqg_examples_m/AIF100Engine.m",
+         "(via AIF100Engine2.m)", "pidtuner/lqg_examples_m_revised/AIF100Engine2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(5) in the source. Was excluded (R was never "
          "defined); re-added once the source was corrected (R=eye(5), "
@@ -283,8 +289,8 @@ def build_example2_rtp():
     Q = [[1, 0, 0], [0, 20, -10], [0, -10, 20]]
     _dump("example2_rtp", "RTP (Franklin/Powell/Emami-Naeini 8e)",
          "Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, "
-         "8th ed. (via AIExample2RTP.m)",
-         "pidtuner/lqg_examples_m/AIExample2RTP.m",
+         "8th ed. (via AIExample2RTP2.m)",
+         "pidtuner/lqg_examples_m_revised/AIExample2RTP2.m",
          A, B, C, D, "custom", "identity",
          "Q = [[1,0,0],[0,20,-10],[0,-10,20]] (hand-picked, off-diagonal "
          "cross terms), R = I(3) in the source. Was excluded (the lqr() "
@@ -306,8 +312,8 @@ def build_generic_rtp():
     C = raw[nx:nx + ny, :nx]
     D = raw[nx:nx + ny, nx:nx + nu]
     _dump("generic_rtp", "Generic RTP (Rapid Thermal Processing)",
-         "(via AIGeneric_RTP.m, matrices from rtpsystem.dat)",
-         "pidtuner/lqg_examples_m/AIGeneric_RTP.m",
+         "(via AIGeneric_RTP2.m, matrices from rtpsystem.dat)",
+         "pidtuner/lqg_examples_m_revised/AIGeneric_RTP2.m",
          A, B, C, D, "output_weighted", "identity",
          "Q = CᵀC, R = I(5) in the source. 15 states, 5 inputs, 5 outputs "
          "— the largest/highest-dimensional plant in the catalog; loaded "

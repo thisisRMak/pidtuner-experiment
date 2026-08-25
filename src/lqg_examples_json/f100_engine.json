@@ -1,8 +1,8 @@
 {
   "key": "f100_engine",
   "name": "F-100 Engine",
-  "citation": "(via AIF100Engine.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIF100Engine.m",
+  "citation": "(via AIF100Engine2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIF100Engine2.m",
   "A": [
     [
       -3.918,

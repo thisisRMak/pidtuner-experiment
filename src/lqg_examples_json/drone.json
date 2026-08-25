@@ -1,8 +1,8 @@
 {
   "key": "drone",
   "name": "Drone",
-  "citation": "(via AIDrone.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIDrone.m",
+  "citation": "(via AIDrone2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIDrone2.m",
   "A": [
     [
       -0.0827,

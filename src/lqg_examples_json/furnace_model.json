@@ -1,8 +1,8 @@
 {
   "key": "furnace_model",
   "name": "Furnace (Davison 2011 / Rosenbrock)",
-  "citation": "Davison 2011 / Rosenbrock (via AIFurnaceModel.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIFurnaceModel.m",
+  "citation": "Davison 2011 / Rosenbrock (via AIFurnaceModel2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIFurnaceModel2.m",
   "A": [
     [
       -0.23226,

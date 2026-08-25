@@ -1,8 +1,8 @@
 {
   "key": "autm",
   "name": "AUTM",
-  "citation": "(via AIAUTM.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIAUTM.m",
+  "citation": "(via AIAUTM2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIAUTM2.m",
   "A": [
     [
       0.0,

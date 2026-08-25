@@ -1,8 +1,8 @@
 {
   "key": "generic_rtp",
   "name": "Generic RTP (Rapid Thermal Processing)",
-  "citation": "(via AIGeneric_RTP.m, matrices from rtpsystem.dat)",
-  "source_file": "pidtuner/lqg_examples_m/AIGeneric_RTP.m",
+  "citation": "(via AIGeneric_RTP2.m, matrices from rtpsystem.dat)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIGeneric_RTP2.m",
   "A": [
     [
       -0.1018854,

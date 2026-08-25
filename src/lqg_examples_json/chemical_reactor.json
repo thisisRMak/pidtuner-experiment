@@ -1,8 +1,8 @@
 {
   "key": "chemical_reactor",
   "name": "Chemical reactor (Munro)",
-  "citation": "Munro (via AIChemicalReactor1.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIChemicalReactor1.m",
+  "citation": "Munro (via AIChemicalReactor12.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIChemicalReactor12.m",
   "A": [
     [
       1.38,
@@ -59,29 +59,9 @@
       1.0,
       0.0,
       0.0
-    ],
-    [
-      0.0,
-      0.0,
-      1.0,
-      0.0
-    ],
-    [
-      0.0,
-      0.0,
-      0.0,
-      1.0
     ]
   ],
   "D": [
-    [
-      0.0,
-      0.0
-    ],
-    [
-      0.0,
-      0.0
-    ],
     [
       0.0,
       0.0
@@ -95,5 +75,5 @@
   "suggested_Q": null,
   "suggested_R_kind": "identity",
   "suggested_R_scale": 1.0,
-  "notes": "Q=I(4), R=I(2) in the source. No output map given (Q isn't output-weighted), so C defaults to I(4)."
+  "notes": "Q=I(4), R=I(2) in the source. The *2 revision adds an explicit output map, C=[[1,0,0,0],[0,1,0,0]] (2 outputs: states 1 and 2); the original .m had none, so this catalog previously defaulted C to I(4) \u2014 that default is now replaced by the source's own C."
 }

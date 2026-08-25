@@ -1,8 +1,8 @@
 {
   "key": "tgen",
   "name": "Turbo-generator (Maciejowski)",
-  "citation": "Maciejowski (via AITGEN.m)",
-  "source_file": "pidtuner/lqg_examples_m/AITGEN.m",
+  "citation": "Maciejowski (via AITGEN2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AITGEN2.m",
   "A": [
     [
       -18.4456,

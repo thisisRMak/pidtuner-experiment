@@ -1,8 +1,8 @@
 {
   "key": "distillation_column",
   "name": "Distillation column (Davison)",
-  "citation": "Davison 2011 (via AIDistillationColumn.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIDistillationColumn.m",
+  "citation": "Davison 2011 (via AIDistillationColumn2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIDistillationColumn2.m",
   "A": [
     [
       -0.013999999999999999,
@@ -220,26 +220,9 @@
       0.0,
       0.0,
       0.0
-    ],
-    [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      1.0
     ]
   ],
   "D": [
-    [
-      0.0,
-      0.0
-    ],
     [
       0.0,
       0.0
@@ -253,5 +236,5 @@
   "suggested_Q": null,
   "suggested_R_kind": "scaled_identity",
   "suggested_R_scale": 0.1,
-  "notes": "Q = I(11), R = 0.1\u00b7I(2) in the source. Non-square C (3 outputs, 2 inputs)."
+  "notes": "Q = I(11), R = 0.1\u00b7I(2) in the source. The *2 revision drops C's third row (the original 3-output C=[[...,1,0],[1,...],[...,0,1]] is now square, 2 outputs matching 2 inputs) \u2014 the third row is left commented out in the source, not deleted."
 }

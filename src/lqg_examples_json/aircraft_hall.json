@@ -1,8 +1,8 @@
 {
   "key": "aircraft_hall",
   "name": "Aircraft (Hall)",
-  "citation": "Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIAircraftHall.m",
+  "citation": "Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIAircraftHall2.m",
   "A": [
     [
       -0.0297,

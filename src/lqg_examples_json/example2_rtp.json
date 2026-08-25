@@ -1,8 +1,8 @@
 {
   "key": "example2_rtp",
   "name": "RTP (Franklin/Powell/Emami-Naeini 8e)",
-  "citation": "Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP.m)",
-  "source_file": "pidtuner/lqg_examples_m/AIExample2RTP.m",
+  "citation": "Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP2.m)",
+  "source_file": "pidtuner/lqg_examples_m_revised/AIExample2RTP2.m",
   "A": [
     [
       -0.0682,
