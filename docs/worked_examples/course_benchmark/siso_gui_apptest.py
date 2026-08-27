@@ -1,9 +1,9 @@
 import sys
-sys.path.insert(0, "../src")
+sys.path.insert(0, "../../src")
 from streamlit.testing.v1 import AppTest
 
 at = AppTest.from_file(
-    "../../src/streamlit_app.py",
+    "../../../src/streamlit_app.py",
     default_timeout=60,
 )
 at.run()

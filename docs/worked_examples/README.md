@@ -1,43 +1,21 @@
-# Worked SISO PID example (paper's minimum SISO result)
+# Worked SISO PID examples
 
-Plant: the course benchmark `G(s) = 1000/((s+1)(10s+1)) · exp(-0.5s)` (same
-plant as `benchmark_plant()` in `src/test_pid_tuner.py`), tuned with
-Ziegler-Nichols II.
+Two fixed reference plants PIDTuner is run against end-to-end via the real
+CLI (and, for one, the real GUI), with checked-in actual output — not
+hand-written numbers — so behavior changes can be diffed against a known
+baseline instead of drifting unnoticed. Each subfolder is self-contained
+with its own reproduce commands.
 
-## CLI
+- [`course_benchmark/`](course_benchmark/) — the class benchmark plant
+  `1000/((s+1)(10s+1))·exp(-0.5s)`, ZN-II. Covers both the CLI and the GUI
+  (headless Streamlit `AppTest`), confirming both entry points hit the same
+  tuning code and produce the same gains.
+- [`textbook_pei8e/`](textbook_pei8e/) — the PEI8e (Franklin/Powell/
+  Emami-Naeini, 8th ed.) Examples 4.9/4.10 heat-exchanger surrogate
+  `1/(90s+1)`, `L=13`. ZN-I and ZN-II both highlighted, since the two
+  textbook examples cover one method each. CLI only so far.
 
-Reproduce with:
-
-```bash
-cd src
-python3 cli_pid.py --plant "1000 / ((s+1)*(10s+1))" --L 0.5 --method zn2 --json
-python3 cli_pid.py --plant "1000 / ((s+1)*(10s+1))" --L 0.5 --method zn2 \
-    --plot ../docs/worked_examples/siso_zn2_cli_step.png
-python3 cli_pid.py --plant "1000 / ((s+1)*(10s+1))" --L 0.5 --method all --json
-```
-
-Outputs in this directory:
-- `siso_zn2_cli.json` — ZN-II gains + metrics (`--json`)
-- `siso_zn2_cli_step.png` — step-response plot
-- `siso_all_methods_cli.json` — all 9 methods (12 rows incl. CHR/ZN variants) on the same plant
-
-## GUI (Streamlit)
-
-Driven headlessly via Streamlit's `AppTest` framework (no display available
-in this environment, so this is a scripted run of the real app code path,
-not a manual browser click-through). Reproduce with:
-
-```bash
-cd docs/worked_examples
-python3 siso_gui_apptest.py
-```
-
-`siso_gui_apptest.py` boots `src/streamlit_app.py`, selects the SISO tab's
-"Ziegler-Nichols II" method with `L=0.5`, clicks "Tune & simulate", and
-prints the resulting gains plus the `N` filter-bandwidth session-state value
-and the live `simulate_closed_loop` default `N`. Output: `siso_gui_apptest.log`.
-
-The GUI run reproduces the same gains as the CLI (Kp=0.0143, Ki=0.00634,
-Kd=0.00809), confirming both entry points hit the same tuning code
-(`pid_tuning_methods.ZieglerNicholsII`) and simulate at the same default
-`N=80`.
+Both examples run PIDTuner's full 9-method comparison (`--method all`) in
+addition to their headline single method, so `siso_all_methods_cli.json` in
+each folder doubles as a reference for the comparison-table behavior more
+generally, not just the one method each is named for.
