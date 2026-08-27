@@ -1,6 +1,6 @@
 # LQG Design Track — Preset Catalog Review
 
-Generated 2026-08-18. One pass of `LQR` (each plant's own suggested `Q`/`R`, i.e. the same weights your `.m` files use) over all 12 plants currently in the preset catalog (`pidtuner/lqg_examples_m/*.m` → `pidtuner/lqg_examples_json/*.json`), with the full pre-/post-design correctness check suite (see `docs/lqg_testing.md` for what each check verifies).
+Generated 2026-08-27. One pass of `LQR` (each plant's own suggested `Q`/`R`, i.e. the same weights your `.m` files use) over all 12 plants currently in the preset catalog (`pidtuner/lqg_examples_m/*.m` → `pidtuner/lqg_examples_json/*.json`), with the full pre-/post-design correctness check suite (see `docs/lqg_testing.md` for what each check verifies).
 
 **Summary: 12/12 plants pass every check.**
 
@@ -10,9 +10,9 @@ Generated 2026-08-18. One pass of `LQR` (each plant's own suggested `Q`/`R`, i.e
 
 These were excluded from the catalog until now because the `.m` file as originally provided had a bug unrelated to the plant data itself. Flagging so you can confirm the fix matches what you intended:
 
-- **`pidtuner/lqg_examples_m/AIFurnaceModel.m`** (`furnace_model`): source had a stray trailing ')' after `lqr(A,B,Q,R)`, a plain syntax typo — fixed by removing it.
-- **`pidtuner/lqg_examples_m/AIF100Engine.m`** (`f100_engine`): source's `R` was undefined at the `lqr(A,B,Q,R)` call; now `R=eye(5)`, matching nu=5 from B/D's column count.
-- **`pidtuner/lqg_examples_m/AIExample2RTP.m`** (`example2_rtp`): the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case — fixed by using consistent, correctly-sized A,B,Q,R.
+- **`pidtuner/lqg_examples_m_revised/AIFurnaceModel2.m`** (`furnace_model`): source had a stray trailing ')' after `lqr(A,B,Q,R)`, a plain syntax typo — fixed by removing it.
+- **`pidtuner/lqg_examples_m_revised/AIF100Engine2.m`** (`f100_engine`): source's `R` was undefined at the `lqr(A,B,Q,R)` call; now `R=eye(5)`, matching nu=5 from B/D's column count.
+- **`pidtuner/lqg_examples_m_revised/AIExample2RTP2.m`** (`example2_rtp`): the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case — fixed by using consistent, correctly-sized A,B,Q,R.
 
 ## Results
 
@@ -21,8 +21,8 @@ These were excluded from the catalog until now because the `.m` file as original
 | `airc` | 5/3/3 | output_weighted | True | all pass |
 | `aircraft_hall` | 5/2/2 | custom | True | all pass |
 | `autm` | 12/2/2 | output_weighted | True | all pass |
-| `chemical_reactor` | 4/2/4 | identity | True | all pass |
-| `distillation_column` | 11/2/3 | identity | True | all pass |
+| `chemical_reactor` | 4/2/2 | identity | True | all pass |
+| `distillation_column` | 11/2/2 | identity | True | all pass |
 | `drone` | 6/2/2 | output_weighted | True | all pass |
 | `example2_rtp` 🔧 fixed | 3/3/3 | custom | True | all pass |
 | `f100_engine` 🔧 fixed | 4/5/5 | output_weighted | True | all pass |
@@ -35,7 +35,7 @@ These were excluded from the catalog until now because the `.m` file as original
 
 ### `airc` — Aircraft (Maciejowski)
 
-Source: `pidtuner/lqg_examples_m/AIAIRC.m` (Maciejowski (via AIAIRC.m))
+Source: `pidtuner/lqg_examples_m_revised/AIAIRC2.m` (Maciejowski (via AIAIRC2.m))
 
 nx=5, nu=3, ny=3, Q=output_weighted, R=identity, stable=True
 
@@ -71,7 +71,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `aircraft_hall` — Aircraft (Hall)
 
-Source: `pidtuner/lqg_examples_m/AIAircraftHall.m` (Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall.m))
+Source: `pidtuner/lqg_examples_m_revised/AIAircraftHall2.m` (Hall 1971, = AILQG.pdf Example 1 (via AIAircraftHall2.m))
 
 nx=5, nu=2, ny=2, Q=custom, R=identity, stable=True
 
@@ -105,7 +105,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `autm` — AUTM
 
-Source: `pidtuner/lqg_examples_m/AIAUTM.m` ((via AIAUTM.m))
+Source: `pidtuner/lqg_examples_m_revised/AIAUTM2.m` ((via AIAUTM2.m))
 
 nx=12, nu=2, ny=2, Q=output_weighted, R=identity, stable=True
 
@@ -141,9 +141,9 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `chemical_reactor` — Chemical reactor (Munro)
 
-Source: `pidtuner/lqg_examples_m/AIChemicalReactor1.m` (Munro (via AIChemicalReactor1.m))
+Source: `pidtuner/lqg_examples_m_revised/AIChemicalReactor12.m` (Munro (via AIChemicalReactor12.m))
 
-nx=4, nu=2, ny=4, Q=identity, R=identity, stable=True
+nx=4, nu=2, ny=2, Q=identity, R=identity, stable=True
 
 Checks:
 - [PASS] Q symmetric — max|Q-Qᵀ| = 0.00e+00
@@ -168,15 +168,16 @@ Regulator step (x0 = ones): control effort and settling —
 - settling (2%) = 1.32 s,  ISU (control energy) = 1.74,  |u|_peak = 3.22,  final ||x|| = 4.03e-07
 
 Closed-loop step response (r = ones), per output channel:
-- not available: plant is non-square (nu=2, ny=4) — reference tracking (N̄) requires nu == ny
+  y0: Overshoot = 0%,  Rise (10-90%) = 0.702 s,  Settling (2%) = 1.29 s
+  y1: Overshoot = 147%,  Rise (10-90%) = 0.0251 s,  Settling (2%) = 0.965 s
 
 Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input): Ms = 1, Mt = 1.64
 
 ### `distillation_column` — Distillation column (Davison)
 
-Source: `pidtuner/lqg_examples_m/AIDistillationColumn.m` (Davison 2011 (via AIDistillationColumn.m))
+Source: `pidtuner/lqg_examples_m_revised/AIDistillationColumn2.m` (Davison 2011 (via AIDistillationColumn2.m))
 
-nx=11, nu=2, ny=3, Q=identity, R=scaled_identity, stable=True
+nx=11, nu=2, ny=2, Q=identity, R=scaled_identity, stable=True
 
 Checks:
 - [PASS] Q symmetric — max|Q-Qᵀ| = 0.00e+00
@@ -203,13 +204,14 @@ Regulator step (x0 = ones): control effort and settling —
 - settling (2%) = 695 s,  ISU (control energy) = 1.34e+03,  |u|_peak = 9.92,  final ||x|| = 2.04e-07
 
 Closed-loop step response (r = ones), per output channel:
-- not available: plant is non-square (nu=2, ny=3) — reference tracking (N̄) requires nu == ny
+  y0: Overshoot = 73.4%,  Rise (10-90%) = nan s,  Settling (2%) = 614 s
+  y1: Overshoot = 0%,  Rise (10-90%) = 266 s,  Settling (2%) = 787 s
 
 Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input): Ms = 1, Mt = 0.997
 
 ### `drone` — Drone
 
-Source: `pidtuner/lqg_examples_m/AIDrone.m` ((via AIDrone.m))
+Source: `pidtuner/lqg_examples_m_revised/AIDrone2.m` ((via AIDrone2.m))
 
 nx=6, nu=2, ny=2, Q=output_weighted, R=identity, stable=True
 
@@ -242,7 +244,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `example2_rtp` — RTP (Franklin/Powell/Emami-Naeini 8e)
 
-Source: `pidtuner/lqg_examples_m/AIExample2RTP.m` (Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP.m))
+Source: `pidtuner/lqg_examples_m_revised/AIExample2RTP2.m` (Franklin/Powell/Emami-Naeini, Feedback Control of Dynamic Systems, 8th ed. (via AIExample2RTP2.m))
 
 **Fixed for this review:** the lqr() call referenced undefined uppercase A,B,C,D while only lowercase a,b,c,d were assigned, and the dimensions didn't match even correcting the case — fixed by using consistent, correctly-sized A,B,Q,R.
 
@@ -280,7 +282,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `f100_engine` — F-100 Engine
 
-Source: `pidtuner/lqg_examples_m/AIF100Engine.m` ((via AIF100Engine.m))
+Source: `pidtuner/lqg_examples_m_revised/AIF100Engine2.m` ((via AIF100Engine2.m))
 
 **Fixed for this review:** source's `R` was undefined at the `lqr(A,B,Q,R)` call; now `R=eye(5)`, matching nu=5 from B/D's column count.
 
@@ -322,7 +324,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `furnace_model` — Furnace (Davison 2011 / Rosenbrock)
 
-Source: `pidtuner/lqg_examples_m/AIFurnaceModel.m` (Davison 2011 / Rosenbrock (via AIFurnaceModel.m))
+Source: `pidtuner/lqg_examples_m_revised/AIFurnaceModel2.m` (Davison 2011 / Rosenbrock (via AIFurnaceModel2.m))
 
 **Fixed for this review:** source had a stray trailing ')' after `lqr(A,B,Q,R)`, a plain syntax typo — fixed by removing it.
 
@@ -362,7 +364,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `generic_rtp` — Generic RTP (Rapid Thermal Processing)
 
-Source: `pidtuner/lqg_examples_m/AIGeneric_RTP.m` ((via AIGeneric_RTP.m, matrices from rtpsystem.dat))
+Source: `pidtuner/lqg_examples_m_revised/AIGeneric_RTP2.m` ((via AIGeneric_RTP2.m, matrices from rtpsystem.dat))
 
 nx=15, nu=5, ny=5, Q=output_weighted, R=identity, stable=True
 
@@ -407,7 +409,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `rpv` — RPV (Maciejowski)
 
-Source: `pidtuner/lqg_examples_m/AIRPV.m` (Maciejowski (via AIRPV.m))
+Source: `pidtuner/lqg_examples_m_revised/AIRPV2.m` (Maciejowski (via AIRPV2.m))
 
 nx=6, nu=2, ny=2, Q=output_weighted, R=identity, stable=True
 
@@ -443,7 +445,7 @@ Sensitivity/complementary sensitivity at the plant input (loop_point=plant_input
 
 ### `tgen` — Turbo-generator (Maciejowski)
 
-Source: `pidtuner/lqg_examples_m/AITGEN.m` (Maciejowski (via AITGEN.m))
+Source: `pidtuner/lqg_examples_m_revised/AITGEN2.m` (Maciejowski (via AITGEN2.m))
 
 nx=6, nu=2, ny=2, Q=output_weighted, R=identity, stable=True
 
