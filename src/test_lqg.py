@@ -422,8 +422,14 @@ class TestReferenceTracking(unittest.TestCase):
         np.testing.assert_allclose(sim.y[-1], [1.0, -0.5], atol=1e-3)
 
     def test_rejects_non_square_plant(self):
-        ex = load_example("distillation_column")  # ny=3, nu=2
-        res = LQR(ex.plant, Q=ex.build_suggested_Q(), R=ex.build_suggested_R()).design()
+        # Synthetic fixture rather than a catalog preset: every preset in the
+        # *2-revised catalog is square now (distillation_column, the last
+        # non-square one at ny=3/nu=2, became 2x2 when AIDistillationColumn2.m's
+        # output map changed -- see docs/lqg_review.md), so this needs its own
+        # non-square plant to keep exercising the shape-mismatch path.
+        p = StateSpacePlant.from_matrices(A=[[0, 1], [0, 0]], B=[[0], [1]],
+                                          C=[[1, 0], [0, 1]])  # nu=1, ny=2
+        res = LQR(p, Q=np.eye(2), R=np.eye(1)).design()
         with self.assertRaises(ValueError):
             add_reference_tracking(res)
 
