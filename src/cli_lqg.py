@@ -27,6 +27,7 @@ from lqg_explicit import ExplicitModelFollowing, ExplicitModelFollowingResult
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
     simulate_per_channel_step, format_regulator_metrics, format_tracking_metrics, auto_t_end,
+    auto_plot_window,
 )
 from lqg_checks import checks_for_result, format_checks
 from lqg_compare import compare_regulator_methods, compare_model_following, compare_bryson_output_modelfollowing
@@ -41,7 +42,7 @@ def _checks_json(checks):
     return [{"name": c.name, "passed": c.passed, "detail": c.detail} for c in checks]
 
 
-def serialize_result_json(res, sim=None, checks=None):
+def serialize_result_json(res, sim=None, checks=None, plot_t_max=None):
     if isinstance(res, ExplicitModelFollowingResult):
         out = {
             "method": res.method,
@@ -76,6 +77,8 @@ def serialize_result_json(res, sim=None, checks=None):
         out["sim"] = {"mode": sim.mode, "stable": sim.stable, "metrics": m}
         if sim.tracking_metrics is not None:
             out["sim"]["tracking_metrics"] = sim.tracking_metrics
+        if plot_t_max is not None:
+            out["sim"]["plot_t_max"] = plot_t_max
     if checks is not None:
         out["checks"] = {k: _checks_json(v) for k, v in checks.items()}
         out["checks_all_passed"] = all(c["passed"] for cs in out["checks"].values() for c in cs)
@@ -322,20 +325,26 @@ def plot_per_channel_step(per_channel_sims, res, ex, path, t_max=None, y_max=Non
     alone; row i is output i. The diagonal cells show each channel tracking
     its own step; off-diagonal cells show cross-channel coupling.
 
-    t_max/y_max (--plot-t-max/--plot-y-max) optionally fix every cell's
-    time/output axis to [0, t_max]/[0, y_max] -- useful for a shared,
-    normalized view across cells (e.g. t_max~settling time, y_max~1 for a
-    unit step) instead of each cell's independent auto-scaled range."""
+    t_max (--plot-t-max, or the caller's auto_plot_window() default) crops
+    every cell's plotted data to [0, t_max] -- sliced, not just set_xlim,
+    so each cell's y-autoscale reflects only the visible window rather than
+    the full (possibly much longer) simulated duration. y_max (--plot-y-max)
+    optionally fixes every cell's output axis to [0, y_max] on top of that,
+    for a shared normalized view (e.g. y_max~1 for a unit step) instead of
+    each cell's independent auto-scaled range."""
     ny = len(per_channel_sims)
     fig, axes = plt.subplots(ny, ny, figsize=(3.2 * ny, 2.6 * ny), sharex=True)
     axes = np.atleast_2d(axes)
     for j, sim in enumerate(per_channel_sims):
+        if t_max is not None:
+            idx = max(int(np.searchsorted(sim.t, t_max, side="right")), 2)
+        else:
+            idx = len(sim.t)
+        t_plot, y_plot = sim.t[:idx], sim.y[:idx]
         for i in range(ny):
             ax = axes[i, j]
             ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
-            ax.plot(sim.t, sim.y[:, i])
-            if t_max is not None:
-                ax.set_xlim(0, t_max)
+            ax.plot(t_plot, y_plot[:, i])
             if y_max is not None:
                 ax.set_ylim(0, y_max)
             ax.grid(True, alpha=0.3)
@@ -469,8 +478,16 @@ def main():
                        help="Save state-trajectory / control-effort plot to this "
                             "filename (e.g. plot.png).")
     parser.add_argument("--plot-t-max", type=float, default=None,
-                       help="--sim per_channel_step only: fix every grid cell's time "
-                            "axis to [0, t_max] instead of auto-scaling per cell.")
+                       help="Fix the plot's time axis to [0, t_max] (every grid cell, "
+                            "for --sim per_channel_step). Default: auto-cropped via "
+                            "lqg_simulate.auto_plot_window() from the simulated "
+                            "trajectory itself, which can be much shorter than the "
+                            "full simulated duration (auto_t_end() sizes that to the "
+                            "*slowest* closed-loop pole, which for a plant with widely "
+                            "separated poles can force the plot out far past where "
+                            "the response has visually settled) -- doesn't affect "
+                            "settling_2pct/ISU, which are still computed on the full "
+                            "array. --json always reports whichever value was used.")
     parser.add_argument("--plot-y-max", type=float, default=None,
                        help="--sim per_channel_step only: fix every grid cell's output "
                             "axis to [0, y_max] instead of auto-scaling per cell.")
@@ -632,9 +649,8 @@ def main():
         if args.sim == "per_channel_step" and (is_explicit or res.Nbar is None):
             raise ValueError("--sim per_channel_step requires --reference-tracking "
                              "(not --method explicit)")
-        if (args.plot_t_max is not None or args.plot_y_max is not None) and \
-                args.sim != "per_channel_step":
-            raise ValueError("--plot-t-max/--plot-y-max require --sim per_channel_step")
+        if args.plot_y_max is not None and args.sim != "per_channel_step":
+            raise ValueError("--plot-y-max requires --sim per_channel_step")
 
         sim = None
         per_channel_sims = None
@@ -655,10 +671,27 @@ def main():
         elif args.sim == "per_channel_step":
             per_channel_sims = simulate_per_channel_step(res, t)
 
+        # Plot-crop window: an explicit --plot-t-max always wins; otherwise
+        # auto_plot_window() picks one from the actual simulated trajectory,
+        # decoupled from auto_t_end()'s "long enough to measure settling"
+        # duration used for `t` above. Computed whenever there's a sim to
+        # plot (not gated on --plot) so it's always reported in --json,
+        # letting a caller (e.g. gen_lqg_worked_examples_memos.py) read back
+        # what this run would use without re-simulating.
+        plot_t_max = None
+        if per_channel_sims is not None:
+            plot_t_max = (args.plot_t_max if args.plot_t_max is not None
+                          else auto_plot_window(t, *[s.y for s in per_channel_sims]))
+        elif sim is not None:
+            mats = [sim.x, sim.u] + ([sim.xm] if sim.xm is not None else [])
+            plot_t_max = (args.plot_t_max if args.plot_t_max is not None
+                          else auto_plot_window(sim.t, *mats))
+
         if args.json:
-            out = serialize_result_json(res, sim, checks)
+            out = serialize_result_json(res, sim, checks, plot_t_max=plot_t_max)
             if per_channel_sims is not None:
                 out["per_channel_step"] = per_channel_step_json(per_channel_sims)
+                out["per_channel_step_plot_t_max"] = plot_t_max
             print(json.dumps(out, indent=2))
         else:
             print(format_result_text(res, sim, checks))
@@ -670,28 +703,31 @@ def main():
                 raise ValueError("--plot requires --sim to not be 'none'")
             if per_channel_sims is not None:
                 plot_per_channel_step(per_channel_sims, res, ex, args.plot,
-                                      t_max=args.plot_t_max, y_max=args.plot_y_max)
+                                      t_max=plot_t_max, y_max=args.plot_y_max)
                 return
             nx, nu = plant.nx, plant.nu
+            idx = max(int(np.searchsorted(sim.t, plot_t_max, side="right")), 2)
+            t_plot, x_plot, u_plot = sim.t[:idx], sim.x[:idx], sim.u[:idx]
+            xm_plot = sim.xm[:idx] if sim.xm is not None else None
             n_panels = 3 if sim.xm is not None else 2
             fig, axes = plt.subplots(n_panels, 1, figsize=(10, 4 * n_panels), sharex=True)
             ax1, ax2 = axes[0], axes[1]
             for i in range(nx):
-                ax1.plot(sim.t, sim.x[:, i], label=f"x{i}")
+                ax1.plot(t_plot, x_plot[:, i], label=f"x{i}")
             ax1.set_ylabel("State x(t)")
             ax1.set_title(f"{res.method} on {ex.name} ({sim.mode})")
             ax1.legend(fontsize="small", ncol=min(nx, 4))
             ax1.grid(True)
             for i in range(nu):
-                ax2.plot(sim.t, sim.u[:, i], label=f"u{i}")
+                ax2.plot(t_plot, u_plot[:, i], label=f"u{i}")
             ax2.set_ylabel("Control effort u(t)")
             ax2.legend(fontsize="small", ncol=min(nu, 4))
             ax2.grid(True)
-            if sim.xm is not None:
+            if xm_plot is not None:
                 ax3 = axes[2]
-                nxm = sim.xm.shape[1]
+                nxm = xm_plot.shape[1]
                 for i in range(nxm):
-                    ax3.plot(sim.t, sim.xm[:, i], "--", label=f"xm{i}")
+                    ax3.plot(t_plot, xm_plot[:, i], "--", label=f"xm{i}")
                 ax3.set_ylabel("Model state xm(t)")
                 ax3.legend(fontsize="small", ncol=min(nxm, 4))
                 ax3.grid(True)

@@ -40,6 +40,7 @@ from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracki
 from lqg_bryson import BrysonLQR
 from lqg_simulate import (
     simulate_state_feedback, simulate_per_channel_step, format_regulator_metrics, auto_t_end,
+    auto_plot_window,
 )
 from lqg_compare import compare_regulator_methods, compare_bryson_output_modelfollowing
 from lqg_checks import checks_for_result
@@ -257,9 +258,11 @@ def _do_per_channel_step():
     Additive alongside the existing "Reference tracking" combined-step
     simulation (_run_sim), which stays exactly as it was -- this is a
     separate grid view, not a replacement. Reads the optional
-    mimo_pcs_t_max/mimo_pcs_y_max text fields (blank = auto per cell,
-    matching cli_lqg.py's --plot-t-max/--plot-y-max) and stashes them
-    alongside the sim results for _render_per_channel_step_plot to apply."""
+    mimo_pcs_t_max/mimo_pcs_y_max text fields and stashes them alongside
+    the sim results for _render_per_channel_step_plot to apply -- blank
+    t_max auto-crops via auto_plot_window() (matching cli_lqg.py's
+    --plot-t-max default), blank y_max stays fully auto-scaled per cell
+    (matching cli_lqg.py's --plot-y-max, which has no auto-default)."""
     last = st.session_state.get("mimo_last_result")
     if last is None:
         st.error("Design a method first (with Reference tracking checked) "
@@ -282,7 +285,8 @@ def _do_per_channel_step():
     t_max_str = st.session_state["mimo_pcs_t_max"].strip()
     y_max_str = st.session_state["mimo_pcs_y_max"].strip()
     try:
-        t_max = float(t_max_str) if t_max_str else None
+        t_max = (float(t_max_str) if t_max_str
+                 else auto_plot_window(t, *[s.y for s in per_channel_sims]))
         y_max = float(y_max_str) if y_max_str else None
     except ValueError:
         st.error("t_max/y_max must be numbers (or blank for auto-scaling).")
@@ -302,12 +306,12 @@ def _render_per_channel_step_plot():
     axes = fig.subplots(ny, ny, sharex=True)
     axes = np.atleast_2d(axes)
     for j, sim in enumerate(per_channel_sims):
+        idx = _crop_idx(sim.t, t_max) if t_max is not None else len(sim.t)
+        t_plot, y_plot = sim.t[:idx], sim.y[:idx]
         for i in range(ny):
             ax = axes[i, j]
             ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
-            ax.plot(sim.t, sim.y[:, i])
-            if t_max is not None:
-                ax.set_xlim(0, t_max)
+            ax.plot(t_plot, y_plot[:, i])
             if y_max is not None:
                 ax.set_ylim(0, y_max)
             ax.grid(True, alpha=0.3)
@@ -349,14 +353,18 @@ def _render_four_curve_plot():
     st.caption("Am (target model, auto-derived) =\n" +
               np.array2string(Am_used, precision=4, separator=", "))
     ny = xm_ref.shape[1]
+    t_max = max([auto_plot_window(t, xm_ref)] +
+               [auto_plot_window(row.sim.t, row.sim.y) for row in rows])
+    idx_target = _crop_idx(t, t_max)
     fig = Figure(figsize=(9, 4 * ny), dpi=100)
     axes = fig.subplots(ny, 1, sharex=True)
     axes = np.atleast_1d(axes)
     for j in range(ny):
         ax = axes[j]
-        ax.plot(t, xm_ref[:, j], "k--", linewidth=1.5, label="target model xm")
+        ax.plot(t[:idx_target], xm_ref[:idx_target, j], "k--", linewidth=1.5, label="target model xm")
         for row, color in zip(rows, PALETTE):
-            ax.plot(row.sim.t, row.sim.y[:, j], color=color, label=row.name, linewidth=1.3)
+            idx_row = _crop_idx(row.sim.t, t_max)
+            ax.plot(row.sim.t[:idx_row], row.sim.y[:idx_row, j], color=color, label=row.name, linewidth=1.3)
         ax.set_ylabel(f"y{j}(t)")
         ax.grid(True, alpha=0.3)
     axes[0].legend(fontsize=7, loc="lower right")
@@ -427,6 +435,15 @@ def _palette_name(hex_color):
     return names.get(hex_color, "blue")
 
 
+def _crop_idx(t, t_max):
+    """Index into a (possibly much longer) simulated t array that realizes
+    an auto_plot_window()-style crop -- shared helper for every plot below
+    that needs to slice per-entry arrays (which can have different lengths,
+    since each design's own auto_t_end() can differ) down to one common,
+    already-computed t_max."""
+    return max(int(np.searchsorted(t, t_max, side="right")), 2)
+
+
 # ── response plot ────────────────────────────────────────────────────────
 def _render_response_plot():
     active = [e for e in gs.get_by_kind("mimo") if e.enabled and e.sim is not None]
@@ -439,25 +456,33 @@ def _render_response_plot():
         return
 
     if any(e.sim.tracking_metrics is not None for e in active):
+        # Auto-cropped to whichever active design's own trajectory takes
+        # longest to visually settle (auto_plot_window(), same mechanism as
+        # cli_lqg.py) -- one shared window for the whole overlay rather than
+        # auto_t_end()'s full (possibly very long) simulated duration.
+        t_max = max(auto_plot_window(e.sim.t, e.sim.y) for e in active)
         ny = active[0].sim.y.shape[1]
         axes = fig.subplots(ny, 1, sharex=True)
         axes = np.atleast_1d(axes)
         for j in range(ny):
             ax = axes[j]
             for e in active:
-                ax.plot(e.sim.t, e.sim.y[:, j], color=e.color, label=e.label, linewidth=1.3)
+                idx = _crop_idx(e.sim.t, t_max)
+                ax.plot(e.sim.t[:idx], e.sim.y[:idx, j], color=e.color, label=e.label, linewidth=1.3)
             ax.set_ylabel(f"y{j}(t)")
             ax.grid(True, alpha=0.3)
         axes[0].legend(fontsize=7, loc="lower right")
         axes[-1].set_xlabel("time (s)")
     else:
+        t_max = max(auto_plot_window(e.sim.t, e.sim.x, e.sim.u) for e in active)
         ax1, ax2 = fig.subplots(2, 1, sharex=True)
         for e in active:
-            x_norm = np.linalg.norm(e.sim.x, axis=1)
-            u_norm = np.linalg.norm(e.sim.u, axis=1)
+            idx = _crop_idx(e.sim.t, t_max)
+            x_norm = np.linalg.norm(e.sim.x[:idx], axis=1)
+            u_norm = np.linalg.norm(e.sim.u[:idx], axis=1)
             label = e.label + ("  [UNSTABLE]" if e.sim.metrics.get("unstable") else "")
-            ax1.plot(e.sim.t, x_norm, color=e.color, label=label, linewidth=1.3)
-            ax2.plot(e.sim.t, u_norm, color=e.color, label=e.label, linewidth=1.3)
+            ax1.plot(e.sim.t[:idx], x_norm, color=e.color, label=label, linewidth=1.3)
+            ax2.plot(e.sim.t[:idx], u_norm, color=e.color, label=e.label, linewidth=1.3)
         ax1.set_ylabel("||x(t)||")
         ax1.grid(True, alpha=0.3)
         ax1.legend(fontsize=7, loc="upper right")
@@ -522,7 +547,7 @@ def render():
                   "step above. Requires the last design above to have been run "
                   "with Reference tracking checked.")
         pcs_cols = st.columns(2)
-        pcs_cols[0].text_input("Grid t_max (blank = auto per cell)", value="",
+        pcs_cols[0].text_input("Grid t_max (blank = auto-cropped)", value="",
                                key="mimo_pcs_t_max")
         pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", value="",
                                key="mimo_pcs_y_max")

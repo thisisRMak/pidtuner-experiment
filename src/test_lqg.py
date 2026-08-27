@@ -28,7 +28,7 @@ from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
-    simulate_per_channel_step, compute_tracking_metrics,
+    simulate_per_channel_step, compute_tracking_metrics, auto_plot_window,
 )
 
 
@@ -506,6 +506,63 @@ class TestSimulateOutputFeedback(unittest.TestCase):
         # both the true state and the estimation error should decay
         self.assertLess(np.linalg.norm(sim.x[-1]), 1e-2)
         self.assertLess(np.linalg.norm(sim.x[-1] - sim.x_hat[-1]), 1e-2)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auto plot-crop window
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAutoPlotWindow(unittest.TestCase):
+    def test_crops_past_a_fast_transient(self):
+        # Decays to (near) zero by t=2, then stays flat -- should crop well
+        # before the end of a much longer array, not use the full 50s.
+        t = np.arange(0.0, 50.0, 0.01)
+        x = np.exp(-5.0 * t).reshape(-1, 1)
+        t_max = auto_plot_window(t, x, margin=1.3, floor=1.0)
+        self.assertLess(t_max, 5.0)
+        self.assertGreater(t_max, 1.0)
+
+    def test_does_not_crop_a_signal_still_moving_at_the_end(self):
+        # Still decaying meaningfully relative to its own range at t[-1] --
+        # nothing to crop to, so should stay near the full duration.
+        t = np.arange(0.0, 10.0, 0.01)
+        x = np.exp(-0.05 * t).reshape(-1, 1)
+        t_max = auto_plot_window(t, x, margin=1.0, floor=1.0)
+        self.assertAlmostEqual(t_max, t[-1], delta=0.5)
+
+    def test_one_slow_small_amplitude_column_does_not_dominate(self):
+        # Column 0: fast, large swing, settles by ~t=2.
+        # Column 1: a tiny-amplitude mode that's still moving at t=40 --
+        # in absolute terms it's minuscule, but relative to its *own*
+        # (tiny) peak-to-peak range it's still "moving" the whole time.
+        # This is exactly the generic_rtp-style case the function exists
+        # for: the crop should be driven by whichever column is normalized
+        # against its own scale, not silently ignore column 1 either --
+        # both should be considered "on their own terms."
+        t = np.arange(0.0, 50.0, 0.01)
+        fast = np.exp(-5.0 * t)
+        slow_tiny = 1e-4 * np.exp(-0.02 * t)
+        x = np.column_stack([fast, slow_tiny])
+        t_max = auto_plot_window(t, x, margin=1.0, floor=1.0)
+        # column 1 is still >2% from its own final value at t=50, so the
+        # crop should be pulled out toward the end of the array by it.
+        self.assertGreater(t_max, 40.0)
+
+    def test_multiple_matrices_combine_via_max(self):
+        t = np.arange(0.0, 20.0, 0.01)
+        fast = np.exp(-5.0 * t).reshape(-1, 1)
+        slower = np.exp(-0.5 * t).reshape(-1, 1)
+        combined = auto_plot_window(t, fast, slower, margin=1.0, floor=0.5)
+        fast_only = auto_plot_window(t, fast, margin=1.0, floor=0.5)
+        self.assertGreaterEqual(combined, fast_only)
+
+    def test_floor_and_cap(self):
+        t = np.arange(0.0, 3.0, 0.01)
+        x = np.zeros((len(t), 1))  # already "settled" from t=0
+        self.assertEqual(auto_plot_window(t, x, floor=1.5), 1.5)
+        # cap: floor larger than the array's own span should still not
+        # exceed t[-1]
+        self.assertLessEqual(auto_plot_window(t, x, floor=100.0), t[-1])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

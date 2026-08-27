@@ -69,6 +69,55 @@ def auto_t_end(closed_loop_poles, extra_poles=None):
     return max(15.0 / np.min(np.abs(stable)), 5.0)
 
 
+def auto_plot_window(t, *signal_matrices, frac=0.02, margin=1.3, floor=5.0):
+    """Auto-crop window for *displaying* an already-simulated trajectory —
+    decoupled from auto_t_end()'s "long enough to correctly measure
+    settling" duration, which the plot doesn't need to honor once the
+    numbers (settling_2pct, ISU, ...) have already been computed on the
+    full array. A plant with widely separated pole time constants (e.g.
+    generic_rtp: -4.33 down to -0.0083) can force auto_t_end() out to
+    ~1800s even though every state/output visually flattens out within a
+    few tens of seconds -- auto_t_end()'s single slow pole shouldn't also
+    dictate how much of the plot is worth looking at.
+
+    For each column across all signal_matrices given (time-major, (n, k)
+    each -- e.g. sim.x and sim.u together for one plot), finds the last
+    time its deviation from its own final value exceeds `frac` of that
+    column's own peak-to-peak range. This is deliberately *not* a fixed
+    fraction of some shared reference (e.g. the initial-state norm the way
+    compute_regulator_metrics' settling_2pct works) -- that's exactly what
+    lets one slow, small-amplitude mode single-handedly hold the window
+    open, since a tiny absolute excursion can still exceed a small
+    fraction of a large shared norm for a long time. Per-column peak-to-
+    peak normalization means a mode has to be visually significant *in the
+    column it appears in* to extend the window.
+
+    Returns max(margin * that time, floor), capped at t[-1]. Pure
+    post-processing over data that's already been simulated -- doesn't
+    change what was simulated, or any reported metric, only how much of it
+    a plot displays by default. An explicit --plot-t-max always overrides
+    this (see cli_lqg.py)."""
+    t = np.asarray(t, dtype=float)
+    n = len(t)
+    cols = []
+    for m in signal_matrices:
+        m = np.atleast_2d(np.asarray(m, dtype=float))
+        if m.shape[0] != n and m.shape[1] == n:
+            m = m.T
+        if m.size:
+            cols.append(m)
+    if not cols:
+        return float(t[-1]) if n else float(floor)
+    data = np.hstack(cols)
+    final = data[-1, :]
+    ptp = np.ptp(data, axis=0)
+    ptp = np.where(ptp < 1e-12, 1.0, ptp)  # constant/all-zero column: never "out of band"
+    dev = np.abs(data - final) / ptp
+    out_of_band = np.where(np.any(dev > frac, axis=1))[0]
+    crop_t = float(t[out_of_band[-1]]) if len(out_of_band) else 0.0
+    return float(min(max(margin * crop_t, floor), t[-1]))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Metrics — the LQ-cost-native analog of pid_simulate.py's compute_metrics
 # ─────────────────────────────────────────────────────────────────────────────

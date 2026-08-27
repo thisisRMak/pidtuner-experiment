@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Generates two worked-example memo trios (.md/.html/.pdf-source-html):
-  docs/memos/2026-08-25/2026-08-25-aidrone2-worked-example-memo.{md,html}
-  docs/memos/2026-08-25/2026-08-25-genericrtp-worked-example-memo.{md,html}
-Both cover the paper's minimum MIMO material per 2026-08-18-execution-
-plan.md task 3: AIDrone2's expected transmission-zero-at-origin failure,
-and genericRTP's worked LQR/LQG design (professor's stated priority
-example). Runs cli_lqg.py as a subprocess (same command a reader would
-type) so the numbers/plots in the memo can't drift from what the CLI
+  docs/memos/<YYYY-MM-DD>/<YYYY-MM-DD>-aidrone2-worked-example-memo.{md,html}
+  docs/memos/<YYYY-MM-DD>/<YYYY-MM-DD>-genericrtp-worked-example-memo.{md,html}
+<YYYY-MM-DD> is today's date (datetime.date.today(), _DATE below) -- each run
+lands in its own dated snapshot folder rather than overwriting a fixed
+2026-08-25 the way earlier revisions of this script did, so re-running the
+script on a later date doesn't silently mislabel a new memo with a stale
+date. Both memos cover the paper's minimum MIMO material per 2026-08-18-
+execution-plan.md task 3: AIDrone2's expected transmission-zero-at-origin
+failure, and genericRTP's worked LQR/LQG design (professor's stated
+priority example). Runs cli_lqg.py as a subprocess (same command a reader
+would type) so the numbers/plots in the memo can't drift from what the CLI
 actually produces, and documents the matching Streamlit GUI steps.
 
 Run: python3 gen_lqg_worked_examples_memos.py
@@ -14,6 +18,7 @@ Run: python3 gen_lqg_worked_examples_memos.py
 --print-to-pdf invocation; not run automatically here.)
 """
 import base64
+import datetime
 import html
 import json
 import os
@@ -21,7 +26,14 @@ import subprocess
 import sys
 
 _HERE = os.path.dirname(__file__)
-_OUT_DIR = os.path.join(_HERE, "..", "docs", "memos", "2026-08-25")
+_DATE = datetime.date.today().isoformat()
+_OUT_DIR = os.path.join(_HERE, "..", "docs", "memos", _DATE)
+# Created here, not just inside write_pair() at the end of each build_*_memo(),
+# because run_cli()'s --plot targets land in _OUT_DIR before write_pair ever
+# runs -- with a fixed, always-already-existing 2026-08-25 folder this went
+# unnoticed, but a fresh dated folder (see _DATE above) needs to exist before
+# the first plot is saved into it.
+os.makedirs(_OUT_DIR, exist_ok=True)
 _CSS = open(os.path.join(_HERE, "_memo_css.txt")).read()
 
 
@@ -120,7 +132,7 @@ def build_drone_memo():
 <h1>Worked LQG Example &mdash; AIDrone2 (Expected Transmission-Zero Failure)</h1>
 
 <dl class="memo-header">
-  <dt>Date</dt><dd>2026-08-25</dd>
+  <dt>Date</dt><dd>{_e(_DATE)}</dd>
   <dt>Re</dt><dd>Full worked run of the drone plant (6 states, 2 inputs, 2 outputs) confirming
   the professor's flagged AIDrone2 failure &mdash; a transmission zero at the origin breaks the
   reference-tracking feedforward step, not the LQR design itself.</dd>
@@ -189,7 +201,7 @@ CLI.
 
     body_md = f"""# Worked LQG Example — AIDrone2 (Expected Transmission-Zero Failure)
 
-Date: 2026-08-25
+Date: {_DATE}
 Re: Full worked run of the drone plant (6 states, 2 inputs, 2 outputs) confirming the
 professor's flagged AIDrone2 failure — a transmission zero at the origin breaks the
 reference-tracking feedforward step, not the LQR design itself.
@@ -259,7 +271,7 @@ Kalman-filtered output-feedback simulation yet, per `streamlit_mimo_panel.py`'s 
 genericRTP LQG memo's §3.2 output-feedback run in the GUI instead of the CLI.
 """
 
-    return write_pair("2026-08-25-aidrone2-worked-example-memo",
+    return write_pair(f"{_DATE}-aidrone2-worked-example-memo",
                       "AIDrone2 Worked Example", body_html, body_md)
 
 
@@ -272,6 +284,14 @@ def build_rtp_memo():
     lqg_plot = os.path.join(_OUT_DIR, "rtp_lqg.png")
     per_channel_plot = os.path.join(_OUT_DIR, "rtp_per_channel_step.png")
 
+    # Each design auto-crops its own plot independently (cli_lqg.py's
+    # auto_plot_window(), no --plot-t-max override) -- tried sharing one
+    # window (max of both) across §2/§3 on 2026-08-26, but that stretched
+    # LQR's plot (whose own transient is much faster than LQG's) out to
+    # LQG's slower window, making LQR look like an even more compressed
+    # spike-then-flat than its own natural crop. Independent windows read
+    # better for this pair even though the two plots then sit on different
+    # timescales -- see each plot's own reported plot_t_max below.
     lqr_data, lqr_cmd = run_cli("--plant-preset", "generic_rtp", "--method", "output_weighted",
                                 "--reference-tracking", "--sim", "state_feedback",
                                 "--plot", lqr_plot)
@@ -279,7 +299,8 @@ def build_rtp_memo():
                                 "--sim", "output_feedback", "--plot", lqg_plot)
     per_channel_data, per_channel_cmd = run_cli(
         "--plant-preset", "generic_rtp", "--method", "output_weighted",
-        "--reference-tracking", "--sim", "per_channel_step", "--plot", per_channel_plot)
+        "--reference-tracking", "--sim", "per_channel_step", "--plot", per_channel_plot,
+        "--plot-t-max", "5", "--plot-y-max", "1.1")
 
     # sensitivity (not yet CLI/GUI-exposed — computed directly via the library)
     import numpy as np
@@ -309,7 +330,7 @@ def build_rtp_memo():
 <h1>Worked LQR/LQG Example &mdash; GenericRTP</h1>
 
 <dl class="memo-header">
-  <dt>Date</dt><dd>2026-08-25</dd>
+  <dt>Date</dt><dd>{_e(_DATE)}</dd>
   <dt>Re</dt><dd>Full worked LQR/LQG run on genericRTP (5&times;5 rapid thermal processing plant)
   &mdash; the professor's stated priority worked example for the paper's MIMO section.</dd>
 </dl>
@@ -339,6 +360,13 @@ Suggested design: output-weighted LQR, Q=C&#7511;C, R=I(5), per the source.
 <ul>{poles_list_html(lqr_poles)}</ul>
 <p><img src="{lqr_uri}" alt="genericRTP LQR reference-tracking response" style="max-width:100%;border:1px solid #b9c3cc;border-radius:5px;"></p>
 <p class="section-note">
+Plot auto-cropped to <code>--plot-t-max {fnum(lqr_data['sim']['plot_t_max'], 1)}</code>s (this
+design's own, independently-computed window &mdash; see &sect;3 below for LQG's) for readability
+&mdash; the Settling (2%) figure above is still computed on the full ~1810s simulated duration
+(auto_t_end() sizes that to genericRTP's slowest closed-loop pole), the crop only affects what
+the plot displays.
+</p>
+<p class="section-note">
 K is a 5&times;15 gain matrix &mdash; too large to usefully print inline; see the CLI's
 <code>--json</code> output for the full matrix if needed.
 </p>
@@ -353,6 +381,12 @@ zero, giving a 5&times;5 grid of single-channel responses across all 5 outputs. 
 </p>
 <pre>{_e(per_channel_cmd)}</pre>
 <p><img src="{per_channel_uri}" alt="genericRTP per-channel step response grid" style="max-width:100%;border:1px solid #b9c3cc;border-radius:5px;"></p>
+<p class="section-note">
+Every cell's axes are fixed to t &isin; [0, 5] s and y &isin; [0, 1.1] via
+<code>--plot-t-max</code>/<code>--plot-y-max</code> (added alongside <code>per_channel_step</code>),
+rather than each cell auto-scaling independently, so the 25 cells stay directly comparable at a
+glance.
+</p>
 <p class="section-note">
 Grid layout: column j is the response to stepping reference channel j alone; row i is output
 y<sub>i</sub>(t). Diagonal cells (row i = column j) show each channel tracking its own commanded
@@ -398,6 +432,12 @@ weighting in <code>AIGeneric_RTP2.m</code>'s integral-control section; see &sect
   <tr><td>ISU</td><td>{fnum(lqg_data['sim']['metrics']['ISU'], 6)}</td></tr>
 </table>
 <p><img src="{lqg_uri}" alt="genericRTP LQG output-feedback response" style="max-width:100%;border:1px solid #b9c3cc;border-radius:5px;"></p>
+<p class="section-note">
+Plot auto-cropped to <code>--plot-t-max {fnum(lqg_data['sim']['plot_t_max'], 1)}</code>s (this
+design's own window, independent of &sect;2's LQR plot above &mdash; the two designs settle on
+different timescales, so a shared window would stretch or compress one of them relative to its
+own natural transient).
+</p>
 
 <h2>4. Sensitivity / robustness (plant-input loop transfer, LQR loop)</h2>
 <p class="section-note">
@@ -472,8 +512,10 @@ different convention you'd prefer?</li>
 <li>For &sect;2 (LQR + reference tracking): Method <strong>Output-weighted LQR</strong>, check
     "Reference tracking", leave the reference field blank (defaults to all-ones) &mdash;
     reproduces the design/response above.</li>
-<li>For &sect;2.1 (per-channel step grid): after the &sect;2 design above, click
-    "&#8862; Per-channel step response" &mdash; reproduces the 5&times;5 grid.</li>
+<li>For &sect;2.1 (per-channel step grid): after the &sect;2 design above, set Grid t_max to
+    <code>5</code> and Grid y_max to <code>1.1</code>, then click
+    "&#8862; Per-channel step response" &mdash; reproduces the 5&times;5 grid exactly, including
+    its fixed axes (blank fields reproduce the same data auto-scaled per cell instead).</li>
 <li>For &sect;3 (LQG): Method <strong>LQG (Kalman filter)</strong> &mdash; reproduces the design,
     but <strong>only the state-feedback regulator simulation is available in the GUI</strong>
     (no output-feedback sim yet, unlike the CLI's <code>--sim output_feedback</code> used above
@@ -486,7 +528,7 @@ different convention you'd prefer?</li>
 
     body_md = f"""# Worked LQR/LQG Example — GenericRTP
 
-Date: 2026-08-25
+Date: {_DATE}
 Re: Full worked LQR/LQG run on genericRTP (5×5 rapid thermal processing plant) — the
 professor's stated priority worked example for the paper's MIMO section.
 
@@ -521,6 +563,11 @@ Q=CᵀC, R=I(5), per the source.
 
 ![genericRTP LQR reference-tracking response](rtp_lqr.png)
 
+Plot auto-cropped to `--plot-t-max {fnum(lqr_data['sim']['plot_t_max'], 1)}`s (this design's own,
+independently-computed window — see §3 below for LQG's) for readability — the Settling (2%)
+figure above is still computed on the full ~1810s simulated duration (auto_t_end() sizes that to
+genericRTP's slowest closed-loop pole), the crop only affects what the plot displays.
+
 K is a 5×15 gain matrix — too large to usefully print inline; see the CLI's `--json` output for
 the full matrix if needed.
 
@@ -537,6 +584,10 @@ that grid:
 ```
 
 ![genericRTP per-channel step response grid](rtp_per_channel_step.png)
+
+Every cell's axes are fixed to t ∈ [0, 5] s and y ∈ [0, 1.1] via `--plot-t-max`/`--plot-y-max`
+(added alongside `per_channel_step`), rather than each cell auto-scaling independently, so the 25
+cells stay directly comparable at a glance.
 
 Grid layout: column j is the response to stepping reference channel j alone; row i is output
 y_i(t). Diagonal cells (row i = column j) show each channel tracking its own commanded step;
@@ -581,6 +632,10 @@ integral-control section; see §5).
 | ISU | {fnum(lqg_data['sim']['metrics']['ISU'], 6)} |
 
 ![genericRTP LQG output-feedback response](rtp_lqg.png)
+
+Plot auto-cropped to `--plot-t-max {fnum(lqg_data['sim']['plot_t_max'], 1)}`s (this design's own
+window, independent of §2's LQR plot above — the two designs settle on different timescales, so a
+shared window would stretch or compress one of them relative to its own natural transient).
 
 ## 4. Sensitivity / robustness (plant-input loop transfer, LQR loop)
 
@@ -645,8 +700,9 @@ currently does, in three respects:
 4. For §2 (LQR + reference tracking): Method **Output-weighted LQR**, check "Reference
    tracking", leave the reference field blank (defaults to all-ones) — reproduces the
    design/response above.
-5. For §2.1 (per-channel step grid): after the §2 design above, click "⊞ Per-channel step
-   response" — reproduces the 5×5 grid.
+5. For §2.1 (per-channel step grid): after the §2 design above, set Grid t_max to `5` and Grid
+   y_max to `1.1`, then click "⊞ Per-channel step response" — reproduces the 5×5 grid exactly,
+   including its fixed axes (blank fields reproduce the same data auto-scaled per cell instead).
 6. For §3 (LQG): Method **LQG (Kalman filter)** — reproduces the design, but **only the
    state-feedback regulator simulation is available in the GUI** (no output-feedback sim yet,
    unlike the CLI's `--sim output_feedback` used above — see `streamlit_mimo_panel.py`'s
@@ -656,7 +712,7 @@ currently does, in three respects:
    direct Python call to `lqg_frequency.compute_sensitivity()`.
 """
 
-    return write_pair("2026-08-25-genericrtp-worked-example-memo",
+    return write_pair(f"{_DATE}-genericrtp-worked-example-memo",
                       "GenericRTP Worked Example", body_html, body_md)
 
 
