@@ -433,6 +433,22 @@ class TestReferenceTracking(unittest.TestCase):
         with self.assertRaises(ValueError):
             add_reference_tracking(res)
 
+    def test_rejects_singular_block_at_origin(self):
+        # A square (nu == ny) plant can still fail reference tracking if
+        # [[A,B],[C,D]] is singular -- a transmission zero at the origin,
+        # the distinct failure mode AIDrone2 (load_example("drone")) is a
+        # real-catalog example of (see docs/memos/.../aidrone2-worked-
+        # example-memo). Synthetic fixture here rather than the catalog
+        # plant for the same future-proofing reason as the non-square test
+        # above: a double integrator with *velocity* as the sole output
+        # (C=[0,1]) makes [[A,B],[C,D]]'s first and last rows identical,
+        # singular by construction, independent of any catalog plant.
+        p = StateSpacePlant.from_matrices(A=[[0, 1], [0, 0]], B=[[0], [1]],
+                                          C=[[0, 1]])  # nu=1, ny=1, but singular block
+        res = LQR(p, Q=np.eye(2), R=np.eye(1)).design()
+        with self.assertRaises(ValueError):
+            add_reference_tracking(res)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-channel step response (MATLAB step() grid)
