@@ -856,7 +856,7 @@ class TestComparisonLayer(unittest.TestCase):
         rows = compare_all_methods(self.plant)
         # Every method family should appear
         names = {r["name"] for r in rows}
-        for expect in ("ZN-I", "ZN-II", "AMIGO", "SIMC", "Boyd",
+        for expect in ("ZN-I ½", "ZN-II ½", "AMIGO", "SIMC", "Boyd",
                        "Cohen–Coon", "Tyreus–Luyben"):
             self.assertIn(expect, names)
         # Stable rows carry all the table metrics
@@ -1131,7 +1131,12 @@ class TestBlackBox(unittest.TestCase):
         wb_rows = {r["name"]: r for r in compare_all_methods(plant, include_variants=True)}
         for name in ("ZN-I", "AMIGO", "SIMC", "Cohen–Coon"):
             self.assertTrue(bb_rows[name].available)
-            self.assertAlmostEqual(bb_rows[name].result.gains.Kp, wb_rows[name]["gains"].Kp, places=6)
+            # compare_all_methods() halves ZN-I by default (row "ZN-I ½"),
+            # while BlackBoxTuner's ZN-I stays full-strength — so halve the
+            # black-box Kp before comparing for that one method.
+            wb_name = "ZN-I ½" if name == "ZN-I" else name
+            expected_kp = bb_rows[name].result.gains.Kp * (0.5 if name == "ZN-I" else 1.0)
+            self.assertAlmostEqual(expected_kp, wb_rows[wb_name]["gains"].Kp, places=6)
 
     def test_pole_cancellation_and_boyd_available_via_surrogate(self):
         """The two methods that historically needed the true plant directly

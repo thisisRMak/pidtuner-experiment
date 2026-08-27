@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 from plant import TransferFunction
 from pid_identify import run_step_test, find_ultimate_gain
 from pid_tuning_methods import (
-    PIDGains, TuningResult, halve_gains,
+    TuningResult, halve_gains,
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben
 )
@@ -284,6 +284,10 @@ def main():
     if args.Ka is not None and args.antiwindup != "back_calc":
         print("Note: --Ka has no effect unless --antiwindup back_calc.",
               file=sys.stderr)
+    if args.method == "all" and args.halve:
+        print("Note: --halve has no effect with --method all (ZN-I/ZN-II are "
+              "already shown halved by default there; use --method zn1/zn2 "
+              "--halve to control it directly).", file=sys.stderr)
 
     # 1. Parse plant
     try:
@@ -339,18 +343,9 @@ def main():
         if args.method == "all":
             # Compare all methods
             rows = compare_all_methods(plant, include_variants=True)
-            if args.halve:
-                # Apply halving to results and refresh metrics
-                for r in rows:
-                    if r.get("stable", False) and r.get("gains"):
-                        # Halve the gains and replace
-                        new_gains = PIDGains(
-                            Kp=r["gains"].Kp * 0.5,
-                            Ki=r["gains"].Ki * 0.5,
-                            Kd=r["gains"].Kd * 0.5
-                        )
-                        refreshed = metric_row(plant, r["name"] + " ½", new_gains)
-                        r.update(refreshed)
+            # --halve is a no-op here: ZN-I/ZN-II already come back halved by
+            # default (pid_compare.py), and no other method calls for it (see
+            # the --halve --method <name> single-method path for that).
 
             sat_infos = {}
             for r in rows:

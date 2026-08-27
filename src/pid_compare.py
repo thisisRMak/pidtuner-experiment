@@ -38,6 +38,7 @@ from pid_tune import select_slowest_stable_poles
 from pid_tuning_methods import (
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
+    halve_gains,
 )
 
 
@@ -262,9 +263,9 @@ def compare_all_methods(plant, include_variants=True):
     entries.append(("Pole cancellation", _safe(_pole)))
 
     if fopdt is not None:
-        entries.append(("ZN-I", _safe(lambda: ZieglerNicholsI(fopdt).tune())))
+        entries.append(("ZN-I ½", _safe(lambda: halve_gains(ZieglerNicholsI(fopdt).tune()))))
     if Ku is not None:
-        entries.append(("ZN-II", _safe(lambda: ZieglerNicholsII(Ku, Pu).tune())))
+        entries.append(("ZN-II ½", _safe(lambda: halve_gains(ZieglerNicholsII(Ku, Pu).tune()))))
     if fopdt is not None:
         entries.append(("AMIGO", _safe(lambda: Amigo(fopdt).tune())))
         entries.append(("SIMC", _safe(lambda: Simc(fopdt).tune())))
