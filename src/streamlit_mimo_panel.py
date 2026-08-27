@@ -256,7 +256,10 @@ def _do_per_channel_step():
     been run with Reference tracking checked (result.Nbar populated).
     Additive alongside the existing "Reference tracking" combined-step
     simulation (_run_sim), which stays exactly as it was -- this is a
-    separate grid view, not a replacement."""
+    separate grid view, not a replacement. Reads the optional
+    mimo_pcs_t_max/mimo_pcs_y_max text fields (blank = auto per cell,
+    matching cli_lqg.py's --plot-t-max/--plot-y-max) and stashes them
+    alongside the sim results for _render_per_channel_step_plot to apply."""
     last = st.session_state.get("mimo_last_result")
     if last is None:
         st.error("Design a method first (with Reference tracking checked) "
@@ -276,7 +279,15 @@ def _do_per_channel_step():
     except Exception as exc:
         st.error(f"Per-channel step response failed: {exc}")
         return
-    st.session_state["mimo_per_channel_step"] = (per_channel_sims, result.method)
+    t_max_str = st.session_state["mimo_pcs_t_max"].strip()
+    y_max_str = st.session_state["mimo_pcs_y_max"].strip()
+    try:
+        t_max = float(t_max_str) if t_max_str else None
+        y_max = float(y_max_str) if y_max_str else None
+    except ValueError:
+        st.error("t_max/y_max must be numbers (or blank for auto-scaling).")
+        return
+    st.session_state["mimo_per_channel_step"] = (per_channel_sims, result.method, t_max, y_max)
     st.success("Per-channel step response ready — see grid plot below.")
 
 
@@ -284,7 +295,7 @@ def _render_per_channel_step_plot():
     cached = st.session_state.get("mimo_per_channel_step")
     if cached is None:
         return
-    per_channel_sims, method_name = cached
+    per_channel_sims, method_name, t_max, y_max = cached
     ny = len(per_channel_sims)
     st.subheader("Per-channel step response (MATLAB step() grid)")
     fig = Figure(figsize=(3.2 * ny, 2.6 * ny), dpi=100)
@@ -295,6 +306,10 @@ def _render_per_channel_step_plot():
             ax = axes[i, j]
             ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
             ax.plot(sim.t, sim.y[:, i])
+            if t_max is not None:
+                ax.set_xlim(0, t_max)
+            if y_max is not None:
+                ax.set_ylim(0, y_max)
             ax.grid(True, alpha=0.3)
             if i == 0:
                 ax.set_title(f"from r{j}", fontsize=9)
@@ -506,6 +521,11 @@ def render():
                   "default step() grid, as opposed to the combined simultaneous "
                   "step above. Requires the last design above to have been run "
                   "with Reference tracking checked.")
+        pcs_cols = st.columns(2)
+        pcs_cols[0].text_input("Grid t_max (blank = auto per cell)", value="",
+                               key="mimo_pcs_t_max")
+        pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", value="",
+                               key="mimo_pcs_y_max")
         if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
             _do_per_channel_step()
 

@@ -179,6 +179,41 @@ class TestPerChannelStep(unittest.TestCase):
         self.assertFalse(at.exception, "per-channel step response should not raise")
         self.assertIn("mimo_per_channel_step", at.session_state)
 
+    def test_per_channel_step_with_t_max_y_max(self):
+        from lqg_examples import list_examples, load_example
+        square_key = None
+        for key in list_examples():
+            ex = load_example(key)
+            if ex.plant.nu == ex.plant.ny:
+                square_key = key
+                break
+        if square_key is None:
+            self.skipTest("no square-plant preset available (nu == ny)")
+
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.selectbox(key="mimo_preset").set_value(square_key)
+        at.run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.checkbox(key="mimo_ref_tracking").set_value(True)
+        at.run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_design").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception)
+
+        tab = _mimo_tab(at)
+        _set_widget(tab, "mimo_pcs_t_max", "5")
+        _set_widget(tab, "mimo_pcs_y_max", "1.1")
+        at.run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_per_channel_step_btn").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception, "t_max/y_max should not raise")
+        _, _, t_max, y_max = at.session_state["mimo_per_channel_step"]
+        self.assertEqual(t_max, 5.0)
+        self.assertEqual(y_max, 1.1)
+
     def test_per_channel_step_without_reference_tracking_fails_cleanly(self):
         at = _fresh_app()
         tab = _mimo_tab(at)

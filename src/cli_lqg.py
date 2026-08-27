@@ -314,13 +314,18 @@ def format_per_channel_step_text(per_channel_sims):
     return "\n".join(lines)
 
 
-def plot_per_channel_step(per_channel_sims, res, ex, path):
+def plot_per_channel_step(per_channel_sims, res, ex, path, t_max=None, y_max=None):
     """--sim per_channel_step's grid plot: ny (outputs) rows by ny
     (reference channels) columns, matching MATLAB's default step() grid
     layout (step(A-B*K, B*Nbar, C, D) on a system with ny inputs and ny
     outputs). Column j is the response to stepping reference channel j
     alone; row i is output i. The diagonal cells show each channel tracking
-    its own step; off-diagonal cells show cross-channel coupling."""
+    its own step; off-diagonal cells show cross-channel coupling.
+
+    t_max/y_max (--plot-t-max/--plot-y-max) optionally fix every cell's
+    time/output axis to [0, t_max]/[0, y_max] -- useful for a shared,
+    normalized view across cells (e.g. t_max~settling time, y_max~1 for a
+    unit step) instead of each cell's independent auto-scaled range."""
     ny = len(per_channel_sims)
     fig, axes = plt.subplots(ny, ny, figsize=(3.2 * ny, 2.6 * ny), sharex=True)
     axes = np.atleast_2d(axes)
@@ -329,6 +334,10 @@ def plot_per_channel_step(per_channel_sims, res, ex, path):
             ax = axes[i, j]
             ax.axhline(1.0 if i == j else 0.0, color="k", linestyle="--", linewidth=1)
             ax.plot(sim.t, sim.y[:, i])
+            if t_max is not None:
+                ax.set_xlim(0, t_max)
+            if y_max is not None:
+                ax.set_ylim(0, y_max)
             ax.grid(True, alpha=0.3)
             if i == 0:
                 ax.set_title(f"from r{j}")
@@ -459,6 +468,12 @@ def main():
     parser.add_argument("--plot", type=str,
                        help="Save state-trajectory / control-effort plot to this "
                             "filename (e.g. plot.png).")
+    parser.add_argument("--plot-t-max", type=float, default=None,
+                       help="--sim per_channel_step only: fix every grid cell's time "
+                            "axis to [0, t_max] instead of auto-scaling per cell.")
+    parser.add_argument("--plot-y-max", type=float, default=None,
+                       help="--sim per_channel_step only: fix every grid cell's output "
+                            "axis to [0, y_max] instead of auto-scaling per cell.")
     args = parser.parse_args()
 
     if args.list_plants:
@@ -617,6 +632,9 @@ def main():
         if args.sim == "per_channel_step" and (is_explicit or res.Nbar is None):
             raise ValueError("--sim per_channel_step requires --reference-tracking "
                              "(not --method explicit)")
+        if (args.plot_t_max is not None or args.plot_y_max is not None) and \
+                args.sim != "per_channel_step":
+            raise ValueError("--plot-t-max/--plot-y-max require --sim per_channel_step")
 
         sim = None
         per_channel_sims = None
@@ -651,7 +669,8 @@ def main():
             if sim is None and per_channel_sims is None:
                 raise ValueError("--plot requires --sim to not be 'none'")
             if per_channel_sims is not None:
-                plot_per_channel_step(per_channel_sims, res, ex, args.plot)
+                plot_per_channel_step(per_channel_sims, res, ex, args.plot,
+                                      t_max=args.plot_t_max, y_max=args.plot_y_max)
                 return
             nx, nu = plant.nx, plant.nu
             n_panels = 3 if sim.xm is not None else 2
