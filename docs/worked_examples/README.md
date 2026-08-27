@@ -13,7 +13,8 @@ with its own reproduce commands.
 - [`textbook_pei8e/`](textbook_pei8e/) — the PEI8e (Franklin/Powell/
   Emami-Naeini, 8th ed.) Examples 4.9/4.10 heat-exchanger surrogate
   `1/(90s+1)`, `L=13`. ZN-I and ZN-II both highlighted, since the two
-  textbook examples cover one method each. CLI only so far.
+  textbook examples cover one method each. Covers both the CLI and the GUI,
+  same as `course_benchmark/`.
 
 Both examples run PIDTuner's full 9-method comparison (`--method all`) in
 addition to their headline single method, so `siso_all_methods_cli.json` in

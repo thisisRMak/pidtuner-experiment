@@ -45,6 +45,23 @@ Outputs in this directory:
   `"ZN-I ½"`/`"ZN-II ½"` since `compare_all_methods()` halves those two by
   default (see `pid_compare.py`)
 
-No GUI (Streamlit `AppTest`) reproduction for this example yet — `course_benchmark/`
-covers CLI/GUI parity; add one here the same way if that becomes useful for
-this plant too.
+## GUI (Streamlit)
+
+Driven headlessly via Streamlit's `AppTest` framework, same approach as
+`course_benchmark/siso_gui_apptest.py`. Reproduce with:
+
+```bash
+cd docs/worked_examples/textbook_pei8e
+python3 siso_gui_apptest.py
+```
+
+`siso_gui_apptest.py` boots `src/streamlit_app.py`, switches the SISO tab's
+plant field to `1/(90s+1)` with `L=13` (the default field is the course
+benchmark plant), then tunes ZN-I and ZN-II in turn and prints each result's
+info block, plus the same `N` filter-bandwidth session-state check as
+`course_benchmark/`'s script.
+
+The GUI run reproduces the same gains as the CLI for both methods
+(ZN-I: Kp=8.352, Ki=0.3228, Kd=54.02; ZN-II: Kp=6.912, Ki=0.2806, Kd=42.57),
+confirming both entry points hit the same tuning code
+(`pid_tuning_methods.ZieglerNicholsI`/`II`) on this plant too.
