@@ -324,12 +324,39 @@ def simulate_closed_loop(plant, gains, t_end=None, setpoint=1.0,
                     (same convention as pid_step()/closed_loop_poles()).
     """
     dt = plant.auto_dt()
+    # plant.auto_dt() only resolves the plant's own poles/dead time — it has
+    # no visibility into the controller's derivative filter pole (1/tau_d).
+    # When that pole is faster than the plant (typical: tau_d = Td/N is often
+    # << the plant's dominant time constant), simulating at the plant-only dt
+    # under-resolves the filtered-derivative recursion in pid_step() and the
+    # discrete-time loop can numerically diverge even though the continuous-
+    # time design (checked by is_closed_loop_stable()) is stable. Same /5
+    # margin plant.auto_dt() already uses for its own dead-time bound above.
+    tau_d = _filter_tau_d(gains, N)
+    if tau_d > 0:
+        dt = min(dt, tau_d / 5.0)
+    dt = max(dt, 1e-4)
     if t_end is None:
         # Pick duration from the slower of (open-loop slow mode, dead time)
         poles = plant.poles()
         real_neg = np.real(poles)[np.real(poles) < -1e-9]
         slow = 1.0 / np.min(np.abs(real_neg)) if len(real_neg) else 10.0
         t_end = max(15.0 * slow + 5.0 * plant.L, 20.0)
+
+    # Hard ceiling on step count. The tau_d bound above has no floor of its
+    # own: a Kd that's near-zero-but-not-exactly-zero (e.g. an optimizer
+    # boundary artifact rather than an intentional derivative gain) makes
+    # tau_d, and therefore dt, collapse toward 0 without bound, turning a
+    # long-t_end run into effectively infinite steps. Rather than trying to
+    # tell "real fast filter pole" apart from "numerical noise" by
+    # inspecting Kd, cap the total step count directly: if honoring dt would
+    # take more than MAX_STEPS samples over this run's t_end, coarsen dt to
+    # hit the cap instead of hanging. This trades fidelity for a bounded
+    # worst-case runtime; the real fix for detecting under-resolution is a
+    # convergence check, not a bigger fixed cap (see docs discussion).
+    MAX_STEPS = 300_000
+    if t_end / dt > MAX_STEPS:
+        dt = t_end / MAX_STEPS
 
     t = np.arange(0.0, t_end + dt, dt)
 
