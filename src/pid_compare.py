@@ -175,7 +175,8 @@ def _safe(fn, *a, **k):
         return ("__error__", str(exc))
 
 
-def metric_row(plant, name, gains, black_box=False, fopdt=None):
+def metric_row(plant, name, gains, black_box=False, fopdt=None,
+               return_sim=False):
     """Compute one comparison row for an arbitrary (name, gains) pair.
 
     Returns a dict shaped exactly like a row of compare_all_methods:
@@ -190,6 +191,17 @@ def metric_row(plant, name, gains, black_box=False, fopdt=None):
     given (the FOPDT model — ground-truth or identified — behind this
     method's tuning, if any), supplies the has_time_delay/delay_L/
     delay_reason provenance the same way; it never affects scoring either.
+
+    The scoring simulation is always a unit step against a wide-open
+    actuator (u_min=-1e6, u_max=1e6) — deliberately unconstrained, so every
+    method is scored on equal footing regardless of a caller's own actuator
+    limits. `return_sim=True` additionally attaches that ClosedLoopResult
+    under row["sim"] — off by default since that object isn't JSON-
+    serializable and existing callers (cli_pid.py --json, the
+    gen_*_memo.py scripts) round-trip these rows through json.dumps(). A
+    caller that also wants to plot the same unconstrained trace (rather
+    than one reflecting its own, possibly tighter, actuator bounds) can
+    pass return_sim=True to get it for free instead of re-simulating.
     """
     delay_fields = {
         "has_time_delay": bool(fopdt.delay_detected) if fopdt is not None else None,
@@ -206,14 +218,16 @@ def metric_row(plant, name, gains, black_box=False, fopdt=None):
     except Exception as exc:               # noqa: BLE001
         return {"name": name, "gains": gains, "stable": False,
                 "error": f"sim failed: {exc}", "black_box": black_box, **delay_fields}
+    sim_field = {"sim": track} if return_sim else {}
     if track.metrics.get("unstable", True) or not track.stable:
         return {"name": name, "gains": gains, "stable": False,
-                "error": "closed loop unstable", "black_box": black_box, **delay_fields}
+                "error": "closed loop unstable", "black_box": black_box,
+                **delay_fields, **sim_field}
     load = load_rejection_metrics(plant, gains)
     rob = robustness_metrics(plant, gains)
     return {
         "name": name, "gains": gains, "stable": True, "error": None,
-        "black_box": black_box, **delay_fields,
+        "black_box": black_box, **delay_fields, **sim_field,
         "OS%": track.metrics.get("Overshoot", float("nan")),
         "ts": track.metrics.get("Settling", float("nan")),
         "Rise": track.metrics.get("Rise", float("nan")),
@@ -227,13 +241,15 @@ def metric_row(plant, name, gains, black_box=False, fopdt=None):
     }
 
 
-def compare_all_methods(plant, include_variants=True):
+def compare_all_methods(plant, include_variants=True, return_sim=False):
     """Tune `plant` with every applicable method and return a list of rows.
 
     Each row is a dict: {name, gains, OS%, ts, IAE, IAE_load, Ms, Mt, u_tv,
     u_peak, stable, error}. Methods that fail (e.g. ZN-II on a plant with no
     -180° crossing) are returned with stable=False and an error string, so the
     UI can grey them out rather than vanish.
+
+    return_sim is forwarded to each metric_row() call — see its docstring.
     """
     # Shared identification (compute once)
     fopdt = None
@@ -290,7 +306,7 @@ def compare_all_methods(plant, include_variants=True):
                          "has_time_delay": None, "delay_L": None, "delay_reason": None})
             continue
         rows.append(metric_row(plant, name, res.gains, black_box=res.black_box,
-                                fopdt=res.fopdt))
+                                fopdt=res.fopdt, return_sim=return_sim))
     return rows
 
 

@@ -239,18 +239,27 @@ def _render_sim_settings():
                "unless u min/u max actually saturate the actuator.")
 
 
-def _run_closed_loop(plant, gains):
+def _sim_settings():
+    """Read the closed-loop sim settings widgets into simulate_closed_loop()
+    kwargs — shared by _run_closed_loop() and _do_compare_all() so the two
+    stay in lockstep (the latter reuses compare_all_methods()'s own sim
+    rather than re-simulating, which only produces the same trace as long
+    as both call sites pass identical settings)."""
     t_end_str = st.session_state["sp_t_end"].strip()
     t_end = float(t_end_str) if t_end_str else None
     ka_str = st.session_state["ka_override"].strip()
     Ka = float(ka_str) if ka_str else None
-    return simulate_closed_loop(
-        plant, gains, t_end=t_end, setpoint=st.session_state["sp_amp"],
+    return dict(
+        t_end=t_end, setpoint=st.session_state["sp_amp"],
         setpoint_kind=st.session_state["sp_kind"],
         u_min=st.session_state["u_min"], u_max=st.session_state["u_max"],
         N=st.session_state["N"],
         antiwindup=st.session_state["antiwindup"], Ka=Ka,
     )
+
+
+def _run_closed_loop(plant, gains):
+    return simulate_closed_loop(plant, gains, **_sim_settings())
 
 
 def _antiwindup_tag(sim):
@@ -300,21 +309,43 @@ def _do_tune(plant, method):
 
 
 def _do_compare_all(plant):
+    # return_sim=True: compare_all_methods() already simulates each method's
+    # setpoint-tracking response internally (for OS%/ts/IAE) — always a unit
+    # step against a wide-open actuator (u_min=-1e6, u_max=1e6, N=80, no
+    # t_end override), deliberately unconstrained so every method is scored
+    # on equal footing regardless of this panel's own actuator widgets. That
+    # trace is reusable as the plotted one too, but only when the widgets
+    # can't tell the difference: same setpoint/kind, same N, no t_end
+    # override, and the trace never actually needed bounds wider than the
+    # widgets' own u_min/u_max (i.e. it never would have saturated there
+    # either). Otherwise fall back to a fresh, widget-bounded simulation —
+    # same as before this reuse existed — rather than risk mislabeling a
+    # constrained-actuator trace as the panel's own settings.
     try:
-        rows = compare_all_methods(plant)
+        rows = compare_all_methods(plant, return_sim=True)
     except Exception as exc:
         st.error(f"Comparison failed: {exc}")
         return
+    settings = _sim_settings()
+    reusable = (settings["setpoint_kind"] == "step"
+                and settings["setpoint"] == 1.0
+                and settings["N"] == 80.0
+                and settings["t_end"] is None)
     gs.clear_by_kind("siso")
     n_ok = 0
     for row in rows:
         gains = row.get("gains")
-        if gains is None:
+        base_sim = row.get("sim")
+        if gains is None or base_sim is None:
             continue
-        try:
-            sim = _run_closed_loop(plant, gains)
-        except Exception:
-            continue
+        if (reusable and float(np.min(base_sim.u)) >= settings["u_min"]
+                and float(np.max(base_sim.u)) <= settings["u_max"]):
+            sim = base_sim
+        else:
+            try:
+                sim = _run_closed_loop(plant, gains)
+            except Exception:
+                continue
         entry = gs.ControllerEntry(
             kind="siso", label=row["name"] + _antiwindup_tag(sim),
             params=gains, result=None, sim=sim)
