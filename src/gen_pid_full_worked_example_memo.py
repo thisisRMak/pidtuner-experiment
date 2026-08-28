@@ -50,6 +50,7 @@ import matplotlib.pyplot as plt
 from plant import TransferFunction
 from pid_tuning_methods import PIDGains
 from pid_simulate import PIDState, pid_step, compute_metrics, simulate_closed_loop
+from lqg_simulate import auto_plot_window
 from pid_compare import compare_all_methods
 from cli_pid import serialize_row_json
 
@@ -110,6 +111,7 @@ def panel_plot(name, gains, plant, out_path, N=80.0):
     ax2.set_xlabel("Time (s)")
     ax2.set_ylabel("Control Effort u(t)")
     ax2.grid(True)
+    ax2.set_xlim(0.0, auto_plot_window(sim.t, sim.y, sim.u))
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -190,6 +192,7 @@ def composite_overlay_plot(rows, out_path):
     ax_e.set_xlabel("time (s)")
 
     sp_plotted = False
+    xmax = 0.0
     for i, r in enumerate(rows):
         g = r["gains"]
         gains = PIDGains(Kp=g["Kp"], Ki=g["Ki"], Kd=g["Kd"])
@@ -205,9 +208,11 @@ def composite_overlay_plot(rows, out_path):
         ax_y.plot(sim.t, sim.y, color=color, linewidth=1.5, label=label)
         ax_u.plot(sim.t, sim.u, color=color, linewidth=1.2, label=label)
         ax_e.plot(sim.t, sim.e, color=color, linewidth=1.2, label=label)
+        xmax = max(xmax, auto_plot_window(sim.t, sim.y, sim.u, sim.e))
 
     fig.suptitle("All PID Tuning Techniques — Step Response Overlay")
     ax_y.legend(loc="lower right", bbox_to_anchor=(1.0, 1.02), fontsize=7.5, ncol=2)
+    ax_y.set_xlim(0.0, xmax)
     fig.tight_layout()
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
     plt.close(fig)

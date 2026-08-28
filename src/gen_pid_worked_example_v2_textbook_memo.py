@@ -16,17 +16,19 @@ lands in its own dated snapshot folder rather than overwriting a fixed
 gen_lqg_worked_examples_memos.py uses), so re-running it later never
 silently mislabels a new memo with a stale date or clobbers an old one.
 
-Two things came up on this plant that didn't on the synthetic one, and are
+One thing came up on this plant that didn't on the synthetic one, and is
 called out rather than smoothed over:
   - Stable pole cancellation can't run at all here (needs >=2 stable plant
     poles; this FOPDT surrogate only has one) — captured via
     compare_all_methods()'s own error field rather than skipped silently.
-  - Cohen-Coon's transient on this plant grows to thousands of times the
-    setpoint and never settles within any practical window, despite the
-    single-first-crossing GM/PM (pid_compare.py's robustness_metrics()) still
-    calling it nominally stable — Ms/Mt tell the more honest story. Shown in
-    its own gallery panel, but excluded from the composite overlay since it
-    would flatten every other curve to a line at y=0.
+
+(2026-08-28 note: an earlier run of this memo also flagged Cohen-Coon's
+response here as diverging to thousands of times the setpoint and never
+settling — that was a simulate_closed_loop() discretization bug (the
+timestep auto-picked from the plant's own dynamics under-resolved the
+derivative filter's much faster pole), not a property of the Cohen-Coon
+design itself. Fixed in pid_simulate.py; Cohen-Coon now settles normally
+like every other row below and is back in the composite overlay.)
 
 Section 2.2/2.3 (the gallery + composite overlay) call pid_compare.py's
 compare_all_methods() directly, in-process, rather than shelling out to
@@ -64,6 +66,7 @@ import matplotlib.pyplot as plt
 from plant import TransferFunction
 from pid_tuning_methods import PIDGains
 from pid_simulate import PIDState, pid_step, compute_metrics, simulate_closed_loop
+from lqg_simulate import auto_plot_window
 from pid_compare import compare_all_methods
 from cli_pid import serialize_row_json
 
@@ -123,6 +126,7 @@ def panel_plot(name, gains, plant, out_path, N=80.0):
     ax2.set_xlabel("Time (s)")
     ax2.set_ylabel("Control Effort u(t)")
     ax2.grid(True)
+    ax2.set_xlim(0.0, auto_plot_window(sim.t, sim.y, sim.u))
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
@@ -199,6 +203,7 @@ def composite_overlay_plot(rows, out_path):
     ax_e.set_xlabel("time (s)")
 
     sp_plotted = False
+    xmax = 0.0
     for i, r in enumerate(rows):
         g = r["gains"]
         gains = PIDGains(Kp=g["Kp"], Ki=g["Ki"], Kd=g["Kd"])
@@ -214,9 +219,11 @@ def composite_overlay_plot(rows, out_path):
         ax_y.plot(sim.t, sim.y, color=color, linewidth=1.5, label=label)
         ax_u.plot(sim.t, sim.u, color=color, linewidth=1.2, label=label)
         ax_e.plot(sim.t, sim.e, color=color, linewidth=1.2, label=label)
+        xmax = max(xmax, auto_plot_window(sim.t, sim.y, sim.u, sim.e))
 
     fig.suptitle("PEI8e Ex. 4.9/4.10 Surrogate — Step Response Overlay")
     ax_y.legend(loc="lower right", bbox_to_anchor=(1.0, 1.02), fontsize=7.5, ncol=2)
+    ax_y.set_xlim(0.0, xmax)
     fig.tight_layout()
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
     plt.close(fig)
@@ -253,11 +260,7 @@ def build_html():
         r["_plot_uri"] = img_data_uri(plot_path)
         all_methods_rows.append(r)
 
-    # Cohen–Coon's transient is ~3 orders of magnitude larger than the
-    # setpoint on this plant (see §2.2) — shown in its own panel, but it
-    # would flatten every other curve on a shared axis, so it's excluded
-    # from the composite overlay.
-    composite_rows = [r for r in all_methods_rows if r["name"] != "Cohen–Coon"]
+    composite_rows = all_methods_rows
     composite_plot_path = os.path.join(_OUT_DIR, "pid_example_v2_composite_overlay.png")
     composite_overlay_plot(composite_rows, composite_plot_path)
     composite_uri = img_data_uri(composite_plot_path)
@@ -430,29 +433,27 @@ loop rather than a hypothetical one.
 <p>
 AMIGO is the technique carried through the rest of this memo (&sect;3&ndash;4), but it's one of nine
 technique families the CLI can produce for this loop &mdash; {len(all_methods_rows)} rows below, since
-CHR's four response/overshoot variants are each shown individually. This textbook plant surfaces two
-things the v1 synthetic-plant memo didn't. First, <strong>Stable pole cancellation can't run on this plant at
+CHR's four response/overshoot variants are each shown individually. This textbook plant surfaces one
+thing the v1 synthetic-plant memo didn't: <strong>Stable pole cancellation can't run on this plant at
 all</strong>: it needs at least two stable plant poles to cancel, and this FOPDT surrogate has only
-one. Running it directly returns the CLI's own error rather than a plot:
+one. Running it directly returns the CLI's own error rather than a plot, shown as-is rather than
+silently dropped, since a method's failure mode on a specific plant is as informative as its success:
 </p>
 <pre>$ python3 cli_pid.py --plant '{_e(_PLANT)}' --L {_L} \\
     --method pole_cancellation --json
 {{"error": "{_e(chr(10).join(textwrap.wrap(pole_cancel_error, 68)))}"}}</pre>
 <p>
-Second, <strong>Cohen&ndash;Coon's response on this plant never settles within any practical time
-horizon</strong> &mdash; its gains (K<sub>p</sub>&asymp;{fnum(next(r['gains']['Kp'] for r in all_methods_rows if r['name']=='Cohen–Coon'))},
-nearly 3&times; AMIGO's) drive the output to thousands of times the setpoint and it's still growing
-at the end of the simulated window (see its panel below), not decaying toward it. The frequency-domain
-margins nominally call this stable &mdash; GM&asymp;{fnum(next(r['GM_dB'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}&nbsp;dB,
-PM&asymp;{fnum(next(r['PM_deg'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}&deg;, computed the
-same way as every other row here (<code>pid_compare.py</code>'s <code>robustness_metrics()</code>,
-which walks the frequency sweep and stops at the <em>first</em> &minus;180&deg; phase crossing) &mdash;
-but M<sub>s</sub>&asymp;{fnum(next(r['Ms'] for r in all_methods_rows if r['name']=='Cohen–Coon'),2)} and
-M<sub>t</sub>&asymp;{fnum(next(r['Mt'] for r in all_methods_rows if r['name']=='Cohen–Coon'),2)}
-(both far outside any workable design range) are the more honest read on this gain set: right at the
-edge of what the linearized single-crossing GM/PM call "stable," and unusable regardless of the label.
-Both this and the pole-cancellation failure above are shown as-is rather than silently dropped, since a
-method's failure mode on a specific plant is as informative as its success.
+Among the rows that do run, <strong>Cohen&ndash;Coon is this plant's most aggressive tuning</strong>
+&mdash; its gains (K<sub>p</sub>&asymp;{fnum(next(r['gains']['Kp'] for r in all_methods_rows if r['name']=='Cohen–Coon'))},
+nearly 3&times; AMIGO's) give it the highest overshoot of any method here
+(OS%&asymp;{fnum(next(r['OS%'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}%,
+&sect;2.3), but the response settles normally, at
+t<sub>s</sub>&asymp;{fnum(next(r['ts'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}&nbsp;s
+&mdash; in the same range as every other row rather than an outlier by scale. Margins:
+GM&asymp;{fnum(next(r['GM_dB'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}&nbsp;dB,
+PM&asymp;{fnum(next(r['PM_deg'] for r in all_methods_rows if r['name']=='Cohen–Coon'),1)}&deg;,
+M<sub>s</sub>&asymp;{fnum(next(r['Ms'] for r in all_methods_rows if r['name']=='Cohen–Coon'),2)},
+M<sub>t</sub>&asymp;{fnum(next(r['Mt'] for r in all_methods_rows if r['name']=='Cohen–Coon'),2)}.
 </p>
 <div class="gallery">
 {"".join(gallery_card(r) for r in all_methods_rows)}
@@ -490,13 +491,12 @@ in a session &mdash; one 3-row PV/SP &middot; control effort &middot; error figu
 overlaid with the app's own <code>PALETTE</code> (<code>pid_app.py:66-68</code>), not matplotlib's
 default cycle. Built with <code>simulate_closed_loop()</code> directly on each method's gains from
 &sect;2.2, the same function <code>pid_app.py</code>'s session view and <code>cli_pid.py --plot</code>
-both call. <strong>Cohen&ndash;Coon and Stable pole cancellation are excluded</strong> &mdash; the
-former because its scale (&sect;2.2) would flatten every other curve to a line at y&asymp;0, the
-latter because it never produced gains to simulate.
+both call. <strong>Stable pole cancellation is excluded</strong> &mdash; it never produced gains to
+simulate (&sect;2.2) &mdash; every other technique is on this one shared set of axes.
 </p>
 <p><img src="{composite_uri}" alt="Composite overlay of the applicable tuning techniques' step responses" style="max-width:100%;border:1px solid #b9c3cc;border-radius:5px;"></p>
 <p class="section-note">
-CHR "load 20%"'s overshoot is the visible extreme here now, not ZN-I &frac12;/ZN-II &frac12; &mdash;
+Cohen&ndash;Coon is the visible extreme here (&sect;2.2), not ZN-I &frac12;/ZN-II &frac12; &mdash;
 the flip from the 2026-08-25 run, where the two full-strength ZN curves were the standouts (see
 &sect;2.2's callout).
 </p>
@@ -618,7 +618,7 @@ needs a hand-tuned K<sub>a</sub> well above the auto value to compete.
       <td class="pass">GM&asymp;{fnum(amigo['GM_dB'],1)}&nbsp;dB, PM&asymp;{fnum(amigo['PM_deg'],1)}&deg; &mdash; robust</td></tr>
   <tr><td>All 9 tuning technique families (&sect;2.2&ndash;2.3)</td>
       <td>Gallery + composite overlay on the textbook plant, via <code>compare_all_methods()</code></td>
-      <td class="fail">Pole cancellation can't run (plant has only 1 stable pole); Cohen&ndash;Coon's response never settles &mdash; nominally "stable" by the single-crossing GM/PM but M<sub>s</sub>/M<sub>t</sub> tell the real story; ZN-I/II now shown pre-halved by default (see &sect;2.2)</td></tr>
+      <td class="fail">Pole cancellation can't run (plant has only 1 stable pole); Cohen&ndash;Coon is this plant's highest-overshoot method but settles normally (&sect;2.2); ZN-I/II now shown pre-halved by default (see &sect;2.2)</td></tr>
   <tr><td>Derivative filter (<code>--N</code>)</td>
       <td>Clean step (&sect;3.1) vs. noisy measurement at N=80 and N=1 (&sect;3.2)</td>
       <td class="fail">Default N=80 gives a much smaller noise-rejection win here than on v1's plant &mdash; &tau;<sub>d</sub> is plant-dependent</td></tr>
@@ -635,9 +635,8 @@ itself calls, and &sect;1.1 gives the exact commands to regenerate all of it. Tw
 forward from v1 with a second data point behind them now: the back-calculation K<sub>a</sub>
 auto-derivation needs checking against conditional integration rather than trusted blindly, and the
 derivative filter's default N doesn't transfer across plants without checking &tau;<sub>d</sub> against
-the loop's own sample time. Two findings are specific to this plant: pole cancellation's
-stable-pole-count requirement isn't always met, and Cohen&ndash;Coon can be practically unusable even
-when nominally stable at low L/&tau;. One finding is new since the 2026-08-25 run of this memo: with
+the loop's own sample time. One finding is specific to this plant: pole cancellation's
+stable-pole-count requirement isn't always met. One finding is new since the 2026-08-25 run of this memo: with
 ZN-I/ZN-II now halved by default in the comparison (&sect;2.2), they're no longer this plant's
 overshoot outliers &mdash; CHR's "load" variants are.
 </p>
