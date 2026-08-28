@@ -28,7 +28,10 @@ import matplotlib.pyplot as plt
 
 from lqg_examples import load_example
 from lqg_design_methods import LQR, add_reference_tracking
-from lqg_simulate import simulate_state_feedback, auto_t_end, auto_plot_window
+from lqg_simulate import (
+    simulate_state_feedback, simulate_per_channel_step, auto_t_end, auto_plot_window,
+)
+from cli_lqg import plot_per_channel_step
 
 _HERE = os.path.dirname(__file__)
 _JSON_IN = os.path.join(_HERE, "examples", "lqg", "lqg_professor_review.json")
@@ -65,7 +68,13 @@ def _plot_step_response(key, tracking_available):
     step response (r=ones) if the plant supports it, else the regulator
     response from x0=ones(nx) (same recipe as lqg_review.py's own sim, run
     again here since the JSON only carries scalar metrics, not the raw
-    trajectory). Returns (filename, label)."""
+    trajectory). When tracking is available, also saves <key>_per_channel_
+    step.png -- the MATLAB step()-style ny-by-ny grid (cli_lqg.py's --sim
+    per_channel_step / plot_per_channel_step), which steps each reference
+    channel in isolation rather than all at once; the 2026-08-25 genericRTP
+    worked-example memo found this can differ substantially from the
+    combined r=ones response above due to cross-channel coupling. Returns
+    (filename, label, per_channel_filename_or_None)."""
     ex = load_example(key)
     plant = ex.plant
     Q, R = ex.build_suggested_Q(), ex.build_suggested_R()
@@ -74,6 +83,7 @@ def _plot_step_response(key, tracking_available):
     t = np.arange(0.0, t_end + _PLOT_DT, _PLOT_DT)
 
     label = "regulator response (x0=ones, no reference tracking available)"
+    res_rt = None
     if tracking_available:
         try:
             res_rt = add_reference_tracking(res)
@@ -81,6 +91,7 @@ def _plot_step_response(key, tracking_available):
             sim = simulate_state_feedback(res_rt, t, r=r_step)
             label = "reference-tracking step response (r=ones)"
         except ValueError:
+            res_rt = None
             sim = simulate_state_feedback(res, t, x0=np.ones(plant.nx))
     else:
         sim = simulate_state_feedback(res, t, x0=np.ones(plant.nx))
@@ -113,7 +124,17 @@ def _plot_step_response(key, tracking_available):
     filename = f"{key}_step.png"
     fig.savefig(os.path.join(_OUT_DIR, filename))
     plt.close(fig)
-    return filename, label
+
+    per_channel_filename = None
+    if res_rt is not None:
+        per_channel_sims = simulate_per_channel_step(res_rt, t)
+        per_channel_plot_t_max = auto_plot_window(t, *[s.y for s in per_channel_sims])
+        per_channel_filename = f"{key}_per_channel_step.png"
+        plot_per_channel_step(per_channel_sims, res_rt, ex,
+                              os.path.join(_OUT_DIR, per_channel_filename),
+                              t_max=per_channel_plot_t_max)
+
+    return filename, label, per_channel_filename
 
 
 def build_html(payload):
@@ -286,10 +307,20 @@ before it becomes the template for future passes over this catalog.
         parts.append(f"<p>Sensitivity/complementary sensitivity at the plant input: "
                      f"<b>Ms = {p['Ms']:.3g}, Mt = {p['Mt']:.3g}</b></p>\n")
 
-        plot_file, plot_label = _plot_step_response(p["key"], p["tracking_metrics"] is not None)
+        plot_file, plot_label, per_channel_file = _plot_step_response(
+            p["key"], p["tracking_metrics"] is not None)
         parts.append(f"<p class='section-note'>Plot: {_e(plot_label)}</p>\n")
         parts.append(f"<p><img src=\"{plot_file}\" alt=\"{_e(p['key'])} step response\" "
                      f"style=\"max-width:100%;border:1px solid #b9c3cc;border-radius:5px;\"></p>\n")
+
+        if per_channel_file is not None:
+            parts.append("<p class='section-note'>Per-channel step response (MATLAB "
+                         "step()-style grid — each reference channel stepped in isolation; "
+                         "may differ from the combined r=ones response above due to "
+                         "cross-channel coupling):</p>\n")
+            parts.append(f"<p><img src=\"{per_channel_file}\" alt=\"{_e(p['key'])} per-channel "
+                         f"step response\" style=\"max-width:100%;border:1px solid #b9c3cc;"
+                         f"border-radius:5px;\"></p>\n")
 
     parts.append("""
 <div class="appendix-title">Appendix: reproducing the numbers above</div>
