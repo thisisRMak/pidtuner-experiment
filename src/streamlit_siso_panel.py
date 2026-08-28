@@ -28,6 +28,7 @@ from pid_tuning_methods import (
 )
 from pid_compare import compare_all_methods, metric_row
 from pid_simulate import simulate_closed_loop, format_metrics, saturation_mask
+from lqg_simulate import auto_plot_window
 
 import streamlit_gui_state as gs
 import streamlit_siso_comparison_views as scv
@@ -491,6 +492,14 @@ def _render_response_plot():
     if stable_ys:
         max_sp = max(np.max(np.abs(e.sim.sp)) for e in active)
         ax_y.set_ylim(-0.2 * max_sp, max(2.0 * max_sp, 0.1))
+    # Crop the shared time axis to where the traces actually settle — the
+    # plant's auto t_end (sized for a correct settling-time measurement,
+    # not for viewing) can run 10x longer than anything visually
+    # interesting. Same auto_plot_window() the LQG track plots use; widest
+    # window across the overlaid entries wins, and since ax_u/ax_e share
+    # ax_y's x-axis, one set_xlim covers all three subplots.
+    xmax = max(auto_plot_window(e.sim.t, e.sim.y, e.sim.u, e.sim.e) for e in active)
+    ax_y.set_xlim(0.0, xmax)
     fig.tight_layout()
     st.pyplot(fig)
 
