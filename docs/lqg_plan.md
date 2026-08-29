@@ -169,12 +169,21 @@ for `LQR`.
 Both classes' general formula also matches
 `AIKreindlerRothschildModelFollowingN.m`'s own code exactly
 (`Qhat=(C*A-Am*C)'*Qi*(C*A-Am*C)`, etc., on a bigger augmented F-4 +
-actuator + command-generator system) — corroborating evidence, though not
-reproduced as a full golden-value test here (that system's `lsim`
-step-response reproduction was judged out of scope relative to the
-Examples 3/4 validation above). Was kept as Phase 2 (after the LQR/LQG
-core) because it's structurally the most complex technique here (state
-augmentation) and fewer examples back it, vs. the dozen backing Phase 1.
+actuator + command-generator system). **2026-08-29: `ImplicitModelFollowing`
+is now also structurally validated directly on that system** — the
+professor confirmed (email 2026-08-28) that this augmented `(A,B,C,D=0)`
+plus `Qhat`/`Rhat`/`Nhat` is what should be used, not the bare 4-state `Aa`/
+`Ba` airframe a since-superseded proposal memo had assumed (see
+`lqg-kreindler-next-session` memory). `TestKreindlerImplicitModelFollowing`
+in `test_lqg.py` runs the actual F-4 system through `ImplicitModelFollowing`
+and checks the ARE residual, `S` symmetry/PSD-ness, closed-loop stability,
+and that the 4 uncontrollable modes (the command generator, unreachable by
+design) are already stable — the source file has no printed golden `S`/`K`
+to match, only a `lsim` plot, so full numeric reproduction of that plot is
+still out of scope; the design itself is now covered. Was kept as Phase 2
+(after the LQR/LQG core) because it's structurally the most complex
+technique here (state augmentation) and fewer examples back it, vs. the
+dozen backing Phase 1.
 
 ## Architecture
 
@@ -249,9 +258,14 @@ then, `pid_app.py` stays PID-only; no LQG tab is planned in this phase.
   residual, not printed-digit match) for `ExplicitModelFollowing` — see
   "The Example 4 discrepancy" in `docs/lqg_testing.md`.
   `AIKreindlerRothschildModelFollowingN.m`'s own code corroborates the same
-  general formula on a bigger augmented F-4 system, but wasn't reproduced
-  as a full golden-value test (out of scope — see `docs/lqg_testing.md`
-  "Model-following classes").
+  general formula on a bigger augmented F-4 system; per the professor's
+  2026-08-28 guidance, `TestKreindlerImplicitModelFollowing` in
+  `test_lqg.py` now runs `ImplicitModelFollowing` on that actual augmented
+  system and validates it structurally (ARE residual, symmetry/PSD-ness,
+  closed-loop stability) — the source has no printed golden `S`/`K` to
+  match, only a `lsim` plot, so reproducing that specific plot numerically
+  remains out of scope (see `docs/lqg_testing.md` "Model-following
+  classes").
 - The other 9 clean plants without a golden answer key: no independent
   answer key (nobody has run these in MATLAB to record expected `K`), so
   they serve as smoke-test/regression fixtures (LQR converges, closed-loop

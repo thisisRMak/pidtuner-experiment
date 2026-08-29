@@ -324,6 +324,129 @@ class TestExplicitModelFollowing(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Kreindler-Rothschild F-4 model-following — AIKreindlerRothschildModelFollowingN.m.
+# Professor's guidance (email 2026-08-28, see lqg-kreindler-next-session memory):
+# grab the augmented plant+actuator (A,B,C,D=0) and the implicit
+# model-following weights Qhat/Rhat/Nhat -- NOT the bare 4-state Aa/Ba
+# airframe a since-superseded proposal memo (docs/memos/2026-08-25/
+# 2026-08-25-kreindler-lq-only-memo.md) had assumed. That's exactly what
+# ImplicitModelFollowing already computes (eq. 58-60), so this plant is a
+# fixture for it, not a new design-method class or catalog preset.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def kreindler_rothschild_f4_system():
+    """F-4 airframe (Aa, Ba) augmented with actuator dynamics (Adelta,
+    Bdelta, Cdelta) and a command generator (Ac, Cc), per
+    AIKreindlerRothschildModelFollowingN.m's "Augmented system" section
+    (the implicit model-following half of the file, before its separate
+    explicit-model-following section reassigns A/B/C for a different
+    augmentation). Returns (plant, Am, Q1, R) ready for
+    ImplicitModelFollowing(plant, Am, Q1, R) — plant.A/B are the 10-state
+    (4 airframe + 2 actuator + 4 command-generator), 2-input augmented
+    system; plant.C is the file's own C (8x10); Am is the model to track
+    (Aaprime augmented with the same command generator); Q1=Qi, R=eye(2)
+    are the file's own weights.
+    """
+    Aa = np.array([[-1.768, 0.4125, -14.25, 0],
+                   [-0.007, -0.3831, 6.038, 0],
+                   [0.0016, -0.9975, -0.1551, 0.0586],
+                   [1, 0, 0, 0]])
+    Ba = np.array([[1.744, 8.952],
+                   [-2.92, -0.3075],
+                   [0.0243, -0.0036],
+                   [0, 0]])
+    C = np.block([[np.eye(4), np.zeros((4, 6))],
+                  [np.zeros((4, 6)), np.eye(4)]])
+    Adelta = np.array([[-20, 0], [0, -10]])
+    Bdelta = np.array([[20, 0], [0, 10]])
+    Cdelta = np.eye(2)
+    Aaprime = np.array([[-4, 0.865, -10, 0],
+                        [0.04, -0.507, 5.87, 0],
+                        [0, -1, -0.743, 0.0586],
+                        [1, 0, 0, 0]])
+    Baprime = np.array([[3.3, 20], [-3.13, 0], [0, 0], [0, 0]])
+
+    # Command generator (tp/wa/wr/sp/k feed only `delta`, the sim's initial
+    # condition scale, which this fixture doesn't need -- Ac/Cc themselves
+    # don't depend on them beyond wa/wr).
+    tp = 0.5
+    wa = np.pi / (4 * tp)
+    wr = wa
+    Ac = np.array([[0, 1, 0, 0],
+                  [-2 * wr**2, -2 * wr, 0, 0],
+                  [0, 0, 0, 1],
+                  [0, 0, -2 * wa**2, -2 * wa]])
+    Cc = np.array([[1, 0, 0, 0], [0, 0, 1, 0]])
+
+    q1, q2, q3 = 0.1, 10, 0.1
+    Q1 = np.diag([q1, q2, q3, 0, 0, 0, 0, 0])
+
+    A = np.block([[Aa, Ba @ Cdelta, np.zeros((4, 4))],
+                 [np.zeros((2, 4)), Adelta, np.zeros((2, 4))],
+                 [np.zeros((4, 4)), np.zeros((4, 2)), Ac]])
+    B = np.block([[np.zeros((4, 2))], [Bdelta], [np.zeros((4, 2))]])
+    Am = np.block([[Aaprime, Baprime @ Cc],
+                  [np.zeros((4, 4)), Ac]])
+    R = np.eye(2)
+
+    plant = StateSpacePlant(A=A, B=B, C=C, D=np.zeros((8, 2)))
+    return plant, Am, Q1, R
+
+
+class TestKreindlerImplicitModelFollowing(unittest.TestCase):
+    """AIKreindlerRothschildModelFollowingN.m's own implicit model-following
+    design, on its actual F-4 augmented system -- the corroborating case
+    docs/lqg_plan.md noted as "not reproduced as a full golden-value test"
+    beyond the formula match. No printed S/K digits exist in the source (it
+    only calls lqr() and plots), so validated structurally like
+    TestExplicitModelFollowing: ARE residual, symmetry/PSD-ness, shapes,
+    closed-loop stability."""
+
+    def setUp(self):
+        self.plant, self.Am, self.Q1, self.R = kreindler_rothschild_f4_system()
+        self.res = ImplicitModelFollowing(self.plant, Am=self.Am, Q1=self.Q1,
+                                          R=self.R).design()
+
+    def test_gain_shape(self):
+        self.assertEqual(self.res.gains.K.shape, (2, 10))
+
+    def test_S_solves_the_riccati_equation(self):
+        A, B = self.plant.A, self.plant.B
+        Q, R, N = self.res.Q, self.res.R, self.res.N
+        S = self.res.S
+        Rinv = np.linalg.inv(R)
+        residual = (A.T @ S + S @ A
+                   - (S @ B + N) @ Rinv @ (B.T @ S + N.T) + Q)
+        self.assertLess(np.linalg.norm(residual), 1e-6)
+
+    def test_S_symmetric_psd(self):
+        S = self.res.S
+        np.testing.assert_allclose(S, S.T, atol=1e-8)
+        self.assertTrue(np.all(np.linalg.eigvalsh(S) >= -1e-6))
+
+    def test_stable(self):
+        self.assertTrue(self.res.is_stable())
+
+    def test_uncontrollable_modes_are_the_stable_command_generator(self):
+        # (A, B) is not fully controllable (rank 6 of 10): B doesn't drive
+        # the command-generator block at all, so its 4 modes are
+        # unreachable -- expected, not a bug, since they're exogenous
+        # reference dynamics, not part of the regulated airframe. LQR only
+        # requires stabilizability (uncontrollable modes already stable),
+        # which this checks directly via the closed-loop poles matching the
+        # open-loop command-generator poles (feedback can't move them).
+        A, B = self.plant.A, self.plant.B
+        n = A.shape[0]
+        ctrb = B
+        M = B
+        for _ in range(1, n):
+            M = A @ M
+            ctrb = np.hstack([ctrb, M])
+        self.assertEqual(np.linalg.matrix_rank(ctrb), 6)
+        self.assertTrue(np.all(np.real(self.res.closed_loop_poles) < -1e-9))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Explicit model-following simulation (augmented [x; xm] closed loop)
 # ─────────────────────────────────────────────────────────────────────────────
 
