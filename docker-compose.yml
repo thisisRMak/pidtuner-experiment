@@ -1,0 +1,19 @@
+# Launches the Streamlit web GUI: `docker compose up`, then open
+# http://localhost:8501. Builds from src/Dockerfile (see its header comment
+# for the other supported use cases — this file only drives the Streamlit
+# entrypoint, overriding the image's default `bash` CMD).
+services:
+  webapp:
+    build:
+      context: ./src
+    ports:
+      - "8501:8501"
+    command: >
+      streamlit run streamlit_app.py
+      --server.address=0.0.0.0
+      --server.port=8501
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

@@ -24,16 +24,19 @@ it as a periodic parity/portability check; keep developing in conda.
 
 ## Candidate next steps (unordered, pick up if relevant)
 
-- **Dev-loop ergonomics** — bind-mount `src/` (`-v $(pwd):/app` or a
-  `docker-compose.yml`) so code changes don't need a rebuild. Only worth
-  it once someone wants to iterate *inside* Docker regularly.
+- **Dev-loop ergonomics** — a `docker-compose.yml` now exists at the repo
+  root, but only to launch the Streamlit service (`docker compose up`);
+  it doesn't bind-mount `src/`, so code changes still need a rebuild
+  before they're testable in-container. Bind-mounting (`-v $(pwd):/app`
+  or a compose `volumes:` entry) is still open, worth adding once someone
+  wants to iterate *inside* Docker regularly.
 - **CI parity job** — a separate, additional GitHub Actions workflow
   building the image and running the test suite in it on every push/PR,
   as an automated "did anything start depending on conda-only behavior"
   check. Not a replacement for `build.yml`.
-- **Multi-stage build / smaller image, health checks, port config** —
-  worth it once Docker becomes an actual deployment target rather than
-  a local convenience.
+- **Multi-stage build / smaller image** — worth it once Docker becomes
+  an actual deployment target rather than a local convenience. (Health
+  check and port config are now handled by `docker-compose.yml`.)
 - **Ollama sidecar** (bundled via `docker-compose`) — deliberately
   excluded; Ollama stays externally reached via `--host`. Revisit only
   if handing this off to someone without their own Ollama setup.

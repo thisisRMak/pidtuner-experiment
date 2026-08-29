@@ -46,11 +46,18 @@ official python.org installer includes Tk.
 
 ### Option C — Docker (CLI + Streamlit GUI, no conda needed)
 
+Streamlit GUI, one command from the repo root:
+
+```bash
+docker compose up
+# then open http://localhost:8501
+```
+
+Or build/run manually for one-off CLI use:
+
 ```bash
 docker build -t controldesign .
 docker run controldesign python3 cli_pid.py --plant "1000/((s+1)(10s+1))" --method simc
-docker run -p 8501:8501 controldesign streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
-# then open http://localhost:8501
 ```
 
 Doesn't run the Tkinter GUI (`pid_app.py`) — no display server in a
