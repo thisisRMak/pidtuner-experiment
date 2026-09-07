@@ -13,7 +13,9 @@ those and re-implements only the rendering, once per view:
 
 from __future__ import annotations
 
+import csv
 import html
+import io
 
 import numpy as np
 import streamlit as st
@@ -55,6 +57,90 @@ def _heat_color(v):
     return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
 
+def _heatmap_norms(rows):
+    """Per-metric normalized-goodness columns (0..1, 1=best) — shared by
+    the HTML table and the PNG/CSV exports so all three agree."""
+    norm = {}
+    for _, metrics in METRIC_TIERS:
+        for m in metrics:
+            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
+                   for r in rows]
+            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
+    return norm
+
+
+def _heatmap_png_bytes(rows, norm):
+    """Static colored-cell table mirroring render_heatmap's HTML output —
+    matplotlib's ax.table() has no column-span support, so tier-name rows
+    are faked as a full-width gray band with the label in the first
+    column, same visual effect as the HTML table's colspan row."""
+    n_cols = len(rows) + 1
+    header = ["Metric"]
+    for r in rows:
+        name = r["name"]
+        if r.get("black_box"):
+            name += " [BB]"
+        if r.get("has_time_delay"):
+            name += " [L]"
+        if not r.get("stable"):
+            name += " ⚠"
+        header.append(name)
+
+    cell_text = [header]
+    cell_colors = [["#f0f0f0"] + ["#ffffff" if r.get("stable") else "#dddddd" for r in rows]]
+    for tier_name, metrics in METRIC_TIERS:
+        cell_text.append([tier_name] + [""] * len(rows))
+        cell_colors.append(["#e5e5e5"] * n_cols)
+        for m in metrics:
+            row_vals = [_METRIC_LABELS.get(m, m)]
+            row_colors = ["#f7f7f7"]
+            for c, r in enumerate(rows):
+                if not r.get("stable"):
+                    row_vals.append("—")
+                    row_colors.append("#dddddd")
+                    continue
+                val = r.get(m, float("nan"))
+                row_vals.append(f"{val:.3g}" if np.isfinite(val) else "—")
+                row_colors.append(_heat_color(norm[m][c]))
+            cell_text.append(row_vals)
+            cell_colors.append(row_colors)
+
+    n_rows = len(cell_text)
+    fig = Figure(figsize=(max(6.0, 1.3 * n_cols), 0.32 * n_rows + 0.6), dpi=150)
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+    table = ax.table(cellText=cell_text, cellColours=cell_colors, cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.5)
+    for (row, col), cell in table.get_celld().items():
+        cell.set_text_props(color="#111")
+        if col == 0:
+            cell.get_text().set_ha("left")
+        if row == 0:
+            cell.get_text().set_weight("bold")
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    return buf.getvalue()
+
+
+def _heatmap_csv_bytes(rows):
+    """Raw metric values behind the heatmap, full precision rather than
+    the display-rounded 3-sig-fig strings — one row per metric (grouped
+    by tier), one column per method."""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Metric"] + [r["name"] for r in rows])
+    w.writerow(["stable"] + [r.get("stable", False) for r in rows])
+    for tier_name, metrics in METRIC_TIERS:
+        for m in metrics:
+            label = _METRIC_LABELS.get(m, m)
+            vals = [r.get(m, "") if r.get("stable") else "" for r in rows]
+            w.writerow([f"{tier_name}: {label}"] + vals)
+    return buf.getvalue().encode("utf-8")
+
+
 def render_heatmap(rows):
     """Methods across columns, metrics down rows grouped by tier — same
     orientation as pid_comparison_views.draw_heatmap_tab."""
@@ -94,12 +180,7 @@ def render_heatmap(rows):
             name += f' <span title="{err}" style="color:#a00;">⚠</span>'
         header_cells.append(th(name, bg="#ffffff" if stable else "#dddddd"))
 
-    norm = {}
-    for _, metrics in METRIC_TIERS:
-        for m in metrics:
-            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
-                   for r in rows]
-            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
+    norm = _heatmap_norms(rows)
 
     body_rows = []
     for tier_name, metrics in METRIC_TIERS:
@@ -125,6 +206,25 @@ def render_heatmap(rows):
     )
     st.markdown(table_html, unsafe_allow_html=True)
     st.caption(_FOOTNOTE)
+
+    # Three download formats since this view is an HTML table, not a
+    # matplotlib Figure like Response/Radar: the standalone .html is the
+    # table as-is, the .png is a second, static rendering of the same
+    # colored cells (via matplotlib's ax.table, see _heatmap_png_bytes),
+    # and the .csv is the raw numbers underneath for anyone who wants to
+    # crunch them further.
+    standalone = (f"<!doctype html><meta charset='utf-8'>"
+                  f"<title>SISO heatmap</title>{table_html}"
+                  f"<p>{html.escape(_FOOTNOTE)}</p>")
+    col1, col2, col3 = st.columns(3)
+    col1.download_button("Download HTML", data=standalone, file_name="siso_heatmap.html",
+                         mime="text/html", key="siso_heatmap_dl_html")
+    col2.download_button("Download PNG", data=_heatmap_png_bytes(rows, norm),
+                         file_name="siso_heatmap.png", mime="image/png",
+                         key="siso_heatmap_dl_png")
+    col3.download_button("Download CSV", data=_heatmap_csv_bytes(rows),
+                         file_name="siso_heatmap.csv", mime="text/csv",
+                         key="siso_heatmap_dl_csv")
 
 
 def render_radar(rows):
@@ -179,3 +279,8 @@ def render_radar(rows):
               fontsize=8, framealpha=0.9)
     fig.tight_layout()
     st.pyplot(fig)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    st.download_button("Download PNG", data=buf.getvalue(), file_name="siso_radar.png",
+                       mime="image/png", key="siso_radar_dl")

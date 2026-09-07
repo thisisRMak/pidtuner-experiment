@@ -14,6 +14,8 @@ pid_compare.py data functions.
 
 from __future__ import annotations
 
+import io
+
 import numpy as np
 import streamlit as st
 from matplotlib.figure import Figure
@@ -48,6 +50,17 @@ METHODS = [
 PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
            "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
            "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
+
+
+def _download_fig_button(fig, filename, key):
+    """PNG download button for a matplotlib Figure already shown via
+    st.pyplot — used so the stacked Response/Heatmap/Radar views (no
+    longer switched one-at-a-time via the View radio) are each
+    individually downloadable."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    st.download_button("Download PNG", data=buf.getvalue(), file_name=filename,
+                       mime="image/png", key=key)
 
 
 # ── plant ────────────────────────────────────────────────────────────────
@@ -455,6 +468,7 @@ def _render_response_plot():
         ax_y.set_title("No tuned controllers shown — tune a method or "
                        "tick one in the session list.")
         st.pyplot(fig)
+        _download_fig_button(fig, "siso_response.png", key="siso_response_dl")
         return
 
     seen_kinds = set()
@@ -502,6 +516,7 @@ def _render_response_plot():
     ax_y.set_xlim(0.0, xmax)
     fig.tight_layout()
     st.pyplot(fig)
+    _download_fig_button(fig, "siso_response.png", key="siso_response_dl")
 
 
 def _render_last_result():
@@ -556,16 +571,15 @@ def render():
         _render_last_result()
 
     with plots:
-        # A radio switch, not a nested st.tabs — the outer app already uses
-        # st.tabs for SISO/MIMO/LLM Chat, and nesting a second st.tabs
-        # inside one of those tabs renders unreliably in Streamlit's
-        # frontend (no error at the Python level, but the inner tab bar
-        # can end up invisible/non-interactive).
-        view = st.radio("View", ["Response", "Heatmap", "Radar"],
-                        key="siso_view", horizontal=True)
-        if view == "Response":
-            _render_response_plot()
-        elif view == "Heatmap":
-            scv.render_heatmap(_session_rows())
-        else:
-            scv.render_radar(_session_rows())
+        # Stacked vertically rather than switched via tabs/radio — the outer
+        # app already uses st.tabs for SISO/MIMO/LLM Chat, and nesting a
+        # second st.tabs inside one of those tabs renders unreliably in
+        # Streamlit's frontend (no error at the Python level, but the inner
+        # tab bar can end up invisible/non-interactive). A radio switch
+        # avoided that, but showing all three at once sidesteps it entirely.
+        st.subheader("Response")
+        _render_response_plot()
+        st.subheader("Heatmap")
+        scv.render_heatmap(_session_rows())
+        st.subheader("Radar")
+        scv.render_radar(_session_rows())

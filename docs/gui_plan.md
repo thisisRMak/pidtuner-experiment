@@ -173,14 +173,36 @@ below:
   4-6 landing first, but noted here too since it's a real gap in
   today's confidence, not just a future step.
 
+Low-priority, from the SISO Response/Heatmap/Radar stacked-view +
+per-view download buttons change:
+
+- **Heatmap PNG/HTML can drift apart.** `streamlit_siso_comparison_views.py`'s
+  `_heatmap_png_bytes()` re-implements the HTML table's layout in
+  matplotlib (`ax.table()` has no colspan, so tier-name rows are faked
+  as gray bands). It shares `_heatmap_norms()`/`_heat_color()` with the
+  HTML table so values/colors can't disagree, but the two rendering
+  code paths are separate — a future layout change to one (e.g. adding
+  a metric) needs a matching manual edit in the other; nothing enforces
+  that.
+- **No committed regression test for the six download buttons**
+  (Response PNG, Heatmap HTML/PNG/CSV, Radar PNG) — only verified live
+  via a one-off Playwright script, not locked into
+  `test_streamlit_siso_panel.py`.
+- **No lint config found in this repo** (no flake8/pylint/ruff) —
+  worth deciding whether to add one, rather than each session silently
+  skipping a lint pass.
+
 ## Resolved decisions
 
 - **Tabs, not sidebar** — `st.tabs` for the three top-level panels.
   Within a panel with its own sub-views (SISO's Response/Heatmap/Radar),
-  use a radio switch, not a nested `st.tabs` — Streamlit allows nesting
-  tabs at the Python level with no error, but the inner tab bar can
-  render invisible/non-interactive in the actual frontend. Found live,
-  not caught by `AppTest`.
+  avoid a nested `st.tabs` — Streamlit allows nesting tabs at the Python
+  level with no error, but the inner tab bar can render
+  invisible/non-interactive in the actual frontend. Found live, not
+  caught by `AppTest`. Originally worked around with a radio switch
+  between the three views; later changed to showing all three stacked
+  vertically instead (each individually downloadable), which sidesteps
+  the nested-tabs bug just as well.
 - **Chat history: ephemeral**, `st.session_state` only, lost on
   refresh — no persistence layer for v1.
 - **File naming: flat `src/`, `streamlit_` prefix** — not a `src/webapp/`
