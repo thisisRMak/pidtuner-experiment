@@ -39,7 +39,10 @@ it as a periodic parity/portability check; keep developing in conda.
   check and port config are now handled by `docker-compose.yml`.)
 - **Ollama sidecar** (bundled via `docker-compose`) — deliberately
   excluded; Ollama stays externally reached via `--host`. Revisit only
-  if handing this off to someone without their own Ollama setup.
+  if handing this off to someone without their own Ollama setup. Note a
+  host-machine Ollama daemon is not reachable from inside the container
+  as `localhost` — see `docs/aituner_plan.md`'s GUI selection section for
+  the `host.docker.internal` recipe once the LLM panel needs this.
 - **Registry/publishing** — currently local-build-only. Decide if/when
   worth publishing (Docker Hub, GHCR) once there's a consumer who isn't
   building it locally from source.
