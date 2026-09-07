@@ -21,3 +21,6 @@ dependencies:
   - pip:
       - ollama
       - streamlit
+      - anthropic
+      - python-dotenv
+      - Brotli>=1.1

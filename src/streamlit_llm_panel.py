@@ -1,0 +1,221 @@
+"""Streamlit LLM chat panel — Build plan Step 5 (docs/gui_plan.md).
+
+Cloud-key entry plus a track selector between the two existing,
+separately-maintained supervisor conversations: supervisor_session_pid.
+Session (SISO/PID) and supervisor_session_lqg.LQGSession (MIMO/LQG).
+Deliberately not merged into one session/prompt — supervisor_session_lqg.
+py's own docstring documents why these stay separate (mirrors cli_pid.py/
+cli_lqg.py staying separate scripts rather than a unified dispatcher).
+
+Key resolution, checked in order per provider (see _configured_key):
+1. An operator-configured key — `.env`/the process environment (loaded via
+   python-dotenv; also how a self-hosted docker-compose env_file: entry
+   arrives), or Streamlit's own Secrets manager (st.secrets, the Community
+   Cloud equivalent — there's no filesystem `.env` there). Never displayed,
+   only its presence matters, and if found the visitor isn't asked for one.
+2. Otherwise, a session-only textbox — never written to disk or logged,
+   lost on refresh. This is the only source on a public deploy with no
+   operator-configured key.
+
+Only Claude is wired to an actual client so far (supervisor_llm_anthropic.
+AnthropicClient). OpenAI/Gemini keys are accepted here but not yet
+connected to anything — see docs/aituner_plan.md.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import traceback
+
+import anthropic
+import streamlit as st
+from dotenv import load_dotenv
+
+from supervisor_llm_anthropic import AnthropicClient
+from supervisor_session_pid import Session
+from supervisor_session_lqg import LQGSession
+from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
+from supervisor_tools_whitebox_pid import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
+from supervisor_tools_lqg import RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark
+
+import streamlit_gui_state as gs
+
+WHITEBOX_TOOL = (RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark)
+BLACKBOX_TOOL = (RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark)
+LQG_TOOL = (RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark)
+
+PROVIDERS = ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"]
+WIRED_PROVIDERS = {"Claude (Anthropic)"}
+TRACKS = ["SISO / PID", "MIMO / LQG"]
+
+KEY_STATE = {
+    "Claude (Anthropic)": "llm_api_key_anthropic",
+    "ChatGPT (OpenAI)": "llm_api_key_openai",
+    "Gemini (Google)": "llm_api_key_gemini",
+}
+
+ENV_VAR = {
+    "Claude (Anthropic)": "ANTHROPIC_API_KEY",
+    "ChatGPT (OpenAI)": "OPENAI_API_KEY",
+    "Gemini (Google)": "GOOGLE_API_KEY",
+}
+
+# (model id, menu label) -- cheapest/most-capable tradeoff made explicit in
+# the label since it's not obvious from the name alone. Opus deliberately
+# not offered here -- most expensive tier, no reason to offer it in this
+# app. Haiku 4.5 is the default: cheapest per-token AND (per the claude-api
+# skill's thinking-defaults table) an "older model" tier that does NOT run
+# adaptive thinking unless explicitly configured -- unlike Sonnet 5, which
+# (like Opus 5) runs adaptive thinking by default, billing extra output
+# tokens for invisible reasoning on every call. Correcting an earlier wrong
+# assumption here: Sonnet does NOT default to no-thinking the way Haiku does.
+ANTHROPIC_MODELS = [
+    ("claude-haiku-4-5", "Claude Haiku 4.5 -- fastest, cheapest (default)"),
+    ("claude-sonnet-5", "Claude Sonnet 5 -- more capable, more expensive"),
+]
+ANTHROPIC_DEFAULT_MODEL_INDEX = 0  # Haiku -- see comment above
+
+
+def _init_panel_state() -> None:
+    if "llm_dotenv_loaded" not in st.session_state:
+        load_dotenv()
+        st.session_state["llm_dotenv_loaded"] = True
+    for state_key in KEY_STATE.values():
+        st.session_state.setdefault(state_key, "")
+    st.session_state.setdefault("llm_session_obj", None)
+    st.session_state.setdefault("llm_session_fingerprint", None)
+
+
+def _configured_key(provider: str) -> str | None:
+    """An operator-configured key for `provider`, checked ahead of asking
+    the visitor for their own — see module docstring for the two sources
+    and their precedence. Returns None (not an error) if neither source has
+    anything, including when no secrets store is configured at all."""
+    env_var = ENV_VAR[provider]
+    key = os.environ.get(env_var)
+    if key:
+        return key
+    try:
+        return st.secrets.get(env_var)
+    except Exception:
+        # No secrets.toml / secrets store configured at all -- nothing
+        # configured this way, not a real error.
+        return None
+
+
+def _log_exception(exc: Exception) -> None:
+    """Full traceback to the server console only -- e.g. the terminal
+    running `streamlit run`, or Streamlit Cloud's app-logs viewer for a
+    deployed instance. Never shown to the visitor: on a public deploy that
+    would leak internals (paths, library versions) to strangers for no
+    benefit -- the chat only ever gets the short, friendly message."""
+    print(f"\n--- LLM chat error ({type(exc).__name__}) ---", file=sys.stderr)
+    traceback.print_exception(exc, file=sys.stderr)
+
+
+def _new_session(provider: str, api_key: str, track: str, model: str):
+    client = AnthropicClient(api_key=api_key, model=model)
+    if track == "SISO / PID":
+        return Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL)
+    return LQGSession(client, lqg_tool=LQG_TOOL)
+
+
+def _render_key_entry():
+    st.subheader("Model access")
+    provider = st.selectbox("Provider", PROVIDERS, key="llm_provider")
+    configured_key = _configured_key(provider)
+    if configured_key:
+        st.success(f"{provider} key configured by the operator — nothing to enter.")
+        api_key = configured_key
+    else:
+        api_key = st.text_input(
+            f"{provider} API key", type="password", key=KEY_STATE[provider],
+            help="Kept only in this browser session — never written to disk or logged.",
+        )
+    if provider not in WIRED_PROVIDERS and api_key:
+        st.info(f"{provider} key accepted, but chat wiring for this provider isn't built yet "
+                 "— Claude is the only provider connected so far.")
+        return provider, api_key, None
+
+    model = None
+    if provider in WIRED_PROVIDERS:
+        model = st.selectbox(
+            "Model", [m[0] for m in ANTHROPIC_MODELS],
+            format_func=lambda m: dict(ANTHROPIC_MODELS)[m],
+            index=ANTHROPIC_DEFAULT_MODEL_INDEX, key="llm_model",
+        )
+        st.warning(
+            "Chatting here sends real, billed requests to the provider using "
+            f"the key above -- cost depends on conversation length and the "
+            "model picked (Haiku is cheapest).",
+            icon="💸",
+        )
+    return provider, api_key, model
+
+
+def render():
+    _init_panel_state()
+    st.header("LLM Chat")
+
+    provider, api_key, model = _render_key_entry()
+    track = st.radio("Track", TRACKS, key="llm_track", horizontal=True)
+
+    if not api_key:
+        st.info("Enter an API key above to start chatting.")
+        return
+    if provider not in WIRED_PROVIDERS:
+        return
+
+    fingerprint = (provider, api_key, track, model)
+    if st.session_state["llm_session_fingerprint"] != fingerprint:
+        st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
+        st.session_state["llm_session_fingerprint"] = fingerprint
+        gs.clear_chat()
+
+    if st.button("Reset conversation"):
+        st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
+        gs.clear_chat()
+
+    # Reserving this container before chat_input (below) puts it above
+    # chat_input in the DOM regardless of Streamlit's own auto-bottom-pin
+    # behavior for chat_input, which doesn't reliably take effect nested
+    # inside st.tabs() (same class of live-only rendering quirk noted in
+    # docs/gui_plan.md's "Resolved decisions" for nested tabs -- confirmed
+    # here with a real screenshot, not just suspected). No height/border --
+    # free-floating bubbles in the page's own flow, page itself scrolls,
+    # matching the original look; only the order was ever the bug.
+    history_box = st.container()
+    user_text = st.chat_input("Tell me about your plant and what matters most to you.")
+
+    if user_text:
+        gs.append_chat_message("user", user_text)
+
+    with history_box:
+        for message in st.session_state[gs.CHAT_KEY]:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        if user_text:
+            session = st.session_state["llm_session_obj"]
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    try:
+                        reply = session.handle_user_message(user_text)
+                    except anthropic.AuthenticationError as exc:
+                        _log_exception(exc)
+                        reply = "That API key was rejected — double-check it and try again."
+                    except anthropic.RateLimitError as exc:
+                        _log_exception(exc)
+                        reply = "Rate limited by the provider — wait a moment and try again."
+                    except anthropic.APIStatusError as exc:
+                        _log_exception(exc)
+                        reply = f"The model provider returned an error: {exc.message}"
+                    except anthropic.APIConnectionError as exc:
+                        _log_exception(exc)
+                        reply = "Couldn't reach the model provider — check your connection and try again."
+                    except Exception as exc:  # noqa: BLE001 - a bad turn must not crash the app
+                        _log_exception(exc)
+                        reply = "Something went wrong handling that message — check the server logs for details."
+                st.markdown(reply)
+            gs.append_chat_message("assistant", reply)

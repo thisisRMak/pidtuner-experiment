@@ -1,7 +1,8 @@
 # CLI/dev container: dependency parity with the conda environment
-# (environment.yml) — numpy/scipy/matplotlib, Tk, ollama, and streamlit —
-# for running the CLI scripts, the ollama-backed LLM supervisor, and the
-# Streamlit web GUI without installing conda locally. This does NOT run
+# (environment.yml) — numpy/scipy/matplotlib, Tk, ollama, streamlit, and
+# anthropic — for running the CLI scripts, the ollama-backed LLM
+# supervisor, and the Streamlit web GUI (including its Claude-backed chat
+# panel) without installing conda locally. This does NOT run
 # the Tkinter GUI: there's no display server inside the container, so
 # pid_app.py's dependency chain imports cleanly but tk.Tk() itself has
 # nowhere to render (X11 forwarding/VNC are deliberately out of scope —
@@ -23,7 +24,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3-tk \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir numpy scipy matplotlib ollama streamlit
+RUN pip install --no-cache-dir numpy scipy matplotlib ollama streamlit anthropic python-dotenv "Brotli>=1.1"
 
 COPY . /app
 

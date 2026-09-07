@@ -1,11 +1,11 @@
 """Streamlit UI for the PID/LQG tuner.
 
-Build plan: docs/gui_plan.md. Steps 1-4 are done: skeleton, session-
+Build plan: docs/gui_plan.md. Steps 1-5 are done: skeleton, session-
 state schema (streamlit_gui_state.py), the SISO PID panel
-(streamlit_siso_panel.py, ported from pid_app.py), and the MIMO LQR/LQG
+(streamlit_siso_panel.py, ported from pid_app.py), the MIMO LQR/LQG
 panel (streamlit_mimo_panel.py, ported from cli_lqg.py's design/compare
-flow). LLM chat tab is still a placeholder. Steps 5-7 (LLM chat,
-packaging, container check) land as separate turns.
+flow), and the LLM chat panel (streamlit_llm_panel.py). Steps 6-7
+(packaging, container check) land as separate turns.
 
 Run: streamlit run streamlit_app.py
 
@@ -21,6 +21,7 @@ import streamlit as st
 from streamlit_gui_state import init_state
 import streamlit_siso_panel as siso_panel
 import streamlit_mimo_panel as mimo_panel
+import streamlit_llm_panel as llm_panel
 
 st.set_page_config(page_title="PID/LQG Tuner", layout="wide")
 init_state()
@@ -36,5 +37,4 @@ with mimo_tab:
     mimo_panel.render()
 
 with chat_tab:
-    st.header("LLM Chat")
-    st.caption("Placeholder — LLM conversational supervisor panel lands in Build plan Step 5.")
+    llm_panel.render()

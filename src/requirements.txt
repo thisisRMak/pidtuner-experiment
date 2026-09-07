@@ -3,3 +3,6 @@ scipy
 matplotlib
 ollama
 streamlit
+anthropic
+python-dotenv
+Brotli>=1.1
