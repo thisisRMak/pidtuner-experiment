@@ -63,6 +63,48 @@ class TestRunLqgBenchmark(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("error", result)
 
+    def test_custom_plant_is_benchmarked(self):
+        # 1/((s+1)(10s+1)) in controllable canonical form.
+        result = run_lqg_benchmark(custom_plant={
+            "A": [[0, 1], [-0.1, -1.1]], "B": [[0], [1]],
+            "C": [[0.1, 0]], "D": [[0]],
+        })
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertEqual([r["name"] for r in result["rows"]],
+                         ["LQR (suggested Q/R)", "Output-weighted LQR",
+                          "Bryson's rule", "LQG (Kalman filter)"])
+        self.assertEqual((result["nx"], result["nu"], result["ny"]), (2, 1, 1))
+
+    def test_custom_plant_D_defaults_to_zero(self):
+        result = run_lqg_benchmark(custom_plant={
+            "A": [[0, 1], [-0.1, -1.1]], "B": [[0], [1]], "C": [[0.1, 0]],
+        })
+        self.assertTrue(result["ok"], result.get("error"))
+
+    def test_custom_plant_bad_shape_reports_error_not_exception(self):
+        result = run_lqg_benchmark(custom_plant={
+            "A": [[0, 1], [-0.1, -1.1]], "B": [[0]], "C": [[0.1, 0]],
+        })
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_neither_plant_preset_nor_custom_plant_reports_error(self):
+        result = run_lqg_benchmark()
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_both_plant_preset_and_custom_plant_reports_error(self):
+        result = run_lqg_benchmark(plant_preset="aircraft_hall", custom_plant={
+            "A": [[0]], "B": [[1]], "C": [[1]],
+        })
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_schema_has_no_required_top_level_since_two_ways_to_pick_a_plant(self):
+        params = RUN_LQG_BENCHMARK_SCHEMA["function"]["parameters"]
+        self.assertNotIn("plant_preset", params.get("required", []))
+        self.assertIn("custom_plant", params["properties"])
+
     def test_am_diag_omitted_skips_model_following(self):
         result = run_lqg_benchmark("aircraft_hall")
         names = [r["name"] for r in result["rows"]]

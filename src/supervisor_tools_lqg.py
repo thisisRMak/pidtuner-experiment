@@ -1,8 +1,11 @@
 """The LQR/LQG supervisor's one benchmark tool: run every applicable
 Phase-1 design method (LQR, output-weighted LQR, Bryson's rule, full LQG)
-against one preset plant and return metrics for each, plus the two
-model-following techniques (implicit/explicit) when the caller supplies a
-target model via am_diag.
+against one plant -- a professor-provided preset, or a user-supplied
+custom A/B/C/D (wrapped into an LQGExample the same way
+streamlit_mimo_panel.py's custom-entry path does, with Q=R=I standing in
+for the missing textbook suggestion) -- and return metrics for each, plus
+the two model-following techniques (implicit/explicit) when the caller
+supplies a target model via am_diag.
 
 One tool covering all six methods, deliberately -- not six separate tools.
 Same shape as supervisor_tools_whitebox.run_whitebox_benchmark, which
@@ -29,9 +32,11 @@ its own rounded/JSON-safe row serialization on top, independent of
 cli_lqg.py's, following the precedent supervisor_tools_whitebox_pid.py already
 set ("Independent of cli.serialize_row_json by design").
 
-Imports lqg_examples.py/lqg_compare.py/lqg_explicit.py -- this is the only
-supervisor module allowed to import the lqg_* design/compare modules
-(mirrors supervisor_tools_whitebox_pid.py's plant.py-only-here contract).
+Imports lqg_examples.py/lqg_compare.py/lqg_explicit.py/plant.py -- this is
+the only supervisor module allowed to import the lqg_* design/compare
+modules or plant.py directly (mirrors supervisor_tools_whitebox_pid.py's
+plant.py-only-here contract; plant.StateSpacePlant is what custom_plant
+gets wrapped into, below).
 There's no competing black-box LQG tool to isolate this from (see
 supervisor_common_lqg.py's module docstring), so unlike
 supervisor_tools_blackbox_pid.py there's nothing for an isolation test to
@@ -44,18 +49,20 @@ import math
 
 import numpy as np
 
-from lqg_examples import list_examples, load_example
+from lqg_examples import list_examples, load_example, LQGExample
 from lqg_explicit import ExplicitModelFollowingResult
 from lqg_compare import compare_regulator_methods, compare_model_following
+from plant import StateSpacePlant
 
 RUN_LQG_BENCHMARK_SCHEMA = {
     "type": "function",
     "function": {
         "name": "run_lqg_benchmark",
         "description": (
-            "Run LQR (the preset's own suggested Q/R), output-weighted LQR, "
+            "Run LQR (the plant's own suggested Q/R), output-weighted LQR, "
             "Bryson's rule, and full LQG (LQR + steady-state Kalman filter) "
-            "against one preset plant from the professor-provided catalog, "
+            "against one plant -- either a named preset from the "
+            "professor-provided catalog, or a user-supplied custom plant -- "
             "and return metrics + correctness checks for each. Also runs: "
             "implicit and explicit model-following IF am_diag is supplied; "
             "a 5th 'Custom LQR' row IF Q_diag/R_diag are both supplied "
@@ -64,8 +71,7 @@ RUN_LQG_BENCHMARK_SCHEMA = {
             "on what you saw, call again); reference-tracking metrics "
             "(Overshoot/Rise/Settling per output channel) on every regulator "
             "row IF reference is supplied, instead of the plain regulator "
-            "response. Only preset plants are supported -- there's no way to "
-            "hand this tool your own A/B/C/D matrices in conversation."
+            "response. Pass exactly one of plant_preset or custom_plant."
         ),
         "parameters": {
             "type": "object",
@@ -73,7 +79,36 @@ RUN_LQG_BENCHMARK_SCHEMA = {
                 "plant_preset": {
                     "type": "string",
                     "enum": list_examples(),
-                    "description": "Preset plant key, e.g. 'aircraft_hall'.",
+                    "description": (
+                        "Preset plant key, e.g. 'aircraft_hall'. Omit if "
+                        "supplying custom_plant instead."
+                    ),
+                },
+                "custom_plant": {
+                    "type": "object",
+                    "description": (
+                        "A user-provided state-space plant, for a system that "
+                        "isn't one of the presets -- e.g. a transfer function "
+                        "the user converted to state-space themselves. A/B/C/D "
+                        "as nested arrays (rows of numbers); D may be omitted "
+                        "for an all-zero feedthrough. There's no textbook "
+                        "suggested Q/R for a custom plant, so Q=R=I is used "
+                        "for its LQR/output-weighted/LQG rows -- mention this "
+                        "if the user asks why. Omit if supplying plant_preset "
+                        "instead."
+                    ),
+                    "properties": {
+                        "A": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
+                              "description": "nx x nx state matrix."},
+                        "B": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
+                              "description": "nx x nu input matrix."},
+                        "C": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
+                              "description": "ny x nx output matrix."},
+                        "D": {"type": "array", "items": {"type": "array", "items": {"type": "number"}},
+                              "description": "ny x nu feedthrough matrix (default: all zeros)."},
+                        "name": {"type": "string", "description": "optional label for the plant."},
+                    },
+                    "required": ["A", "B", "C"],
                 },
                 "x_max": {
                     "type": "array",
@@ -153,7 +188,6 @@ RUN_LQG_BENCHMARK_SCHEMA = {
                     ),
                 },
             },
-            "required": ["plant_preset"],
         },
     },
 }
@@ -226,11 +260,38 @@ def _serialize_row(row):
     return out
 
 
-def run_lqg_benchmark(plant_preset: str, x_max=None, u_max=None,
+def _build_custom_example(custom_plant: dict):
+    """Wrap a user-supplied A/B/C/D into an LQGExample the same way
+    streamlit_mimo_panel.py's _render_custom_plant_controls does for the
+    GUI's custom-entry path -- Q=R=I, since there's no textbook suggested
+    Q/R for a plant that isn't in the catalog."""
+    if "A" not in custom_plant or "B" not in custom_plant or "C" not in custom_plant:
+        raise ValueError("custom_plant needs at least A, B, and C")
+    A = custom_plant["A"]
+    B = custom_plant["B"]
+    C = custom_plant["C"]
+    D = custom_plant.get("D")
+    if D is None:
+        ny, nu = len(C), len(B[0])
+        D = [[0.0] * nu for _ in range(ny)]
+    plant = StateSpacePlant(A=A, B=B, C=C, D=D,
+                            name=custom_plant.get("name") or "Custom plant")
+    return LQGExample(
+        key="custom", name=plant.name, citation="user-provided", source_file="",
+        plant=plant, suggested_Q_kind="identity", suggested_R_kind="identity",
+        suggested_R_scale=1.0, notes="Custom-entered plant; no textbook suggested "
+                                     "Q/R, using Q=R=I.")
+
+
+def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
+                      x_max=None, u_max=None,
                       Q_diag=None, R_diag=None, reference=None,
                       am_diag=None, q1_scale=1.0) -> dict:
+    if (plant_preset is None) == (custom_plant is None):
+        return {"ok": False, "error": "Pass exactly one of plant_preset or custom_plant."}
     try:
-        ex = load_example(plant_preset)
+        ex = load_example(plant_preset) if plant_preset is not None \
+            else _build_custom_example(custom_plant)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     plant = ex.plant
@@ -255,5 +316,5 @@ def run_lqg_benchmark(plant_preset: str, x_max=None, u_max=None,
     except Exception as exc:  # noqa: BLE001 - report, don't crash the session
         return {"ok": False, "error": f"Benchmark failed: {exc}"}
 
-    return {"ok": True, "plant_preset": plant_preset, "nx": plant.nx,
+    return {"ok": True, "plant_preset": ex.key, "nx": plant.nx,
             "nu": plant.nu, "ny": plant.ny, "citation": ex.citation, "rows": rows}
