@@ -112,19 +112,37 @@ reference-tracking."
 
 ## Conversational (LLM supervisor)
 
-Both require a local [Ollama](https://ollama.com) daemon with a
-tool-calling model pulled (`ollama pull qwen3-coder:30b`).
+Both scripts default to a local [Ollama](https://ollama.com) daemon with a
+tool-calling model pulled (`ollama pull qwen3-coder:30b`):
 
 ```bash
 python3 cli_supervisor_pid.py        # PID: describe your plant/priorities in chat
 python3 cli_supervisor_lqg.py    # LQR/LQG: name a preset plant + priorities in chat
 ```
 
+Pass `--provider anthropic` to talk to Claude instead of a local Ollama
+daemon:
+
+```bash
+python3 cli_supervisor_pid.py --provider anthropic
+python3 cli_supervisor_lqg.py --provider anthropic --model claude-sonnet-5
+```
+
+This needs an Anthropic API key, resolved in order: `--api-key` (if given,
+nothing else is consulted) → `ANTHROPIC_API_KEY` from a `.env` file or the
+process environment. With neither, the script exits with an error naming
+all three ways to supply one — it never prompts interactively. `--model`
+defaults to `claude-haiku-4-5` (cheapest) under `--provider anthropic`, or
+`qwen3-coder:30b` under the default `--provider ollama`; `--host`/
+`--num-ctx`/`--keep-alive` only apply to Ollama. See `--help` on either
+script for the full flag list.
+
 Both are thin conversational layers over the same benchmarks the one-off
 CLIs run — see `src/examples/run_supervisor_demo.sh` /
 `run_supervisor_lqg_demo.sh` for scripted (non-interactive) example
-sessions piped via stdin. The two are separate scripts/sessions, not one
-merged supervisor — see "Design notes" below for why.
+sessions piped via stdin (Ollama only; there's no Anthropic equivalent
+demo script). The two are separate scripts/sessions, not one merged
+supervisor — see "Design notes" below for why.
 
 ## Batch runs (produce a log file to review)
 

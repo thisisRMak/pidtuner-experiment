@@ -167,6 +167,18 @@ actually work" questions mid-session, not assumptions):
    bundled skill for either, unlike `claude-api` for Anthropic) before
    writing a hand-rolled client, per the aisuite investigation's lesson
    above: don't assume, check.
+4. **Anthropic demo shell script** — `src/examples/run_supervisor_demo.sh`/
+   `run_supervisor_lqg_demo.sh` only exercise `--provider ollama` (checking
+   for a local daemon + pulled model, skipping with instructions if
+   either's missing); no `--provider anthropic` equivalent exists yet.
+   Not just a copy-paste of the Ollama script's shape, though: gating on
+   `ANTHROPIC_API_KEY` being resolvable (mirroring `_resolve_anthropic_key`
+   in `cli_supervisor_pid.py`/`cli_supervisor_lqg.py`) is the easy part —
+   unlike the free/local Ollama demos, this one would send a real, billed
+   request every time someone runs `src/examples/README.md`'s "Run them
+   all" loop, which needs a deliberate opt-in decision (separate script
+   excluded from that loop by default? explicit `--confirm-cost` flag?)
+   before it's added, not just a key check.
 
 ## Context
 
