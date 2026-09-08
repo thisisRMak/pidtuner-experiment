@@ -35,6 +35,33 @@ FALLBACK_MESSAGE = (
     "rephrase, or ask me to just run the benchmark directly?"
 )
 
+PARTIAL_FALLBACK_PREFIX = (
+    "I ran out of turns before I could weigh these against your priorities "
+    "and finish -- but here's the last benchmark I ran, so this isn't wasted:"
+)
+
+
+def _summarize_benchmark_result(result: dict) -> str:
+    """Plain-text summary of a run_lqg_benchmark result, for the case where
+    the conversation loop exhausts its hop budget mid-iteration (see
+    docs/memos/2026-09-07's hop-exhaustion memo) -- gives the user the last
+    real data point instead of nothing, even though no method was actually
+    recommended. Deliberately terse; this is a fallback, not the normal
+    conversational summary the LLM would otherwise produce."""
+    lines = [
+        f"Plant: {result.get('plant_preset')} "
+        f"(nx={result.get('nx')}, nu={result.get('nu')}, ny={result.get('ny')})"
+    ]
+    for row in result.get("rows", []):
+        status = "stable" if row.get("stable") else "UNSTABLE"
+        checks = ("checks passed" if row.get("all_checks_passed")
+                  else f"{row.get('n_checks_failed')} check(s) failed")
+        metrics = [f"{k}={row[k]}" for k in ("settling_2pct", "ISU", "u_peak")
+                   if row.get(k) is not None]
+        metrics_str = f" ({', '.join(metrics)})" if metrics else ""
+        lines.append(f"- {row.get('name')}: {status}, {checks}{metrics_str}")
+    return "\n".join(lines)
+
 
 class LQGSession:
     """One conversation.
@@ -53,9 +80,10 @@ class LQGSession:
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT_LQG}]
 
         self._lqg_schema, lqg_fn = lqg_tool
+        self._benchmark_tool_name = self._lqg_schema["function"]["name"]
 
         self._tool_fns = {
-            self._lqg_schema["function"]["name"]: self._wrap_benchmark(lqg_fn),
+            self._benchmark_tool_name: self._wrap_benchmark(lqg_fn),
             "set_priorities": make_set_priorities_lqg_tool(self.worksheet),
             "finalize_recommendation": make_finalize_recommendation_tool(self.known_stable_methods),
         }
@@ -88,6 +116,7 @@ class LQGSession:
 
     def handle_user_message(self, text: str) -> str:
         self.messages.append({"role": "user", "content": text})
+        last_benchmark_result = None
         for _ in range(self.max_tool_hops):
             resp = self.client.chat(self.messages, tools=self._active_tools())
             self.messages.append(resp.message)
@@ -96,9 +125,17 @@ class LQGSession:
                 return resp.message.content or ""
             for tc in tool_calls:
                 result = self._dispatch_tool(tc.function.name, tc.function.arguments)
+                if tc.function.name == self._benchmark_tool_name and result.get("ok"):
+                    last_benchmark_result = result
                 self.messages.append({
                     "role": "tool",
                     "tool_name": tc.function.name,
                     "content": json.dumps(result, separators=(",", ":")),
                 })
+        # Hop budget exhausted. If at least one benchmark call succeeded
+        # along the way, surface it instead of a content-free dead end --
+        # see docs/memos/2026-09-07's hop-exhaustion memo for why this is
+        # reachable even when every tool call the model made succeeded.
+        if last_benchmark_result is not None:
+            return f"{PARTIAL_FALLBACK_PREFIX}\n\n{_summarize_benchmark_result(last_benchmark_result)}"
         return FALLBACK_MESSAGE
