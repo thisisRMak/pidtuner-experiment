@@ -28,7 +28,26 @@ from supervisor_common_lqg import (
 )
 from supervisor_prompts_lqg import SYSTEM_PROMPT_LQG
 
-MAX_TOOL_HOPS = 6
+MAX_TOOL_HOPS = 8
+# Derived, not guessed -- the original 6 was introduced for the PID track
+# (commit 83887e6, no iterative-tuning concept, all 9 methods in one call)
+# and copied here unmodified (94389de) without being re-derived for a
+# workflow that can legitimately need more. Worst-realistic-case count for
+# this track's own documented job ("Your job, in order" above), now that
+# run_lqg_benchmark's Q_diag_list/R_diag_list lets several weightings be
+# compared in one call instead of one call each (see
+# docs/memos/2026-09-07's robustness memo, "sweep" section):
+#   1 establish the plant
+# + 1-2 record priorities (set_priorities, possibly called more than once
+#        as fields trickle in)
+# + 1-2 sweep several weightings, then at most one narrower follow-up
+#        sweep/refinement if the first didn't satisfy the goal
+# + 0-1 re-run with `reference` set, if the user wants overshoot/rise/
+#        settling and didn't give a reference value up front (observed
+#        live -- see the memo's Live test 4)
+# + 1 finalize_recommendation
+# = 4 typical, 7 generous worst case. 8 leaves one hop of margin above
+# that derived worst case, not a round number picked by feel.
 
 FALLBACK_MESSAGE = (
     "I'm having trouble finishing that with the tools available -- could you "
@@ -37,7 +56,12 @@ FALLBACK_MESSAGE = (
 
 PARTIAL_FALLBACK_PREFIX = (
     "I ran out of turns before I could weigh these against your priorities "
-    "and finish -- but here's the last benchmark I ran, so this isn't wasted:"
+    "and finish -- here's the last benchmark I ran, so this isn't wasted:"
+)
+
+PARTIAL_FALLBACK_SUFFIX = (
+    "\n\nJust say \"continue\" and I'll pick up from here with this same "
+    "data -- nothing above needs to be repeated."
 )
 
 
@@ -137,5 +161,7 @@ class LQGSession:
         # see docs/memos/2026-09-07's hop-exhaustion memo for why this is
         # reachable even when every tool call the model made succeeded.
         if last_benchmark_result is not None:
-            return f"{PARTIAL_FALLBACK_PREFIX}\n\n{_summarize_benchmark_result(last_benchmark_result)}"
+            return (f"{PARTIAL_FALLBACK_PREFIX}\n\n"
+                    f"{_summarize_benchmark_result(last_benchmark_result)}"
+                    f"{PARTIAL_FALLBACK_SUFFIX}")
         return FALLBACK_MESSAGE

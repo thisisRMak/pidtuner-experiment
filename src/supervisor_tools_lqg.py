@@ -65,10 +65,13 @@ RUN_LQG_BENCHMARK_SCHEMA = {
             "professor-provided catalog, or a user-supplied custom plant -- "
             "and return metrics + correctness checks for each. Also runs: "
             "implicit and explicit model-following IF am_diag is supplied; "
-            "a 5th 'Custom LQR' row IF Q_diag/R_diag are both supplied "
-            "(the way to actually iterate on a design -- propose weights, "
-            "look at the returned metrics, propose different weights based "
-            "on what you saw, call again); reference-tracking metrics "
+            "one 'Custom LQR' row IF Q_diag/R_diag are both supplied (refine "
+            "one design -- propose weights, look at the result, propose "
+            "different weights, call again); one 'Custom LQR N' row per "
+            "pair IF Q_diag_list/R_diag_list are both supplied (compare "
+            "several weightings in this one call instead of one call per "
+            "weighting -- use this whenever comparing options, not the "
+            "singular form repeated); reference-tracking metrics "
             "(Overshoot/Rise/Settling per output channel) on every regulator "
             "row IF reference is supplied, instead of the plain regulator "
             "response. Pass exactly one of plant_preset or custom_plant."
@@ -134,12 +137,14 @@ RUN_LQG_BENCHMARK_SCHEMA = {
                         "heavily to penalize each state's deviation. Must be given "
                         "together with R_diag. Larger values on a given state push "
                         "the design to correct that state faster/more aggressively. "
-                        "Use this to iterate: after seeing a benchmark result, "
-                        "propose new Q_diag/R_diag based on what the user wants "
-                        "changed and call again -- don't just reason about the "
-                        "'right' direction abstractly, Q/R's effect on overshoot "
-                        "isn't simple or monotonic in a coupled MIMO system, check "
-                        "empirically."
+                        "Use this to refine one design after seeing a result and "
+                        "reacting to it -- don't just reason about the 'right' "
+                        "direction abstractly, Q/R's effect on overshoot isn't "
+                        "simple or monotonic in a coupled MIMO system, check "
+                        "empirically. If you want to compare several weightings at "
+                        "once (e.g. the user asks to see a trade-off across "
+                        "options), use Q_diag_list/R_diag_list instead -- one call, "
+                        "not several."
                     ),
                 },
                 "R_diag": {
@@ -150,6 +155,31 @@ RUN_LQG_BENCHMARK_SCHEMA = {
                         "-- how heavily to penalize each input's effort. Larger "
                         "values make the design gentler/slower on that input. Must "
                         "be given together with Q_diag."
+                    ),
+                },
+                "Q_diag_list": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "number"}},
+                    "description": (
+                        "Compare several Q/R weightings in ONE call instead of "
+                        "calling this tool once per weighting -- use this whenever "
+                        "the user wants to see a trade-off across multiple options "
+                        "(e.g. 'try a few different weightings and show me how "
+                        "overshoot and settling trade off'). Each entry is a "
+                        "Q_diag array (length nx); paired positionally with "
+                        "R_diag_list (same length). Adds one 'Custom LQR N' row "
+                        "per pair, in order. Mutually exclusive with Q_diag/R_diag "
+                        "-- use this form for comparing several, the singular form "
+                        "for refining one at a time."
+                    ),
+                },
+                "R_diag_list": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "number"}},
+                    "description": (
+                        "Paired with Q_diag_list, same length -- each entry is an "
+                        "R_diag array (length nu) for the corresponding Q_diag_list "
+                        "entry. Must be given together with Q_diag_list."
                     ),
                 },
                 "reference": {
@@ -285,7 +315,8 @@ def _build_custom_example(custom_plant: dict):
 
 def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
                       x_max=None, u_max=None,
-                      Q_diag=None, R_diag=None, reference=None,
+                      Q_diag=None, R_diag=None,
+                      Q_diag_list=None, R_diag_list=None, reference=None,
                       am_diag=None, q1_scale=1.0) -> dict:
     if (plant_preset is None) == (custom_plant is None):
         return {"ok": False, "error": "Pass exactly one of plant_preset or custom_plant."}
@@ -298,7 +329,8 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
 
     try:
         rows = [_serialize_row(r) for r in compare_regulator_methods(
-            ex, x_max=x_max, u_max=u_max, Q_diag=Q_diag, R_diag=R_diag, reference=reference)]
+            ex, x_max=x_max, u_max=u_max, Q_diag=Q_diag, R_diag=R_diag,
+            Q_diag_list=Q_diag_list, R_diag_list=R_diag_list, reference=reference)]
 
         if am_diag is not None:
             am_diag_ = np.asarray(am_diag, dtype=float)

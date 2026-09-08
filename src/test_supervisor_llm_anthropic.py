@@ -157,6 +157,61 @@ class TestTranslateMessages(unittest.TestCase):
         _, msgs = _translate_messages(messages)
         self.assertEqual(msgs[-1], {"role": "assistant", "content": [text_block]})
 
+    def test_duplicate_tool_name_in_one_turn_resolves_each_result_to_its_own_id(self):
+        """Regression test for the live 400 'each tool_use must have a
+        single result' crash (docs/memos/2026-09-07/2026-09-07-supervisor-
+        robustness-memo.md, section 3): Claude's parallel tool-calling can
+        call the *same* tool name twice in one turn (e.g. comparing two
+        Q/R weightings). A name-keyed dict collapses both onto the last
+        id; the fix is a per-name FIFO queue, consumed in call order."""
+        tu_a = _block("tool_use", id="toolu_AAA", name="run_lqg_benchmark",
+                      input={"plant_preset": "aircraft_hall"})
+        tu_b = _block("tool_use", id="toolu_BBB", name="run_lqg_benchmark",
+                      input={"plant_preset": "aircraft_hall", "Q_diag": [5, 1]})
+        assistant = _AssistantMessage(content="", tool_use_blocks=[tu_a, tu_b], raw_blocks=[tu_a, tu_b])
+
+        messages = [
+            {"role": "system", "content": "SYS"},
+            {"role": "user", "content": "compare fastest vs lowest overshoot"},
+            assistant,
+            {"role": "tool", "tool_name": "run_lqg_benchmark", "content": '{"ok":true,"A":1}'},
+            {"role": "tool", "tool_name": "run_lqg_benchmark", "content": '{"ok":true,"B":2}'},
+        ]
+        _, msgs = _translate_messages(messages)
+
+        ids = [b["tool_use_id"] for b in msgs[-1]["content"]]
+        self.assertEqual(ids, ["toolu_AAA", "toolu_BBB"])
+
+    def test_three_duplicate_tool_names_resolve_in_call_order(self):
+        blocks = [_block("tool_use", id=f"toolu_{i}", name="run_lqg_benchmark", input={})
+                  for i in range(3)]
+        assistant = _AssistantMessage(content="", tool_use_blocks=blocks, raw_blocks=blocks)
+        messages = [
+            {"role": "system", "content": "SYS"},
+            assistant,
+            *[{"role": "tool", "tool_name": "run_lqg_benchmark", "content": f"r{i}"}
+              for i in range(3)],
+        ]
+        _, msgs = _translate_messages(messages)
+        ids = [b["tool_use_id"] for b in msgs[-1]["content"]]
+        self.assertEqual(ids, ["toolu_0", "toolu_1", "toolu_2"])
+
+    def test_two_names_each_called_twice_dont_cross_contaminate(self):
+        tu = lambda id_, name: _block("tool_use", id=id_, name=name, input={})
+        blocks = [tu("a1", "tool_a"), tu("b1", "tool_b"), tu("a2", "tool_a"), tu("b2", "tool_b")]
+        assistant = _AssistantMessage(content="", tool_use_blocks=blocks, raw_blocks=blocks)
+        messages = [
+            {"role": "system", "content": "SYS"},
+            assistant,
+            {"role": "tool", "tool_name": "tool_a", "content": "A-first"},
+            {"role": "tool", "tool_name": "tool_b", "content": "B-first"},
+            {"role": "tool", "tool_name": "tool_a", "content": "A-second"},
+            {"role": "tool", "tool_name": "tool_b", "content": "B-second"},
+        ]
+        _, msgs = _translate_messages(messages)
+        ids = [b["tool_use_id"] for b in msgs[-1]["content"]]
+        self.assertEqual(ids, ["a1", "b1", "a2", "b2"])
+
     def test_tool_result_with_no_matching_tool_use_gets_none_id(self):
         """Defensive case, shouldn't happen in practice given Session's own
         loop shape, but the lookup must not raise -- a missing id surfaces

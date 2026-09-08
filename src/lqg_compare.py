@@ -47,12 +47,15 @@ class ComparisonRow:
 
 def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=1.0,
                               Qw_scale=0.01, Rv_scale=0.1, Q_diag=None, R_diag=None,
+                              Q_diag_list=None, R_diag_list=None,
                               reference=None, t_end=None, dt=0.01) -> list:
     """LQR (suggested Q/R) / OutputWeightedLQR / BrysonLQR / LQG (suggested
     Q/R + Qw/Rv), all simulated as a regulator response (x0=ones(nx)) on a
     shared time axis sized to the slowest of the four — so their
     trajectories can be overlaid on one plot. Returns a list of 4
-    ComparisonRow (5 if Q_diag/R_diag given), in that fixed order.
+    ComparisonRow, plus one more per custom weighting given (see below), in
+    that fixed order (fixed four first, custom rows after, in the order
+    given).
 
     Q_diag/R_diag: optional custom weights (one value per state/input) --
     given together, adds a 5th "Custom LQR" row using LQR(plant,
@@ -60,6 +63,17 @@ def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=
     The lever a caller (human or an LLM supervisor) needs to actually
     iterate on a design based on observed metrics, rather than only
     choosing among the four fixed weight-selection strategies.
+
+    Q_diag_list/R_diag_list: the same lever, but for comparing several
+    weightings in one call instead of one call per weighting -- each is a
+    list of Q_diag/R_diag arrays (paired positionally, same length), and
+    each pair adds one "Custom LQR N (Q=..., R=...)" row. Mutually
+    exclusive with Q_diag/R_diag (use one form or the other, not both) --
+    this is the direct fix for the LLM supervisor needing several serial
+    or parallel tool calls to sweep a handful of weightings (see
+    docs/memos/2026-09-07's robustness memo, "sweep" TODO): one call, one
+    round trip, N extra rows, whether the caller is a human iterating by
+    hand or an LLM comparing configurations at the user's request.
 
     reference: optional constant reference command (length ny) -- when
     given, every row is passed through add_reference_tracking and
@@ -83,6 +97,8 @@ def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=
     ]
 
     if Q_diag is not None or R_diag is not None:
+        if Q_diag_list is not None or R_diag_list is not None:
+            raise ValueError("pass either Q_diag/R_diag or Q_diag_list/R_diag_list, not both")
         if Q_diag is None or R_diag is None:
             raise ValueError("Q_diag and R_diag must be given together")
         Q_diag_ = np.asarray(Q_diag, dtype=float)
@@ -95,6 +111,26 @@ def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=
                              f"got {len(R_diag_)}")
         designs.append(("Custom LQR (Q_diag/R_diag)",
                         LQR(plant, Q=np.diag(Q_diag_), R=np.diag(R_diag_)).design()))
+
+    if Q_diag_list is not None or R_diag_list is not None:
+        if Q_diag_list is None or R_diag_list is None:
+            raise ValueError("Q_diag_list and R_diag_list must be given together")
+        if len(Q_diag_list) != len(R_diag_list):
+            raise ValueError(f"Q_diag_list and R_diag_list must be the same length, "
+                             f"got {len(Q_diag_list)} and {len(R_diag_list)}")
+        if len(Q_diag_list) == 0:
+            raise ValueError("Q_diag_list/R_diag_list must not be empty")
+        for i, (q_i, r_i) in enumerate(zip(Q_diag_list, R_diag_list)):
+            q_arr = np.asarray(q_i, dtype=float)
+            r_arr = np.asarray(r_i, dtype=float)
+            if q_arr.shape != (plant.nx,):
+                raise ValueError(f"Q_diag_list[{i}] must have {plant.nx} entries "
+                                 f"(one per state), got {len(q_arr)}")
+            if r_arr.shape != (plant.nu,):
+                raise ValueError(f"R_diag_list[{i}] must have {plant.nu} entries "
+                                 f"(one per input), got {len(r_arr)}")
+            name = f"Custom LQR {i + 1} (Q={list(q_i)}, R={list(r_i)})"
+            designs.append((name, LQR(plant, Q=np.diag(q_arr), R=np.diag(r_arr)).design()))
 
     if reference is not None:
         if plant.nu != plant.ny:

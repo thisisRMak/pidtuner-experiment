@@ -26,11 +26,20 @@ This client resolves the mismatch itself, invisibly to Session:
 - The one place name-based matching still happens: correlating Session's
   `{"role": "tool", "tool_name": ...}` result dicts back to a
   `tool_use_id`. This is resolved against the tool_use blocks of the
-  immediately preceding assistant turn only (never across turns), which
-  is safe as long as that turn didn't call the same tool name twice --
-  true today, since Session's `_active_tools()` only ever offers one
-  benchmark tool at a time (see supervisor_session_pid.py) and LQGSession
-  offers exactly one tool total. Revisit this note if that ever changes.
+  immediately preceding assistant turn only (never across turns), via a
+  per-name FIFO queue of ids rather than a single last-id-per-name dict --
+  see `_translate_messages`. The queue is what makes this safe even when
+  a turn calls the *same* tool name more than once (Claude's parallel
+  tool-calling does this routinely, e.g. comparing two Q/R weightings in
+  one turn): Session dispatches and appends tool results in the exact
+  order the model's tool_calls list provided them, so popping ids off the
+  front of each name's queue in that same order re-pairs every result
+  with its real id. (A prior version of this comment claimed a single
+  dict was "safe... since LQGSession offers exactly one tool total" --
+  false on both counts: LQGSession offers three, and tool *count* was
+  never actually what mattered; a same-named duplicate call within one
+  turn is what breaks a plain dict, and it happened in practice -- see
+  docs/memos/2026-09-07/2026-09-07-supervisor-robustness-memo.md.)
 
 Model default: claude-haiku-4-5 (cheapest tier; streamlit_llm_panel.py's
 model picker offers Haiku/Sonnet and always passes model= explicitly, so
@@ -41,6 +50,8 @@ Anthropic SDK's tool-use response shape changes.
 """
 
 from __future__ import annotations
+
+from collections import defaultdict
 
 import anthropic
 
@@ -96,11 +107,13 @@ def _to_anthropic_tools(tools):
 
 def _translate_messages(messages):
     """Session's `self.messages` list -> (system_text, anthropic_messages).
-    See module docstring for how assistant turns and tool results round-trip."""
+    See module docstring for how assistant turns and tool results round-trip,
+    including why `last_tool_use_ids_by_name` is a per-name FIFO queue and
+    not a single id -- a turn can call the same tool name more than once."""
     system_text = None
     anthropic_messages = []
     pending_tool_results = []
-    last_tool_use_by_name = {}
+    last_tool_use_ids_by_name = defaultdict(list)
 
     def flush_tool_results():
         if pending_tool_results:
@@ -111,14 +124,17 @@ def _translate_messages(messages):
         if isinstance(entry, _AssistantMessage):
             flush_tool_results()
             anthropic_messages.append({"role": "assistant", "content": entry.raw_blocks})
-            last_tool_use_by_name = {b.name: b.id for b in entry.tool_use_blocks}
+            last_tool_use_ids_by_name = defaultdict(list)
+            for b in entry.tool_use_blocks:
+                last_tool_use_ids_by_name[b.name].append(b.id)
             continue
 
         role = entry.get("role")
         if role == "system":
             system_text = entry["content"]
         elif role == "tool":
-            tool_use_id = last_tool_use_by_name.get(entry["tool_name"])
+            ids = last_tool_use_ids_by_name[entry["tool_name"]]
+            tool_use_id = ids.pop(0) if ids else None
             pending_tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_use_id,
