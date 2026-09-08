@@ -64,7 +64,11 @@ def _fresh_app():
 
 
 def _siso_tab(at):
-    return at.tabs[0]
+    # No more tabs — SISO/PID + Manual is streamlit_unified_panel.py's
+    # default state, so nothing needs selecting first; this just keeps
+    # the existing call sites (tab.button(...), tab.text_input(...), ...)
+    # working unchanged.
+    return at
 
 
 def _n_entries(at):

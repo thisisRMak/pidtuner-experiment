@@ -32,11 +32,16 @@ METHOD_CASES = [
 def _fresh_app():
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=30)
+    # MIMO/LQG isn't streamlit_unified_panel.py's default Track (SISO/PID
+    # is) -- select it once here so every test below finds MIMO's
+    # controls in the tree, same as before when both tabs' widgets
+    # existed unconditionally.
+    at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
     return at
 
 
 def _mimo_tab(at):
-    return at.tabs[1]
+    return at
 
 
 def _n_entries(at):
@@ -311,13 +316,17 @@ class TestSisoMimoStateIsolation(unittest.TestCase):
     def test_mimo_clear_all_does_not_touch_siso_entries(self):
         import streamlit_gui_state as gs
 
-        at = _fresh_app()
-        siso_tab = at.tabs[0]
-        siso_tab.button(key="siso_compare_all").click()
+        # Not _fresh_app() -- that starts on MIMO/LQG, but this needs to
+        # start on SISO/PID (the unified panel's actual default) to
+        # populate SISO entries before ever switching Track.
+        at = AppTest.from_file(APP_PATH)
+        at.run(timeout=30)
+        at.button(key="siso_compare_all").click()
         at.run(timeout=60)
         n_siso = len([e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso"])
         self.assertGreater(n_siso, 0)
 
+        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
         mimo_tab = _mimo_tab(at)
         mimo_tab.button(key="mimo_compare_all").click()
         at.run(timeout=60)

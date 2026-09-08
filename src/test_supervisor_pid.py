@@ -16,6 +16,7 @@ can't be made deterministic and isn't covered here.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -171,8 +172,15 @@ class ScriptedClient:
 
 
 def _fake_whitebox_tool():
-    def fn(plant_tf, delay=0.0):
-        return {"ok": True, "rows": [{"name": "SIMC", "stable": True, "gains": {"Kp": 1, "Ki": 1, "Kd": 0}}]}
+    def fn(plant_tf, delay=0.0, return_sim=False):
+        rows = [{"name": "SIMC", "stable": True, "gains": {"Kp": 1, "Ki": 1, "Kd": 0}}]
+        result = {"ok": True, "rows": rows}
+        if return_sim:
+            # Mirrors the real tool's return_sim=True shape: same rows,
+            # each with a "sim" key attached (a stand-in object here --
+            # the wrapper only cares that it's not None).
+            result["_sim_rows"] = [dict(r, sim=SimpleNamespace()) for r in rows]
+        return result
     return (RUN_WHITEBOX_BENCHMARK_SCHEMA, fn)
 
 
@@ -254,6 +262,58 @@ class TestSessionToolLoop(unittest.TestCase):
         session = self._session(script)
         reply = session.handle_user_message("keep calling tools forever")
         self.assertEqual(reply, FALLBACK_MESSAGE)
+
+
+class TestSessionPlotCalls(unittest.TestCase):
+    """plot_calls -- the side-channel streamlit_llm_panel.py drains into
+    plottable session entries after each turn (see Session._wrap_benchmark's
+    docstring). Must never leak into what the model sees."""
+
+    def _session(self, script):
+        return Session(ScriptedClient(script), whitebox_tool=_fake_whitebox_tool(),
+                        blackbox_tool=_fake_blackbox_tool())
+
+    def test_whitebox_call_populates_plot_calls_with_sim_and_plant(self):
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": True})]),
+            _response(tool_calls=[_tool_call("run_whitebox_benchmark", {"plant_tf": "1/(s+1)"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        self.assertEqual(len(session.plot_calls), 1)
+        call = session.plot_calls[0]
+        self.assertEqual(call["kind"], "siso")
+        self.assertEqual(call["plant"], "1/(s+1)")
+        self.assertEqual(call["rows"][0]["name"], "SIMC")
+        self.assertIsNotNone(call["rows"][0]["sim"])
+
+    def test_blackbox_call_never_populates_plot_calls(self):
+        """No ground-truth plant on the black-box path -- see
+        supervisor_tools_blackbox_pid.py's isolation contract, there's
+        nothing to simulate against."""
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": False})]),
+            _response(tool_calls=[_tool_call("run_blackbox_benchmark",
+                                             {"step_signal_path": "x.npz"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        self.assertEqual(session.plot_calls, [])
+
+    def test_tool_result_sent_to_the_model_is_json_safe(self):
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": True})]),
+            _response(tool_calls=[_tool_call("run_whitebox_benchmark", {"plant_tf": "1/(s+1)"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        tool_msgs = [m for m in session.messages if isinstance(m, dict) and m.get("role") == "tool"]
+        benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_whitebox_benchmark")
+        self.assertNotIn("_sim_rows", benchmark_msg["content"])
+        json.loads(benchmark_msg["content"])  # must not have raised building it, either
 
 
 if __name__ == "__main__":

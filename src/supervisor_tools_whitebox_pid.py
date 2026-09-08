@@ -66,10 +66,19 @@ def _sig_round(x, sig=4):
 def _serialize_row(row: dict) -> dict:
     """Compact, rounded, JSON-safe row for LLM consumption. Independent of
     cli.serialize_row_json by design -- see plan: each entity keeps its own
-    serializer, following the precedent cli_pid.py/cli_pid_blackbox.py already set."""
+    serializer, following the precedent cli_pid.py/cli_pid_blackbox.py already set.
+
+    Skips "sim" on purpose -- present only when the caller asked
+    run_whitebox_benchmark for return_sim=True, and it's a ClosedLoopResult,
+    not JSON-safe. _sig_round has no branch for it, so leaving it in would
+    silently pass the raw object through into what becomes the model's tool
+    result. The caller gets the sim data back separately, unrounded, via
+    the "_sim_rows" key -- see run_whitebox_benchmark."""
     gains = row.get("gains")
     out = {}
     for k, v in row.items():
+        if k == "sim":
+            continue
         if k == "gains":
             out[k] = ({"Kp": _sig_round(gains.Kp), "Ki": _sig_round(gains.Ki),
                         "Kd": _sig_round(gains.Kd)} if gains else None)
@@ -78,13 +87,21 @@ def _serialize_row(row: dict) -> dict:
     return out
 
 
-def run_whitebox_benchmark(plant_tf: str, delay: float = 0.0) -> dict:
+def run_whitebox_benchmark(plant_tf: str, delay: float = 0.0, return_sim: bool = False) -> dict:
     try:
         plant = TransferFunction.parse(plant_tf, L=delay)
     except Exception as exc:  # noqa: BLE001 - report, don't crash the session
         return {"ok": False, "error": f"Failed to parse plant_tf: {exc}"}
     try:
-        rows = compare_all_methods(plant, include_variants=True)
+        rows = compare_all_methods(plant, include_variants=True, return_sim=return_sim)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Benchmark failed: {exc}"}
-    return {"ok": True, "rows": [_serialize_row(r) for r in rows]}
+    result = {"ok": True, "rows": [_serialize_row(r) for r in rows]}
+    if return_sim:
+        # Raw rows (row["sim"] intact) for a caller that wants to plot the
+        # same traces the metrics above were scored from -- e.g.
+        # supervisor_session_pid.Session, which strips this back off
+        # before the result goes anywhere near json.dumps/the model. Never
+        # part of the schema a tool-calling model sees.
+        result["_sim_rows"] = rows
+    return result

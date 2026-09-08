@@ -317,7 +317,7 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
                       x_max=None, u_max=None,
                       Q_diag=None, R_diag=None,
                       Q_diag_list=None, R_diag_list=None, reference=None,
-                      am_diag=None, q1_scale=1.0) -> dict:
+                      am_diag=None, q1_scale=1.0, return_sim: bool = False) -> dict:
     if (plant_preset is None) == (custom_plant is None):
         return {"ok": False, "error": "Pass exactly one of plant_preset or custom_plant."}
     try:
@@ -328,9 +328,10 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
     plant = ex.plant
 
     try:
-        rows = [_serialize_row(r) for r in compare_regulator_methods(
+        raw_rows = compare_regulator_methods(
             ex, x_max=x_max, u_max=u_max, Q_diag=Q_diag, R_diag=R_diag,
-            Q_diag_list=Q_diag_list, R_diag_list=R_diag_list, reference=reference)]
+            Q_diag_list=Q_diag_list, R_diag_list=R_diag_list, reference=reference)
+        rows = [_serialize_row(r) for r in raw_rows]
 
         if am_diag is not None:
             am_diag_ = np.asarray(am_diag, dtype=float)
@@ -344,9 +345,25 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
             Q1 = q1_scale * np.eye(plant.ny)
             R = ex.build_suggested_R()
             mf_rows, _ = compare_model_following(plant, Am, Q1, R)
+            raw_rows.extend(mf_rows)
             rows.extend(_serialize_row(r) for r in mf_rows)
     except Exception as exc:  # noqa: BLE001 - report, don't crash the session
         return {"ok": False, "error": f"Benchmark failed: {exc}"}
 
-    return {"ok": True, "plant_preset": ex.key, "nx": plant.nx,
-            "nu": plant.nu, "ny": plant.ny, "citation": ex.citation, "rows": rows}
+    # plant_name (ex.name) alongside plant_preset (ex.key): key is a catalog
+    # slug ("aircraft_hall") or the constant "custom" for any user-supplied
+    # plant, so it collapses every custom plant to the same identity --
+    # name is always the actual, distinguishing human-readable name (the
+    # catalog's display name, or custom_plant["name"]/"Custom plant"; see
+    # _build_custom_example). LQGSession._wrap_benchmark reads this to tag
+    # plot_calls with something that actually identifies the plant.
+    result = {"ok": True, "plant_preset": ex.key, "plant_name": ex.name, "nx": plant.nx,
+              "nu": plant.nu, "ny": plant.ny, "citation": ex.citation, "rows": rows}
+    if return_sim:
+        # Raw ComparisonRow objects (each already carries .sim from the
+        # shared core, unlike the PID whitebox tool these always have it)
+        # for a caller that wants to plot the same traces -- see
+        # supervisor_session_lqg.LQGSession, which strips this back off
+        # before the result goes anywhere near json.dumps/the model.
+        result["_sim_rows"] = raw_rows
+    return result

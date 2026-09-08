@@ -32,6 +32,17 @@ class ControllerEntry:
     stores PIDGains/TuningResult/ClosedLoopResult objects, MIMO stores
     its own LQR/LQG equivalents. The session-list machinery (add,
     remove, enable/disable) doesn't need to know which.
+
+    `source`/`plant` are provenance tags — who triggered this run ("you"
+    via the manual controls, or "llm" via the chat's supervisor tool
+    calls, see streamlit_llm_panel.py's absorb_llm_rows() calls) and
+    which plant it ran against. Both entries a manual run and an
+    LLM-triggered one land in this same list (streamlit_unified_panel.py
+    doesn't separate them), so the session list can show the tag rather
+    than silently mixing runs from different origins or plants into one
+    overlay. Both optional: existing call sites that don't pass them get
+    the "you"/"" defaults, correct for every entry that predates this
+    field.
     """
 
     kind: Literal["siso", "mimo"]
@@ -43,6 +54,8 @@ class ControllerEntry:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     mrow: Any = None    # cached pid_compare.metric_row() (SISO), for heatmap/radar
     checks: Any = None  # cached lqg_checks.checks_for_result() (MIMO)
+    source: Literal["you", "llm"] = "you"
+    plant: str = ""
 
 
 def init_state() -> None:

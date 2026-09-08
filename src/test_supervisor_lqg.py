@@ -11,6 +11,7 @@ or:
 
 from __future__ import annotations
 
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -261,11 +262,22 @@ class ScriptedClient:
 
 
 def _fake_lqg_tool():
-    def fn(plant_preset, x_max=None, u_max=None):
-        return {"ok": True, "rows": [
+    def fn(plant_preset, x_max=None, u_max=None, return_sim=False):
+        rows = [
             {"name": "LQR (suggested Q/R)", "stable": True, "K": [[1.0, 2.0]]},
             {"name": "LQG (Kalman filter)", "stable": False, "K": [[1.0, 2.0]]},
-        ]}
+        ]
+        result = {"ok": True, "plant_preset": plant_preset, "plant_name": f"Plant {plant_preset}",
+                 "rows": rows}
+        if return_sim:
+            # Mirrors the real tool's return_sim=True shape: raw
+            # ComparisonRow-like objects (object attributes, not dict
+            # keys -- unlike the PID whitebox tool's rows), each with a
+            # .sim attached (a stand-in object here -- the wrapper only
+            # cares that it's not None).
+            result["_sim_rows"] = [SimpleNamespace(name=r["name"], sim=SimpleNamespace())
+                                   for r in rows]
+        return result
     return (RUN_LQG_BENCHMARK_SCHEMA, fn)
 
 
@@ -367,6 +379,68 @@ class TestLQGSessionToolLoop(unittest.TestCase):
         session = self._session(script)
         reply = session.handle_user_message("keep failing forever")
         self.assertEqual(reply, FALLBACK_MESSAGE)
+
+
+class TestLQGSessionPlotCalls(unittest.TestCase):
+    """plot_calls -- the side-channel streamlit_llm_panel.py drains into
+    plottable session entries after each turn (see LQGSession._wrap_
+    benchmark's docstring). Must never leak into what the model sees."""
+
+    def _session(self, script):
+        return LQGSession(ScriptedClient(script), lqg_tool=_fake_lqg_tool())
+
+    def test_benchmark_call_populates_plot_calls_with_sim_and_plant(self):
+        script = [
+            _response(tool_calls=[_tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        self.assertEqual(len(session.plot_calls), 1)
+        call = session.plot_calls[0]
+        self.assertEqual(call["kind"], "mimo")
+        # plant_name, not the plant_preset key -- see test_custom_plant_
+        # gets_its_own_name_not_the_generic_preset_key below for why.
+        self.assertEqual(call["plant"], "Plant aircraft_hall")
+        self.assertEqual(call["rows"][0].name, "LQR (suggested Q/R)")
+        self.assertIsNotNone(call["rows"][0].sim)
+
+    def test_custom_plant_gets_its_own_name_not_the_generic_preset_key(self):
+        """Regression: _wrap_benchmark used to tag every custom-plant call
+        with the literal string "custom" (the constant _build_custom_
+        example always uses for plant_preset/ex.key), making two different
+        custom plants benchmarked in one conversation indistinguishable in
+        the session list. Now tags with plant_name instead, which is
+        always the actual, distinguishing name."""
+        def fn(custom_plant, return_sim=False):
+            result = {"ok": True, "plant_preset": "custom",
+                      "plant_name": custom_plant.get("name") or "Custom plant", "rows": []}
+            if return_sim:
+                result["_sim_rows"] = []
+            return result
+
+        session = LQGSession(ScriptedClient([
+            _response(tool_calls=[_tool_call("run_lqg_benchmark",
+                                             {"custom_plant": {"name": "My widget", "A": [[0]],
+                                                               "B": [[1]], "C": [[1]]}})]),
+            _response(content="done"),
+        ]), lqg_tool=(RUN_LQG_BENCHMARK_SCHEMA, fn))
+        session.handle_user_message("go")
+        # No rows -- sim_rows is [] (falsy-but-not-None), so plot_calls
+        # still gets populated per the "is not None" guard.
+        self.assertEqual(session.plot_calls[0]["plant"], "My widget")
+
+    def test_tool_result_sent_to_the_model_is_json_safe(self):
+        script = [
+            _response(tool_calls=[_tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        tool_msgs = [m for m in session.messages if isinstance(m, dict) and m.get("role") == "tool"]
+        benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_lqg_benchmark")
+        self.assertNotIn("_sim_rows", benchmark_msg["content"])
+        json.loads(benchmark_msg["content"])  # must not have raised building it, either
 
 
 if __name__ == "__main__":

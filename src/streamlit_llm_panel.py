@@ -1,11 +1,28 @@
 """Streamlit LLM chat panel — Build plan Step 5 (docs/gui_plan.md).
 
-Cloud-key entry plus a track selector between the two existing,
+Cloud-key entry plus the chat itself, for one of two existing,
 separately-maintained supervisor conversations: supervisor_session_pid.
 Session (SISO/PID) and supervisor_session_lqg.LQGSession (MIMO/LQG).
 Deliberately not merged into one session/prompt — supervisor_session_lqg.
 py's own docstring documents why these stay separate (mirrors cli_pid.py/
 cli_lqg.py staying separate scripts rather than a unified dispatcher).
+
+Which track (`render_controls(track)`'s argument) is streamlit_unified_
+panel.py's call to make, not this module's — the Track selector lives
+there now, shared with the Manual-mode panels, since Mode=LLM Supervisor
+is just one more thing that selector picks between.
+
+Every successful benchmark tool call is drawn automatically, without the
+user ever asking for a chart: Session/LQGSession's _wrap_benchmark
+captures each call's simulated rows (row["sim"]/row.sim, stripped back
+out before the result reaches json.dumps/the model) into
+session.plot_calls; _drain_plot_calls() below turns that into
+gs.ControllerEntry rows via streamlit_siso_panel.absorb_llm_rows() /
+streamlit_mimo_panel.absorb_llm_rows() — the exact same entries a manual
+"Compare all methods" click builds, tagged source="llm" — so
+streamlit_unified_panel.py's plots column (each track panel's own
+render_plots()) draws them without this module needing a plotting
+function of its own.
 
 Key resolution, checked in order per provider (see _configured_key):
 1. An operator-configured key — `.env`/the process environment (loaded via
@@ -40,6 +57,8 @@ from supervisor_tools_whitebox_pid import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whi
 from supervisor_tools_lqg import RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark
 
 import streamlit_gui_state as gs
+import streamlit_siso_panel as siso_panel
+import streamlit_mimo_panel as mimo_panel
 
 WHITEBOX_TOOL = (RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark)
 BLACKBOX_TOOL = (RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark)
@@ -47,7 +66,6 @@ LQG_TOOL = (RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark)
 
 PROVIDERS = ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"]
 WIRED_PROVIDERS = {"Claude (Anthropic)"}
-TRACKS = ["SISO / PID", "MIMO / LQG"]
 
 KEY_STATE = {
     "Claude (Anthropic)": "llm_api_key_anthropic",
@@ -154,12 +172,14 @@ def _render_key_entry():
     return provider, api_key, model
 
 
-def render():
+def render_controls(track):
+    """The left-hand controls half for Mode=LLM Supervisor — called by
+    streamlit_unified_panel.py with whichever Track it currently has
+    selected. Mirrors streamlit_siso_panel.py/streamlit_mimo_panel.py's
+    own render_controls() split, but this module has no render_plots()
+    of its own — see the module docstring for why."""
     _init_panel_state()
-    st.header("LLM Chat")
-
     provider, api_key, model = _render_key_entry()
-    track = st.radio("Track", TRACKS, key="llm_track", horizontal=True)
 
     if not api_key:
         st.info("Enter an API key above to start chatting.")
@@ -173,18 +193,20 @@ def render():
         st.session_state["llm_session_fingerprint"] = fingerprint
         gs.clear_chat()
 
-    if st.button("Reset conversation"):
+    if st.button("Reset conversation", key="llm_reset"):
         st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
         gs.clear_chat()
 
     # Reserving this container before chat_input (below) puts it above
     # chat_input in the DOM regardless of Streamlit's own auto-bottom-pin
     # behavior for chat_input, which doesn't reliably take effect nested
-    # inside st.tabs() (same class of live-only rendering quirk noted in
-    # docs/gui_plan.md's "Resolved decisions" for nested tabs -- confirmed
-    # here with a real screenshot, not just suspected). No height/border --
-    # free-floating bubbles in the page's own flow, page itself scrolls,
-    # matching the original look; only the order was ever the bug.
+    # inside a column laid out by streamlit_unified_panel.py (same class
+    # of live-only rendering quirk noted in docs/gui_plan.md's "Resolved
+    # decisions" for the nested-st.tabs case this was originally found
+    # in -- confirmed here with a real screenshot, not just suspected).
+    # No height/border -- free-floating bubbles in the column's own flow,
+    # the column itself scrolls, matching the original look; only the
+    # order was ever the bug.
     history_box = st.container()
     user_text = st.chat_input("Tell me about your plant and what matters most to you.")
 
@@ -217,5 +239,35 @@ def render():
                     except Exception as exc:  # noqa: BLE001 - a bad turn must not crash the app
                         _log_exception(exc)
                         reply = "Something went wrong handling that message — check the server logs for details."
+                    else:
+                        # Own try/except, separate from the one above: a
+                        # plotting bug here must not crash the app or throw
+                        # away the reply that already computed successfully.
+                        try:
+                            _drain_plot_calls(session)
+                        except Exception as exc:  # noqa: BLE001
+                            _log_exception(exc)
                 st.markdown(reply)
             gs.append_chat_message("assistant", reply)
+
+
+def _drain_plot_calls(session):
+    """Turn every benchmark call captured since the last drain
+    (session.plot_calls -- populated by Session/LQGSession's
+    _wrap_benchmark, one entry per successful sim-capable tool call)
+    into session entries via each track panel's own absorb_llm_rows() --
+    see the module docstring. Called once per turn, right after
+    handle_user_message() returns without raising, so this only ever
+    runs after its JSON reply has already been built -- nothing here
+    reaches the model.
+
+    Swaps session.plot_calls out for a fresh list *before* processing,
+    rather than clearing it after the loop: if absorb_llm_rows raises
+    partway through (the caller wraps this whole function in its own
+    try/except), the calls already popped here are gone either way --
+    they don't linger to be silently re-added, duplicated, on some later
+    turn's successful drain."""
+    calls, session.plot_calls = session.plot_calls, []
+    for call in calls:
+        absorb = siso_panel.absorb_llm_rows if call["kind"] == "siso" else mimo_panel.absorb_llm_rows
+        absorb(call["plant"] or "?", call["rows"])
