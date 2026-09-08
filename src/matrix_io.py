@@ -15,6 +15,7 @@ Two independent entry points:
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 
@@ -24,10 +25,21 @@ from plant import StateSpacePlant
 
 
 def parse_matlab_literal(text: str) -> np.ndarray:
-    """Parse a MATLAB-style matrix literal into a 2-D array: rows separated
-    by ';', entries within a row separated by whitespace and/or ','.
-    Surrounding '[' ']' are optional. E.g. "[0 1 0; 0 0 1; -6 -11 -6]" or
-    "1, 0; 0, 1"."""
+    """Parse a matrix literal into a 2-D array. Accepts either MATLAB-style
+    text (rows separated by ';', entries within a row separated by
+    whitespace and/or ',', surrounding '[' ']' optional — e.g.
+    "[0 1 0; 0 0 1; -6 -11 -6]" or "1, 0; 0, 1") or Python/numpy-style
+    nested-list syntax (e.g. "[[1, 0], [0, 1]]"). A flat (1-D) Python list
+    is treated as a single row, matching the MATLAB-style convention."""
+    try:
+        parsed = ast.literal_eval(text)
+    except (ValueError, SyntaxError, TypeError):
+        pass
+    else:
+        arr = np.asarray(parsed, dtype=float)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+        return arr
     text = text.strip()
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
