@@ -99,6 +99,69 @@ class TestCompareRegulatorMethodsCustomWeights(unittest.TestCase):
         self.assertFalse(np.allclose(loose[-1].result.gains.K, tight[-1].result.gains.K))
 
 
+class TestCompareRegulatorMethodsWeightSweep(unittest.TestCase):
+    """Q_diag_list/R_diag_list -- the "sweep" capability: compare several
+    weightings in one call instead of one call per weighting (see
+    docs/memos/2026-09-07's robustness memo)."""
+
+    def test_sweep_adds_one_row_per_pair_in_order(self):
+        ex = load_example("aircraft_hall")
+        rows = compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1], [5, 5, 1, 1, 1]],
+                                          R_diag_list=[[1, 1], [1, 1]])
+        self.assertEqual([r.name for r in rows[:4]],
+                         ["LQR (suggested Q/R)", "Output-weighted LQR", "Bryson's rule",
+                          "LQG (Kalman filter)"])
+        self.assertEqual(len(rows), 6)
+        self.assertIn("Custom LQR 1", rows[4].name)
+        self.assertIn("Custom LQR 2", rows[5].name)
+        self.assertTrue(all(r.result.is_stable() for r in rows[4:]))
+
+    def test_sweep_pairs_produce_different_gains(self):
+        ex = load_example("aircraft_hall")
+        rows = compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1], [10, 10, 1, 1, 1]],
+                                          R_diag_list=[[1, 1], [1, 1]])
+        self.assertFalse(np.allclose(rows[4].result.gains.K, rows[5].result.gains.K))
+
+    def test_sweep_row_names_embed_the_actual_weights(self):
+        ex = load_example("aircraft_hall")
+        rows = compare_regulator_methods(ex, Q_diag_list=[[2, 2, 1, 1, 1]], R_diag_list=[[3, 3]])
+        self.assertIn("Q=[2, 2, 1, 1, 1]", rows[-1].name)
+        self.assertIn("R=[3, 3]", rows[-1].name)
+
+    def test_sweep_mismatched_list_lengths_rejected(self):
+        ex = load_example("aircraft_hall")
+        with self.assertRaises(ValueError):
+            compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1], [2, 2, 1, 1, 1]],
+                                       R_diag_list=[[1, 1]])
+
+    def test_sweep_q_list_without_r_list_rejected(self):
+        ex = load_example("aircraft_hall")
+        with self.assertRaises(ValueError):
+            compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1]])
+
+    def test_sweep_empty_lists_rejected(self):
+        ex = load_example("aircraft_hall")
+        with self.assertRaises(ValueError):
+            compare_regulator_methods(ex, Q_diag_list=[], R_diag_list=[])
+
+    def test_sweep_wrong_length_entry_rejected(self):
+        ex = load_example("aircraft_hall")
+        with self.assertRaises(ValueError):
+            compare_regulator_methods(ex, Q_diag_list=[[1, 1]], R_diag_list=[[1, 1]])
+
+    def test_sweep_and_singular_together_rejected(self):
+        ex = load_example("aircraft_hall")
+        with self.assertRaises(ValueError):
+            compare_regulator_methods(ex, Q_diag=[1, 1, 1, 1, 1], R_diag=[1, 1],
+                                       Q_diag_list=[[1, 1, 1, 1, 1]], R_diag_list=[[1, 1]])
+
+    def test_sweep_with_reference_adds_tracking_metrics_to_all_rows(self):
+        ex = load_example("aircraft_hall")  # square: nu == ny == 2
+        rows = compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1]], R_diag_list=[[1, 1]],
+                                          reference=[1.0, -0.5])
+        self.assertIsNotNone(rows[-1].sim.tracking_metrics)
+
+
 class TestCompareRegulatorMethodsReferenceTracking(unittest.TestCase):
     def test_reference_adds_tracking_metrics_to_every_row(self):
         ex = load_example("aircraft_hall")  # square: nu == ny == 2

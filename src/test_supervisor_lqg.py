@@ -17,7 +17,9 @@ from types import SimpleNamespace
 from lqg_examples import list_examples
 
 from supervisor_common_lqg import PRIORITY_CATEGORIES_LQG, LQGPrioritiesWorksheet
-from supervisor_session_lqg import FALLBACK_MESSAGE, LQGSession
+from supervisor_session_lqg import (
+    FALLBACK_MESSAGE, PARTIAL_FALLBACK_PREFIX, PARTIAL_FALLBACK_SUFFIX, LQGSession,
+)
 from supervisor_tools_lqg import RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark
 
 
@@ -158,6 +160,26 @@ class TestRunLqgBenchmark(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("error", result)
 
+    def test_Q_diag_list_R_diag_list_adds_one_row_per_pair(self):
+        result = run_lqg_benchmark("aircraft_hall",
+                                    Q_diag_list=[[1, 1, 1, 1, 1], [5, 5, 1, 1, 1]],
+                                    R_diag_list=[[1, 1], [1, 1]])
+        self.assertTrue(result["ok"], result.get("error"))
+        names = [r["name"] for r in result["rows"]]
+        self.assertEqual(len(names), 6)
+        self.assertTrue(any("Custom LQR 1" in n for n in names))
+        self.assertTrue(any("Custom LQR 2" in n for n in names))
+
+    def test_Q_diag_list_without_R_diag_list_reports_error(self):
+        result = run_lqg_benchmark("aircraft_hall", Q_diag_list=[[1, 1, 1, 1, 1]])
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+    def test_schema_includes_sweep_params(self):
+        props = RUN_LQG_BENCHMARK_SCHEMA["function"]["parameters"]["properties"]
+        self.assertIn("Q_diag_list", props)
+        self.assertIn("R_diag_list", props)
+
     def test_reference_adds_tracking_metrics(self):
         result = run_lqg_benchmark("aircraft_hall", reference=[1.0, -0.5])
         self.assertTrue(result["ok"])
@@ -289,6 +311,61 @@ class TestLQGSessionToolLoop(unittest.TestCase):
         script = [_response(tool_calls=[_tool_call("set_priorities", {"top_priority": "speed"})])] * 10
         session = self._session(script)
         reply = session.handle_user_message("keep calling tools forever")
+        self.assertEqual(reply, FALLBACK_MESSAGE)
+
+    def test_hop_exhaustion_after_successful_benchmarks_surfaces_last_result(self):
+        """Even when every tool call succeeds, a model that keeps iterating
+        -- exactly what the system prompt's own '3-5 iterations is normal,
+        don't stop at the first proposal' guidance invites -- can still
+        exhaust the hop budget before ever emitting plain content. See
+        docs/memos/2026-09-07's hop-exhaustion memo. The reply must carry
+        the last real benchmark result, not the content-free bare
+        FALLBACK_MESSAGE from the case above (no benchmark ever
+        succeeded)."""
+        script = [_response(tool_calls=[
+            _tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})
+        ])] * 10
+        session = self._session(script)
+        reply = session.handle_user_message("keep iterating forever")
+        self.assertNotEqual(reply, FALLBACK_MESSAGE)
+        self.assertTrue(reply.startswith(PARTIAL_FALLBACK_PREFIX))
+        self.assertIn("LQR (suggested Q/R): stable", reply)
+        self.assertIn("LQG (Kalman filter): UNSTABLE", reply)
+
+    def test_hop_exhaustion_with_benchmark_invites_continuation(self):
+        """The partial-fallback reply should read as an offer to keep
+        going, not a dead end -- see docs/memos/2026-09-07's robustness
+        memo (user feedback on a live transcript)."""
+        script = [_response(tool_calls=[
+            _tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})
+        ])] * 10
+        session = self._session(script)
+        reply = session.handle_user_message("keep iterating forever")
+        self.assertTrue(reply.endswith(PARTIAL_FALLBACK_SUFFIX))
+        self.assertIn("continue", PARTIAL_FALLBACK_SUFFIX.lower())
+
+    def test_continuing_after_hop_exhaustion_does_not_crash_the_next_turn(self):
+        """The internal message history after exhaustion ends mid tool-
+        exchange (no final plain-content turn) -- confirm a follow-up user
+        message still gets a normal reply rather than erroring, since
+        nothing in the session appends the partial-fallback text itself
+        back into the message history."""
+        script = [_response(tool_calls=[
+            _tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})
+        ])] * 10 + [_response(content="Continuing: here is my recommendation.")]
+        session = self._session(script)
+        session.handle_user_message("keep iterating forever")  # exhausts, returns partial fallback
+        reply = session.handle_user_message("continue")
+        self.assertEqual(reply, "Continuing: here is my recommendation.")
+
+    def test_hop_exhaustion_with_only_failed_benchmarks_still_uses_bare_fallback(self):
+        # _fake_lqg_tool's fn requires plant_preset; omitting it makes
+        # every call raise (caught by _dispatch_tool as {"ok": False}),
+        # so no benchmark ever "succeeds" -- the bare FALLBACK_MESSAGE
+        # (no result to summarize) must still be what comes back.
+        script = [_response(tool_calls=[_tool_call("run_lqg_benchmark", {})])] * 10
+        session = self._session(script)
+        reply = session.handle_user_message("keep failing forever")
         self.assertEqual(reply, FALLBACK_MESSAGE)
 
 
