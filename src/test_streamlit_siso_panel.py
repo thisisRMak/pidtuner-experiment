@@ -305,5 +305,28 @@ class TestPlantSurvivesATrackSwitch(unittest.TestCase):
         self.assertEqual(at.selectbox(key="siso_method").value, "5. SIMC (FOPDT)")
 
 
+class TestMethodArgsSurviveAMethodSwitch(unittest.TestCase):
+    """Regression: same class of bug as TestPlantSurvivesATrackSwitch above,
+    but for a method switch rather than a Track switch -- only one
+    method's args render at a time even within an active SISO session, so
+    a typed-in Boyd Ms/Mt used to reset to the hardcoded default the
+    moment the user selected a different method and back. See
+    streamlit_gui_state.preserve_widget_state/snapshot_widget_state and
+    streamlit_siso_panel.py's _METHOD_ARG_KEYS."""
+
+    def test_boyd_args_survive_a_round_trip_to_another_method_and_back(self):
+        at = _fresh_app()
+        at.selectbox(key="siso_method").set_value("6. Boyd (convex-concave)").run(timeout=30)
+        at.number_input(key="boyd_Ms").set_value(1.6).run(timeout=30)
+        at.number_input(key="boyd_Mt").set_value(1.7).run(timeout=30)
+
+        at.selectbox(key="siso_method").set_value("1. Stable pole cancellation").run(timeout=30)
+        at.selectbox(key="siso_method").set_value("6. Boyd (convex-concave)").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.number_input(key="boyd_Ms").value, 1.6)
+        self.assertEqual(at.number_input(key="boyd_Mt").value, 1.7)
+
+
 if __name__ == "__main__":
     unittest.main()

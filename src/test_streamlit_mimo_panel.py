@@ -362,5 +362,33 @@ class TestPresetSurvivesATrackSwitch(unittest.TestCase):
         self.assertEqual(at.selectbox(key="mimo_method").value, "Bryson's rule")
 
 
+class TestMethodArgsSurviveAMethodSwitch(unittest.TestCase):
+    """Regression: same class of bug as TestPresetSurvivesATrackSwitch
+    above, but for a method switch rather than a Track switch -- only one
+    method's args render at a time even within an active MIMO session, so
+    a typed-in custom Q diagonal used to reset to the hardcoded default
+    the moment the user selected a different method and back. See
+    streamlit_gui_state.preserve_widget_state/snapshot_widget_state and
+    streamlit_mimo_panel.py's _METHOD_ARG_KEYS."""
+
+    def test_custom_qr_args_survive_a_round_trip_to_another_method_and_back(self):
+        at = _fresh_app()  # starts on MIMO/LQG
+        tab = _mimo_tab(at)
+        tab.selectbox(key="mimo_method").set_value("LQR (custom Q/R diagonal)").run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.text_input(key="mimo_Q_diag").set_value("2.0").run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.text_input(key="mimo_R_diag").set_value("3.0").run(timeout=30)
+
+        tab = _mimo_tab(at)
+        tab.selectbox(key="mimo_method").set_value("Bryson's rule").run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.selectbox(key="mimo_method").set_value("LQR (custom Q/R diagonal)").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.text_input(key="mimo_Q_diag").value, "2.0")
+        self.assertEqual(at.text_input(key="mimo_R_diag").value, "3.0")
+
+
 if __name__ == "__main__":
     unittest.main()

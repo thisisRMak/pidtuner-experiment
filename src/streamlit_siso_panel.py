@@ -126,7 +126,27 @@ def _render_plant_controls():
 
 
 # ── method-specific args ────────────────────────────────────────────────
+# Every method's arg-widget keys -- only one method's args render at a time
+# (_render_method_args dispatches on `method`), so without this a Boyd
+# Ms/Mt (say) typed in gets wiped by Streamlit the moment a different
+# method is selected, same class of bug _PROTECTED_KEYS guards against
+# for a Track/Mode switch. See streamlit_gui_state.preserve_widget_state's
+# module note.
+_METHOD_ARG_KEYS = [
+    "pc_mode", "pc_p1", "pc_p2", "pc_kd",
+    "zn1_step", "zn1_noise",
+    "zn2_source", "zn2_relay_h", "zn2_relay_T",
+    "amigo_integrating",
+    "simc_tau_c", "simc_tau2",
+    "boyd_Ms", "boyd_Mt",
+    "cc_step", "cc_noise",
+    "chr_response", "chr_overshoot",
+    "tl_source", "tl_relay_h", "tl_relay_T", "tl_pi",
+]
+
+
 def _render_method_args(method):
+    gs.preserve_widget_state(_METHOD_ARG_KEYS)
     if method.startswith("1."):
         mode = st.radio("Pole selection", ["auto", "manual"], key="pc_mode",
                         horizontal=True)
@@ -163,6 +183,7 @@ def _render_method_args(method):
         st.number_input("relay h", value=1.0, key="tl_relay_h")
         st.number_input("relay T (s)", value=50.0, key="tl_relay_T")
         st.checkbox("PI only (no derivative)", value=False, key="tl_pi")
+    gs.snapshot_widget_state(_METHOD_ARG_KEYS)
 
 
 def _tune_dispatch(method, plant):
@@ -620,8 +641,8 @@ def _render_last_result():
 # one didn't render this turn, so this is harmless, not a second gap.
 # Method-specific arg widgets (pc_p1, zn1_step, ...) aren't included --
 # only one method's args render at a time even within an active Manual+
-# SISO session, so protecting those needs the same treatment applied
-# inside _render_method_args itself; not done here, narrower gap.
+# SISO session, so those get the same treatment separately, via
+# _METHOD_ARG_KEYS inside _render_method_args itself.
 _PROTECTED_KEYS = [
     "siso_plant_form", "siso_tf_expr", "siso_gain", "siso_num", "siso_den", "siso_L",
     "siso_method", "halve_gains",

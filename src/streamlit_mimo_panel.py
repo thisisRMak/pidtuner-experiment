@@ -138,7 +138,22 @@ def _render_plant_controls():
 
 
 # ── method-specific args ────────────────────────────────────────────────
+# Every method's arg-widget keys -- only one method's args render at a time
+# (_render_method_args dispatches on `method`), so without this a custom
+# Q/R diagonal (say) typed in gets wiped by Streamlit the moment a
+# different method is selected, same class of bug _PROTECTED_KEYS guards
+# against for a Track/Mode switch. See streamlit_gui_state.
+# preserve_widget_state's module note.
+_METHOD_ARG_KEYS = [
+    "mimo_Q_diag", "mimo_R_diag",
+    "mimo_Qy_scale", "mimo_ow_R_scale",
+    "mimo_x_max", "mimo_u_max",
+    "mimo_Qw_scale", "mimo_Rv_scale",
+]
+
+
 def _render_method_args(method, ex):
+    gs.preserve_widget_state(_METHOD_ARG_KEYS)
     if method == "LQR (custom Q/R diagonal)":
         st.text_input(f"Q diagonal ({ex.plant.nx} value(s), or 1 to broadcast)",
                       value="1.0", key="mimo_Q_diag")
@@ -157,6 +172,7 @@ def _render_method_args(method, ex):
                         value=0.01, key="mimo_Qw_scale")
         st.number_input("Rv scale (measurement-noise covariance = scale·I)",
                         value=0.1, key="mimo_Rv_scale")
+    gs.snapshot_widget_state(_METHOD_ARG_KEYS)
 
 
 def _design_dispatch(method, ex):
@@ -555,8 +571,9 @@ def _render_last_result():
 # Every plant/sim-setting field this panel owns -- see streamlit_siso_
 # panel.py's own _PROTECTED_KEYS comment for why these need listing (both
 # plant sources' fields included even though only one renders at a time;
-# method-specific args, e.g. mimo_Q_diag, deliberately not included, same
-# narrower-gap reasoning as the SISO side).
+# method-specific args, e.g. mimo_Q_diag, not included here -- those get
+# the same treatment separately, via _METHOD_ARG_KEYS inside
+# _render_method_args itself, same as the SISO side).
 _PROTECTED_KEYS = [
     "mimo_plant_source", "mimo_preset",
     "mimo_custom_name", "mimo_custom_A", "mimo_custom_B", "mimo_custom_C", "mimo_custom_D",
