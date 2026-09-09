@@ -43,6 +43,16 @@ class ControllerEntry:
     overlay. Both optional: existing call sites that don't pass them get
     the "you"/"" defaults, correct for every entry that predates this
     field.
+
+    `plant`, above, is a .pretty()-formatted display string -- readable,
+    but not something that can be fed back into TransferFunction.parse()
+    or the SISO panel's siso_tf_expr widget. `plant_tf`/`plant_L` are the
+    raw, reloadable identity instead: the exact expression string and
+    dead-time L that produced this entry's plant, for a caller that wants
+    to reconstruct or re-seed a plant from an entry rather than just
+    display it (see streamlit_siso_panel.py's "Load this plant"
+    affordance). SISO-only for now, empty/0.0 on every MIMO entry and on
+    a SISO one that predates this field.
     """
 
     kind: Literal["siso", "mimo"]
@@ -56,6 +66,8 @@ class ControllerEntry:
     checks: Any = None  # cached lqg_checks.checks_for_result() (MIMO)
     source: Literal["you", "llm"] = "you"
     plant: str = ""
+    plant_tf: str = ""
+    plant_L: float = 0.0
 
 
 def init_state() -> None:

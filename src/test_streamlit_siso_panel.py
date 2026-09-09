@@ -23,7 +23,9 @@ What this does NOT cover (see docs/gui_plan.md "Testing debt"):
     CI environments without a display server for Tkinter).
 """
 
+import os
 import unittest
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -326,6 +328,124 @@ class TestMethodArgsSurviveAMethodSwitch(unittest.TestCase):
         self.assertEqual(at.exception[:], [])
         self.assertEqual(at.number_input(key="boyd_Ms").value, 1.6)
         self.assertEqual(at.number_input(key="boyd_Mt").value, 1.7)
+
+
+class TestAbsorbLlmRowsReusesOrResimulates(unittest.TestCase):
+    """absorb_llm_rows must mirror _do_compare_all's reuse-vs-resimulate
+    check (see both functions' docstrings): row["sim"] is always a
+    wide-open-actuator trace, reusable as-is only when this panel's own
+    sim settings can't tell the difference -- otherwise it has to
+    re-simulate against the panel's actual u_min/u_max, same as a manual
+    "Compare all methods" click would. Drives the real chat -> plot_calls
+    -> absorb_llm_rows path (session.plot_calls appended by hand, same as
+    test_streamlit_llm_panel.py's TestLlmEntriesJoinTheSharedSessionList)
+    rather than calling absorb_llm_rows directly, since it now also
+    depends on gs.preserve_widget_state() restoring this panel's sim
+    settings from their shadow copies -- see its own docstring."""
+
+    def test_constrained_actuator_limits_trigger_a_resimulation(self):
+        import numpy as np
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark(DEFAULT_PLANT, return_sim=True)
+        unconstrained = [r for r in real_result["_sim_rows"] if r.get("sim") is not None]
+        # Not a vacuous check: at least one method's wide-open trace must
+        # actually need bounds tighter than +/-0.005 for this test to
+        # prove anything (this plant's large DC gain keeps every method's
+        # unconstrained u small, so the bound has to be tight to bite).
+        self.assertTrue(any(np.max(np.abs(r["sim"].u)) > 0.005 for r in unconstrained))
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.number_input(key="u_min").set_value(-0.005).run(timeout=30)
+            at.number_input(key="u_max").set_value(0.005).run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": DEFAULT_PLANT, "delay": 0.0,
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="ok"):
+                at.chat_input[0].set_value("go").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.source == "llm"]
+            self.assertGreater(len(entries), 0)
+            for e in entries:
+                self.assertLessEqual(float(np.max(e.sim.u)), 0.005 + 1e-9)
+                self.assertGreaterEqual(float(np.min(e.sim.u)), -0.005 - 1e-9)
+
+    def test_entries_carry_the_raw_reloadable_plant_identity(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1/(90s+1)", delay=13.0, return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1/(90s+1)", "delay": 13.0,
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="ok"):
+                at.chat_input[0].set_value("go").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.source == "llm"]
+            self.assertGreater(len(entries), 0)
+            self.assertTrue(all(e.plant_tf == "1/(90s+1)" for e in entries))
+            self.assertTrue(all(e.plant_L == 13.0 for e in entries))
+
+
+class TestLlmPlantCarryoverAffordance(unittest.TestCase):
+    """Regression: the Manual controls offer a one-click way to pick up
+    the plant the LLM Supervisor last analyzed -- see
+    streamlit_siso_panel._render_llm_plant_carryover(). Mirrors
+    test_streamlit_llm_panel.TestApiKeySurvivesAModeSwitch's Mode
+    round-trip style."""
+
+    def test_load_this_plant_seeds_tf_expr_and_L_then_hides_itself(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1/(90s+1)", delay=13.0, return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1/(90s+1)", "delay": 13.0,
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            self.assertNotEqual(at.text_input(key="siso_tf_expr").value, "1/(90s+1)")
+            captions = [c.value for c in at.caption]
+            self.assertTrue(any("LLM Supervisor last analyzed" in c for c in captions))
+
+            at.button(key="siso_load_llm_plant").click().run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertEqual(at.text_input(key="siso_tf_expr").value, "1/(90s+1)")
+            self.assertEqual(at.number_input(key="siso_L").value, 13.0)
+
+            captions = [c.value for c in at.caption]
+            self.assertFalse(any("LLM Supervisor last analyzed" in c for c in captions),
+                             "affordance must not still offer to load the plant it just loaded")
 
 
 if __name__ == "__main__":

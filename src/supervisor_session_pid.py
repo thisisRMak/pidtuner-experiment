@@ -77,7 +77,11 @@ class Session:
         tool for return_sim=True and pops "_sim_rows" (row["sim"] intact,
         not JSON-safe) off the result before it goes anywhere near
         json.dumps/the model -- the model only ever sees exactly what it
-        saw before this existed."""
+        saw before this existed. plot_calls also carries the call's raw
+        "delay" kwarg (0.0 if the model never passed one) alongside
+        "plant" -- both are the exact strings/numbers TransferFunction.
+        parse() takes, not a display-formatted plant, so a caller can
+        re-derive the plant this call actually ran against."""
 
         def _wrapped(**kwargs):
             call_kwargs = dict(kwargs, return_sim=True) if kind else kwargs
@@ -89,7 +93,8 @@ class Session:
                         self.known_stable_methods.add(row["name"])
             if result.get("ok") and sim_rows is not None:
                 self.plot_calls.append({
-                    "kind": kind, "plant": plant_of(kwargs), "rows": sim_rows,
+                    "kind": kind, "plant": plant_of(kwargs),
+                    "delay": kwargs.get("delay", 0.0), "rows": sim_rows,
                 })
             return result
 
