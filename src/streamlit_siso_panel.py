@@ -404,7 +404,7 @@ def _do_compare_all(plant):
     st.success(f"Compared {n_ok} methods. Untick any below to declutter.")
 
 
-def absorb_llm_rows(plant_id, rows):
+def absorb_llm_rows(plant_id, rows, delay=0.0):
     """Turn raw run_whitebox_benchmark(return_sim=True) rows (row["sim"]
     intact) into session entries — the same gs.ControllerEntry shape
     _do_compare_all builds for a manual "Compare all methods" click, so
@@ -413,28 +413,75 @@ def absorb_llm_rows(plant_id, rows):
     distinguishable. Called by streamlit_llm_panel.py's _drain_plot_calls
     after each chat turn — see supervisor_session_pid.Session.plot_calls.
     A row with no gains/sim (a method that failed) is skipped, same as
-    _do_compare_all's own guard."""
-    # plant_id is the raw plant_tf string the LLM passed (see
-    # supervisor_session_pid.Session's plant_of); re-parse it to the same
-    # pretty()-formatted form _render_plant_controls() tags manual entries
-    # with, so the same plant doesn't show two differently-formatted tags
-    # depending on who ran it. Falls back to the raw string on a parse
-    # failure -- cosmetic only, never blocks absorbing the rows themselves
-    # (the tool already parsed and simulated against this same string).
+    _do_compare_all's own guard.
+
+    row["sim"] here comes from the same run_whitebox_benchmark ->
+    compare_all_methods(..., return_sim=True) path _do_compare_all uses
+    for a manual "Compare all methods" click -- always a wide-open-
+    actuator unit-step trace, reusable as this panel's own plotted trace
+    only under the same conditions _do_compare_all checks for (see its
+    own comment): same setpoint/kind, same N, no t_end override, and the
+    trace never actually needed bounds wider than this panel's u_min/
+    u_max. Otherwise it's re-simulated against this panel's actual sim
+    settings, same as _do_compare_all's fallback -- without this, an
+    LLM-triggered entry would always show the unconstrained trace even
+    when the panel's own actuator limits say otherwise."""
+    # plant_id is the raw plant_tf string the LLM passed, `delay` its raw
+    # "delay" kwarg (see supervisor_session_pid.Session's plot_calls);
+    # re-parse into the same pretty()-formatted form _render_plant_
+    # controls() tags manual entries with, so the same plant doesn't show
+    # two differently-formatted tags depending on who ran it. Falls back
+    # to the raw string on a parse failure -- cosmetic only, never blocks
+    # absorbing the rows themselves (the tool already parsed and
+    # simulated against this same plant_id/delay pair).
     plant_label = plant_id
+    plant_obj = None
     try:
-        plant_label = TransferFunction.parse(plant_id).pretty()
+        plant_obj = TransferFunction.parse(plant_id, L=delay)
+        plant_label = plant_obj.pretty()
     except Exception:
         pass
+
+    # Called from streamlit_llm_panel.py's _drain_plot_calls, which only
+    # ever runs while Mode=LLM Supervisor -- this panel's own sim-setting
+    # widgets (u_min, sp_t_end, ...) aren't instantiated on that script
+    # run, so Streamlit has already dropped them from session_state by
+    # the time this executes (confirmed live: _sim_settings() below raises
+    # KeyError on "sp_t_end" without this). render_controls() guards its
+    # own read of these same keys with this exact call, at its top, before
+    # they're re-instantiated -- see streamlit_gui_state.preserve_widget_
+    # state's module note. A no-op once Manual mode has rendered them
+    # again this run.
+    gs.preserve_widget_state(_PROTECTED_KEYS)
+    settings = _sim_settings()
+    reusable = (settings["setpoint_kind"] == "step"
+                and settings["setpoint"] == 1.0
+                and settings["N"] == 80.0
+                and settings["t_end"] is None)
+
     n_ok = 0
     for row in rows:
         gains = row.get("gains")
-        sim = row.get("sim")
-        if gains is None or sim is None:
+        base_sim = row.get("sim")
+        if gains is None or base_sim is None:
             continue
+        if (reusable and float(np.min(base_sim.u)) >= settings["u_min"]
+                and float(np.max(base_sim.u)) <= settings["u_max"]):
+            sim = base_sim
+        elif plant_obj is not None:
+            try:
+                sim = _run_closed_loop(plant_obj, gains)
+            except Exception:
+                continue
+        else:
+            # plant_id failed to re-parse above (see try/except) -- can't
+            # rebuild the plant to re-simulate against, so fall back to
+            # the unconstrained trace rather than dropping the row.
+            sim = base_sim
         entry = gs.ControllerEntry(
             kind="siso", label=row["name"] + _antiwindup_tag(sim),
-            params=gains, result=None, sim=sim, source="llm", plant=plant_label)
+            params=gains, result=None, sim=sim, source="llm", plant=plant_label,
+            plant_tf=plant_id, plant_L=delay)
         entry.mrow = row
         gs.add_controller(entry)
         n_ok += 1
@@ -650,6 +697,40 @@ _PROTECTED_KEYS = [
 ]
 
 
+def _render_llm_plant_carryover():
+    """"LLM Supervisor last analyzed: <plant> — [Load this plant]", shown
+    only when the most recent LLM-sourced entry ran against a plant this
+    panel's own widgets don't currently hold -- so switching from Mode=
+    LLM Supervisor back to Manual doesn't strand the plant just discussed
+    in chat behind a re-typed expression. Compares the raw, reloadable
+    plant_tf/plant_L (see gs.ControllerEntry's own note on why entry.plant
+    itself -- a .pretty()-formatted display string -- can't be fed back
+    into the siso_tf_expr/siso_L widgets).
+
+    Must run before _render_plant_controls() instantiates those widgets:
+    the click handler seeds session_state[...] directly, the same
+    "pre-set session_state before creating the widget" trick
+    gs.preserve_widget_state()/the "Select all" button already rely on.
+    Unlike that button, this needs an explicit st.rerun() right after --
+    the caption above is decided before the click can be seen, so without
+    it the caption would still flash "last analyzed" once more on the
+    very run that loads the plant, only clearing on whatever rerun
+    happens next."""
+    llm_entries = [e for e in gs.get_by_kind("siso") if e.source == "llm" and e.plant_tf]
+    if not llm_entries:
+        return
+    last = llm_entries[-1]
+    if (last.plant_tf == st.session_state.get("siso_tf_expr")
+            and last.plant_L == st.session_state.get("siso_L")):
+        return
+    c1, c2 = st.columns([5, 1])
+    c1.caption(f"🤖 LLM Supervisor last analyzed: {last.plant}")
+    if c2.button("Load this plant", key="siso_load_llm_plant"):
+        st.session_state["siso_tf_expr"] = last.plant_tf
+        st.session_state["siso_L"] = last.plant_L
+        st.rerun()
+
+
 def render_controls():
     """The left-hand controls half — called by streamlit_unified_panel.py
     when Track=SISO/PID, Mode=Manual. Split from what used to be one
@@ -659,6 +740,7 @@ def render_controls():
     the same script run — see streamlit_unified_panel.py's docstring for
     why that matters."""
     gs.preserve_widget_state(_PROTECTED_KEYS)
+    _render_llm_plant_carryover()
     plant = _render_plant_controls()
 
     st.subheader("Compare all methods")

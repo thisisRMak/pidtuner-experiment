@@ -290,5 +290,10 @@ def _drain_plot_calls(session):
     turn's successful drain."""
     calls, session.plot_calls = session.plot_calls, []
     for call in calls:
-        absorb = siso_panel.absorb_llm_rows if call["kind"] == "siso" else mimo_panel.absorb_llm_rows
-        absorb(call["plant"] or "?", call["rows"])
+        if call["kind"] == "siso":
+            # Only Session (SISO/PID) tags calls with "delay" -- see its
+            # _wrap_benchmark -- so .get() with a 0.0 default also covers
+            # a pre-existing plot_calls entry from before that field.
+            siso_panel.absorb_llm_rows(call["plant"] or "?", call["rows"], call.get("delay", 0.0))
+        else:
+            mimo_panel.absorb_llm_rows(call["plant"] or "?", call["rows"])

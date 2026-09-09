@@ -288,6 +288,32 @@ class TestSessionPlotCalls(unittest.TestCase):
         self.assertEqual(call["rows"][0]["name"], "SIMC")
         self.assertIsNotNone(call["rows"][0]["sim"])
 
+    def test_whitebox_call_captures_delay_alongside_plant(self):
+        """Regression: plot_calls used to carry plant_tf but drop the
+        model's separate "delay" kwarg -- a caller re-parsing plant_tf
+        alone (see streamlit_siso_panel.absorb_llm_rows) would silently
+        lose any dead time the model specified that way rather than via
+        an exp(...) term in plant_tf itself."""
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": True})]),
+            _response(tool_calls=[_tool_call(
+                "run_whitebox_benchmark", {"plant_tf": "1/(s+1)", "delay": 3.5})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        self.assertEqual(session.plot_calls[0]["delay"], 3.5)
+
+    def test_delay_defaults_to_zero_when_the_model_omits_it(self):
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": True})]),
+            _response(tool_calls=[_tool_call("run_whitebox_benchmark", {"plant_tf": "1/(s+1)"})]),
+            _response(content="done"),
+        ]
+        session = self._session(script)
+        session.handle_user_message("go")
+        self.assertEqual(session.plot_calls[0]["delay"], 0.0)
+
     def test_blackbox_call_never_populates_plot_calls(self):
         """No ground-truth plant on the black-box path -- see
         supervisor_tools_blackbox_pid.py's isolation contract, there's
