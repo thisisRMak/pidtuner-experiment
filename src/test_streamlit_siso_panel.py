@@ -223,6 +223,30 @@ class TestErrorPaths(unittest.TestCase):
         self.assertEqual(_n_entries(at), before)
 
 
+class TestLlmEntryTagIsABadge(unittest.TestCase):
+    """Regression: the 🤖 LLM tag on a source="llm" session-list row used
+    to be plain markdown text appended after the label, which rendered
+    tiny/monochrome and easy to miss next to the color swatch — not a
+    regression, but reported live as hard to spot. Now uses Streamlit's
+    :color-badge[...] markdown directive so it renders as a distinct
+    colored pill."""
+
+    def test_llm_sourced_entry_renders_a_violet_badge(self):
+        import streamlit_gui_state as gs
+
+        at = _fresh_app()
+        tab = _siso_tab(at)
+        tab.button(key="siso_compare_all").click()
+        at.run(timeout=60)
+        entries = at.session_state[gs.CONTROLLERS_KEY]
+        self.assertGreater(len(entries), 0)
+        entries[0].source = "llm"
+        at.run(timeout=30)
+
+        rows = [m.value for m in at.markdown if ":violet-badge[🤖 LLM]" in m.value]
+        self.assertEqual(len(rows), 1)
+
+
 class TestSessionListBulkActions(unittest.TestCase):
     """Regression test for the widget-key/state desync bug: bulk actions
     (select/deselect all) must actually change what the checkboxes show,

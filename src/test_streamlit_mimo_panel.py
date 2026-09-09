@@ -273,6 +273,27 @@ class TestErrorPaths(unittest.TestCase):
         self.assertEqual(_n_entries(at), before)
 
 
+class TestLlmEntryTagIsABadge(unittest.TestCase):
+    """Regression: same fix as streamlit_siso_panel.py's -- the 🤖 LLM
+    tag now renders as a :violet-badge[...] pill instead of plain
+    markdown text, so it's not tiny/monochrome next to the swatch."""
+
+    def test_llm_sourced_entry_renders_a_violet_badge(self):
+        import streamlit_gui_state as gs
+
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_compare_all").click()
+        at.run(timeout=60)
+        entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo"]
+        self.assertGreater(len(entries), 0)
+        entries[0].source = "llm"
+        at.run(timeout=30)
+
+        rows = [m.value for m in at.markdown if ":violet-badge[🤖 LLM]" in m.value]
+        self.assertEqual(len(rows), 1)
+
+
 class TestSessionListBulkActions(unittest.TestCase):
     def test_deselect_all_then_select_all_sync_widgets(self):
         import streamlit_gui_state as gs

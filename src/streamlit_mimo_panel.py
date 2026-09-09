@@ -474,7 +474,7 @@ def _render_session_list():
         enabled = c1.checkbox("enabled", key=checkbox_key, label_visibility="collapsed")
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
-        tag = "  🤖 LLM" if entry.source == "llm" else ""
+        tag = "  :violet-badge[🤖 LLM]" if entry.source == "llm" else ""
         c2.markdown(f"{_circle_shortcode(entry.color)} {entry.label}{tag}")
         stable = "stable" if entry.result.is_stable() else "UNSTABLE"
         checks_ok = all(c.passed for cs in (entry.checks or {}).values() for c in cs)

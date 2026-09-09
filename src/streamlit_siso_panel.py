@@ -550,7 +550,7 @@ def _render_session_list():
                               label_visibility="collapsed")
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
-        tag = "  🤖 LLM" if entry.source == "llm" else ""
+        tag = "  :violet-badge[🤖 LLM]" if entry.source == "llm" else ""
         c2.markdown(f"{_circle_shortcode(entry.color)} {entry.label}{tag}")
         g = entry.params
         plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
