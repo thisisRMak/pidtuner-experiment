@@ -3,10 +3,13 @@
 custom-entry mode, so both take the same file formats and the GUI's typed
 matrices parse the same way the CLI's would.
 
-Two independent entry points:
+Three entry points:
   - parse_matlab_literal: text -> np.ndarray, for hand-typed MATLAB-style
     matrix literals ("[0 1 0; 0 0 1; -6 -11 -6]"), used by the GUI's
     custom A/B/C/D text boxes.
+  - format_matlab_literal: np.ndarray -> text, the reverse of
+    parse_matlab_literal, for pre-filling those same text boxes from an
+    existing plant's matrices.
   - load_plant_file: path -> StateSpacePlant, for file-based plant input
     (.json, matching the lqg_examples_json/ preset schema; .mat, via
     scipy.io.loadmat with A/B/C/D variables), used by the CLI's
@@ -60,6 +63,30 @@ def parse_matlab_literal(text: str) -> np.ndarray:
                 f"expected {ncols}")
         data.append(vals)
     return np.array(data, dtype=float)
+
+
+def _format_number(x: float) -> str:
+    x = float(x)
+    if np.isfinite(x) and x == int(x):
+        return str(int(x))
+    return repr(x)
+
+
+def format_matlab_literal(arr: np.ndarray) -> str:
+    """Format a matrix as MATLAB-style literal text, the reverse of
+    parse_matlab_literal — rows separated by '; ', entries within a row
+    separated by ' ', wrapped in '[' ']' (e.g. "[0 1 0; 0 0 1; -6 -11 -6]").
+    A 1-D array is treated as a single row, matching parse_matlab_literal's
+    reverse convention."""
+    arr = np.asarray(arr, dtype=float)
+    if arr.ndim == 1:
+        arr = arr.reshape(1, -1)
+    if arr.ndim != 2:
+        raise ValueError(f"expected a 1-D or 2-D array, got ndim={arr.ndim}")
+    if arr.size == 0:
+        raise ValueError("empty matrix")
+    rows = [" ".join(_format_number(v) for v in row) for row in arr]
+    return "[" + "; ".join(rows) + "]"
 
 
 def load_plant_file(path: str) -> StateSpacePlant:
