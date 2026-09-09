@@ -335,4 +335,11 @@ def _drain_plot_calls(session):
             # a pre-existing plot_calls entry from before that field.
             siso_panel.absorb_llm_rows(call["plant"] or "?", call["rows"], call.get("delay", 0.0))
         else:
-            mimo_panel.absorb_llm_rows(call["plant"] or "?", call["rows"])
+            # Only LQGSession tags calls with "plant_preset"/
+            # "custom_plant_literals" -- see its _wrap_benchmark -- so
+            # .get() with defaults also covers a pre-existing plot_calls
+            # entry from before those fields.
+            mimo_panel.absorb_llm_rows(
+                call["plant"] or "?", call["rows"],
+                plant_preset=call.get("plant_preset", ""),
+                custom_plant_literals=call.get("custom_plant_literals"))

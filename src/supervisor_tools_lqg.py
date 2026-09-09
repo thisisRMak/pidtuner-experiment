@@ -52,6 +52,7 @@ import numpy as np
 from lqg_examples import list_examples, load_example, LQGExample
 from lqg_explicit import ExplicitModelFollowingResult
 from lqg_compare import compare_regulator_methods, compare_model_following
+from matrix_io import format_matlab_literal
 from plant import StateSpacePlant
 
 RUN_LQG_BENCHMARK_SCHEMA = {
@@ -366,4 +367,19 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
         # supervisor_session_lqg.LQGSession, which strips this back off
         # before the result goes anywhere near json.dumps/the model.
         result["_sim_rows"] = raw_rows
+        if ex.key == "custom":
+            # A preset plant is reloadable from plant_preset (ex.key)
+            # alone -- load_example() reconstructs it. A custom plant
+            # isn't in any catalog, so streamlit_mimo_panel.py's "Load
+            # this plant" affordance needs the actual matrices back, as
+            # MATLAB-literal text ready to drop straight into its
+            # mimo_custom_A/B/C/D widgets (see matrix_io.
+            # format_matlab_literal, the reverse of parse_matlab_literal
+            # those widgets already parse). Private/popped the same way
+            # as _sim_rows -- never reaches json.dumps/the model, so this
+            # doesn't grow every tool response with matrix text.
+            result["_custom_plant_literals"] = {
+                "A": format_matlab_literal(plant.A), "B": format_matlab_literal(plant.B),
+                "C": format_matlab_literal(plant.C), "D": format_matlab_literal(plant.D),
+            }
     return result

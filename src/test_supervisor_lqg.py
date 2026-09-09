@@ -78,6 +78,36 @@ class TestRunLqgBenchmark(unittest.TestCase):
                           "Bryson's rule", "LQG (Kalman filter)"])
         self.assertEqual((result["nx"], result["nu"], result["ny"]), (2, 1, 1))
 
+    def test_custom_plant_return_sim_carries_matrix_literals(self):
+        """streamlit_mimo_panel.py's "Load this plant" affordance needs
+        the actual matrices back for a custom plant (unlike a preset,
+        reloadable from plant_preset alone) -- see run_lqg_benchmark's
+        own note next to _custom_plant_literals."""
+        result = run_lqg_benchmark(custom_plant={
+            "A": [[0, 1], [-0.1, -1.1]], "B": [[0], [1]],
+            "C": [[0.1, 0]], "D": [[0]],
+        }, return_sim=True)
+        self.assertTrue(result["ok"], result.get("error"))
+        literals = result["_custom_plant_literals"]
+        self.assertEqual(literals["A"], "[0 1; -0.1 -1.1]")
+        self.assertEqual(literals["B"], "[0; 1]")
+        self.assertEqual(literals["C"], "[0.1 0]")
+        self.assertEqual(literals["D"], "[0]")
+
+    def test_preset_plant_return_sim_has_no_custom_plant_literals(self):
+        """A preset is reloadable from plant_preset (the catalog key)
+        alone -- no matrix text needed, unlike a custom plant."""
+        result = run_lqg_benchmark("aircraft_hall", return_sim=True)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertNotIn("_custom_plant_literals", result)
+
+    def test_custom_plant_no_return_sim_has_no_custom_plant_literals(self):
+        result = run_lqg_benchmark(custom_plant={
+            "A": [[0, 1], [-0.1, -1.1]], "B": [[0], [1]], "C": [[0.1, 0]],
+        })
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertNotIn("_custom_plant_literals", result)
+
     def test_custom_plant_D_defaults_to_zero(self):
         result = run_lqg_benchmark(custom_plant={
             "A": [[0, 1], [-0.1, -1.1]], "B": [[0], [1]], "C": [[0.1, 0]],
@@ -405,8 +435,13 @@ class TestLQGSessionPlotCalls(unittest.TestCase):
         # plant_name, not the plant_preset key -- see test_custom_plant_
         # gets_its_own_name_not_the_generic_preset_key below for why.
         self.assertEqual(call["plant"], "Plant aircraft_hall")
+        self.assertEqual(call["plant_preset"], "aircraft_hall")
         self.assertEqual(call["rows"][0].name, "LQR (suggested Q/R)")
         self.assertIsNotNone(call["rows"][0].sim)
+        # _fake_lqg_tool never sets _custom_plant_literals -- see
+        # test_custom_plant_literals_land_in_plot_calls_not_the_model
+        # below for the field actually populated.
+        self.assertIsNone(call["custom_plant_literals"])
 
     def test_custom_plant_gets_its_own_name_not_the_generic_preset_key(self):
         """Regression: _wrap_benchmark used to tag every custom-plant call
@@ -432,6 +467,36 @@ class TestLQGSessionPlotCalls(unittest.TestCase):
         # No rows -- sim_rows is [] (falsy-but-not-None), so plot_calls
         # still gets populated per the "is not None" guard.
         self.assertEqual(session.plot_calls[0]["plant"], "My widget")
+
+    def test_custom_plant_literals_land_in_plot_calls_not_the_model(self):
+        """_custom_plant_literals must reach plot_calls (for streamlit_
+        mimo_panel.py's "Load this plant" affordance) but never the JSON
+        sent to the model -- same treatment as _sim_rows."""
+        def fn(custom_plant, return_sim=False):
+            result = {"ok": True, "plant_preset": "custom",
+                      "plant_name": custom_plant.get("name") or "Custom plant", "rows": []}
+            if return_sim:
+                result["_sim_rows"] = []
+                result["_custom_plant_literals"] = {
+                    "A": "[0 1; -2 -3]", "B": "[0; 1]", "C": "[1 0]", "D": "[0]"}
+            return result
+
+        session = LQGSession(ScriptedClient([
+            _response(tool_calls=[_tool_call("run_lqg_benchmark",
+                                             {"custom_plant": {"name": "My widget", "A": [[0]],
+                                                               "B": [[1]], "C": [[1]]}})]),
+            _response(content="done"),
+        ]), lqg_tool=(RUN_LQG_BENCHMARK_SCHEMA, fn), capture_plots=True)
+        session.handle_user_message("go")
+
+        call = session.plot_calls[0]
+        self.assertEqual(call["plant_preset"], "custom")
+        self.assertEqual(call["custom_plant_literals"],
+                         {"A": "[0 1; -2 -3]", "B": "[0; 1]", "C": "[1 0]", "D": "[0]"})
+
+        tool_msgs = [m for m in session.messages if isinstance(m, dict) and m.get("role") == "tool"]
+        benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_lqg_benchmark")
+        self.assertNotIn("_custom_plant_literals", benchmark_msg["content"])
 
     def test_tool_result_sent_to_the_model_is_json_safe(self):
         script = [

@@ -10,7 +10,9 @@ or:
     python -m unittest test_streamlit_mimo_panel -v
 """
 
+import os
 import unittest
+from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
 
@@ -292,6 +294,62 @@ class TestLlmEntryTagIsABadge(unittest.TestCase):
 
         rows = [m.value for m in at.markdown if ":violet-badge[🤖 LLM]" in m.value]
         self.assertEqual(len(rows), 1)
+
+
+class TestLlmPlantCarryoverAffordance(unittest.TestCase):
+    """Regression: the Manual controls offer a one-click way to pick up
+    the custom plant the LLM Supervisor last analyzed -- see
+    streamlit_mimo_panel._render_llm_plant_carryover(). Mirrors
+    test_streamlit_siso_panel.TestLlmPlantCarryoverAffordance's own test,
+    but for MIMO's custom-plant A/B/C/D widgets rather than SISO's
+    tf_expr/L (a preset plant reloads via plant_preset alone -- see
+    gs.ControllerEntry's own note -- so the custom-plant path is the one
+    that actually needs the matrix-literal round trip exercised here)."""
+
+    def test_load_this_plant_seeds_custom_matrices_then_hides_itself(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_lqg import LQGSession
+        from supervisor_tools_lqg import run_lqg_benchmark
+
+        custom_plant = {"name": "My widget", "A": [[0, 1], [-2, -3]], "B": [[0], [1]],
+                        "C": [[1, 0]], "D": [[0]]}
+        real_result = run_lqg_benchmark(custom_plant=custom_plant, return_sim=True)
+        self.assertTrue(real_result["ok"], real_result.get("error"))
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "mimo", "plant": real_result["plant_name"],
+                "plant_preset": real_result["plant_preset"],
+                "custom_plant_literals": real_result["_custom_plant_literals"],
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(LQGSession, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            self.assertEqual(at.radio(key="mimo_plant_source").value, "Preset")
+            captions = [c.value for c in at.caption]
+            self.assertTrue(any("LLM Supervisor last analyzed" in c for c in captions))
+
+            at.button(key="mimo_load_llm_plant").click().run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertEqual(at.radio(key="mimo_plant_source").value,
+                             "Custom (MATLAB matrix entry)")
+            self.assertEqual(at.text_area(key="mimo_custom_A").value, "[0 1; -2 -3]")
+            self.assertEqual(at.text_area(key="mimo_custom_B").value, "[0; 1]")
+            self.assertEqual(at.text_area(key="mimo_custom_C").value, "[1 0]")
+            self.assertEqual(at.text_area(key="mimo_custom_D").value, "[0]")
+
+            captions = [c.value for c in at.caption]
+            self.assertFalse(any("LLM Supervisor last analyzed" in c for c in captions),
+                             "affordance must not still offer to load the plant it just loaded")
 
 
 class TestSessionListBulkActions(unittest.TestCase):

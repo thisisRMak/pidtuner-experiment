@@ -51,8 +51,19 @@ class ControllerEntry:
     dead-time L that produced this entry's plant, for a caller that wants
     to reconstruct or re-seed a plant from an entry rather than just
     display it (see streamlit_siso_panel.py's "Load this plant"
-    affordance). SISO-only for now, empty/0.0 on every MIMO entry and on
-    a SISO one that predates this field.
+    affordance). SISO-only, empty/0.0 on every MIMO entry and on a SISO
+    one that predates this field.
+
+    `plant_preset`/`plant_A`/`plant_B`/`plant_C`/`plant_D` are MIMO's
+    equivalent reloadable identity, for streamlit_mimo_panel.py's own
+    "Load this plant" affordance: `plant_preset` is the LQGExample key
+    -- a real catalog slug (reload via lqg_examples.load_example) or the
+    constant "custom", in which case `plant_A`..`plant_D` carry the
+    actual matrices as MATLAB-literal text (matrix_io.
+    format_matlab_literal), ready to drop into the mimo_custom_A/B/C/D
+    widgets. A real preset needs no matrices to reload, so those stay
+    "". MIMO-only, empty on every SISO entry and on a MIMO one that
+    predates this field.
     """
 
     kind: Literal["siso", "mimo"]
@@ -68,6 +79,11 @@ class ControllerEntry:
     plant: str = ""
     plant_tf: str = ""
     plant_L: float = 0.0
+    plant_preset: str = ""
+    plant_A: str = ""
+    plant_B: str = ""
+    plant_C: str = ""
+    plant_D: str = ""
 
 
 def init_state() -> None:

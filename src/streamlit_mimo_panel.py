@@ -123,6 +123,47 @@ def current_manual_plant_name() -> str | None:
         return None
 
 
+def _render_llm_plant_carryover():
+    """"LLM Supervisor last analyzed: <plant> — [Load this plant]", the
+    MIMO twin of streamlit_siso_panel._render_llm_plant_carryover() --
+    see its docstring for the general shape and the st.rerun() note.
+    Compares against the reloadable plant_preset/plant_A..plant_D
+    identity (gs.ControllerEntry's own note on why), not the display
+    name alone: two different custom plants can share a name, and
+    plant_preset=="custom" always would.
+
+    Must run before _render_plant_controls() instantiates the plant
+    widgets, same reason as the SISO version."""
+    llm_entries = [e for e in gs.get_by_kind("mimo") if e.source == "llm" and e.plant_preset]
+    if not llm_entries:
+        return
+    last = llm_entries[-1]
+    if last.plant_preset != "custom":
+        if (gs.peek("mimo_plant_source") == "Preset"
+                and gs.peek("mimo_preset") == last.plant_preset):
+            return
+    elif (gs.peek("mimo_plant_source") == "Custom (MATLAB matrix entry)"
+            and gs.peek("mimo_custom_A") == last.plant_A
+            and gs.peek("mimo_custom_B") == last.plant_B
+            and gs.peek("mimo_custom_C") == last.plant_C
+            and gs.peek("mimo_custom_D") == last.plant_D):
+        return
+    c1, c2 = st.columns([5, 1])
+    c1.caption(f"🤖 LLM Supervisor last analyzed: {last.plant}")
+    if c2.button("Load this plant", key="mimo_load_llm_plant"):
+        if last.plant_preset != "custom":
+            st.session_state["mimo_plant_source"] = "Preset"
+            st.session_state["mimo_preset"] = last.plant_preset
+        else:
+            st.session_state["mimo_plant_source"] = "Custom (MATLAB matrix entry)"
+            st.session_state["mimo_custom_name"] = last.plant
+            st.session_state["mimo_custom_A"] = last.plant_A
+            st.session_state["mimo_custom_B"] = last.plant_B
+            st.session_state["mimo_custom_C"] = last.plant_C
+            st.session_state["mimo_custom_D"] = last.plant_D
+        st.rerun()
+
+
 def _render_plant_controls():
     st.subheader("Plant")
     st.radio("Source", ["Preset", "Custom (MATLAB matrix entry)"],
@@ -423,21 +464,30 @@ def _do_compare_all(ex):
     st.success(f"Compared {len(rows)} regulator-family methods. Untick any below to declutter.")
 
 
-def absorb_llm_rows(plant_id, rows):
+def absorb_llm_rows(plant_id, rows, plant_preset="", custom_plant_literals=None):
     """Turn raw run_lqg_benchmark(return_sim=True) rows (ComparisonRow
     objects, .sim intact) into session entries — the same gs.
     ControllerEntry shape _do_compare_all builds for a manual "Compare
     all methods" click, so an LLM-triggered run lands in the same
     session list/plots as a manual one, tagged source="llm". Called by
     streamlit_llm_panel.py's _drain_plot_calls after each chat turn —
-    see supervisor_session_lqg.LQGSession.plot_calls."""
+    see supervisor_session_lqg.LQGSession.plot_calls.
+
+    plant_preset/custom_plant_literals carry the reloadable plant
+    identity through to each entry (see gs.ControllerEntry's own note
+    on why plant_id alone -- a display name -- isn't enough), for
+    _render_llm_plant_carryover() below."""
+    literals = custom_plant_literals or {}
     n_ok = 0
     for row in rows:
         if row.sim is None:
             continue
         entry = gs.add_llm_entry(
             kind="mimo", label=row.name, params=row.result,
-            result=row.result, sim=row.sim, plant=plant_id)
+            result=row.result, sim=row.sim, plant=plant_id,
+            plant_preset=plant_preset,
+            plant_A=literals.get("A", ""), plant_B=literals.get("B", ""),
+            plant_C=literals.get("C", ""), plant_D=literals.get("D", ""))
         entry.checks = row.checks
         n_ok += 1
     return n_ok
@@ -596,6 +646,7 @@ def render_controls():
     render() (see git history), mirroring streamlit_siso_panel.py's own
     split — see its render_controls() docstring for why."""
     gs.preserve_widget_state(_PROTECTED_KEYS)
+    _render_llm_plant_carryover()
     ex = _render_plant_controls()
 
     st.subheader("Compare all methods")
