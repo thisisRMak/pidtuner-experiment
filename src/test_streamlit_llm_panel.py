@@ -207,6 +207,71 @@ class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
             self.assertTrue(any("🤖 LLM" in m for m in markdowns))
 
 
+class TestClearLlmEntriesButton(unittest.TestCase):
+    """"Clear LLM entries" (streamlit_llm_panel.render_controls()) must
+    remove only source="llm" entries for the *current Track's* kind --
+    leaving source="you" entries, and the other Track's kind entirely,
+    untouched. See streamlit_gui_state.clear_by_kind_and_source()."""
+
+    def test_clears_only_this_tracks_llm_entries(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+
+            # A manual ("you") SISO entry -- must survive the clear.
+            at.button(key="siso_compare_all").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+
+            # A manual ("you") MIMO entry -- the other Track's kind, must
+            # survive untouched regardless of its own source.
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.button(key="mimo_compare_all").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+            at.segmented_control(key="unified_track").set_value("SISO / PID").run(timeout=30)
+
+            # An LLM-tagged SISO entry -- this is the one that must go.
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            siso_you_before = [e for e in entries if e.kind == "siso" and e.source == "you"]
+            siso_llm_before = [e for e in entries if e.kind == "siso" and e.source == "llm"]
+            mimo_before = [e for e in entries if e.kind == "mimo"]
+            self.assertGreater(len(siso_you_before), 0)
+            self.assertGreater(len(siso_llm_before), 0)
+            self.assertGreater(len(mimo_before), 0)
+
+            at.button(key="llm_clear_entries").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            self.assertEqual(
+                [e for e in entries if e.kind == "siso" and e.source == "llm"], [],
+                "LLM-tagged SISO entries must be cleared")
+            self.assertEqual(
+                len([e for e in entries if e.kind == "siso" and e.source == "you"]),
+                len(siso_you_before), "manual SISO entries must survive")
+            self.assertEqual(
+                len([e for e in entries if e.kind == "mimo"]),
+                len(mimo_before), "the other Track's entries must be untouched")
+
+
 class TestPlotDrainCrashSafety(unittest.TestCase):
     """A bug in absorb_llm_rows (a malformed row, a future regression)
     must not crash the app or swallow the turn's already-computed reply

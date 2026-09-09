@@ -125,6 +125,13 @@ def clear_by_kind(kind: str) -> None:
     ]
 
 
+def clear_by_kind_and_source(kind: str, source: str) -> None:
+    st.session_state[CONTROLLERS_KEY] = [
+        e for e in st.session_state[CONTROLLERS_KEY]
+        if e.kind != kind or e.source != source
+    ]
+
+
 def remove_unchecked_by_kind(kind: str) -> None:
     st.session_state[CONTROLLERS_KEY] = [
         e for e in st.session_state[CONTROLLERS_KEY]

@@ -248,6 +248,12 @@ def render_controls(track):
         st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
         gs.clear_chat()
 
+    if st.button("Clear LLM entries", key="llm_clear_entries"):
+        # Only this Track's LLM-tagged entries -- source="you" entries and
+        # the other Track's kind are left alone. See gs.clear_by_kind_
+        # and_source().
+        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+
     _render_manual_plant_hint(track)
 
     # Reserving this container before chat_input (below) puts it above
