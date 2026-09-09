@@ -282,5 +282,28 @@ class TestSessionListBulkActions(unittest.TestCase):
         self.assertEqual(_n_entries(at), 0)
 
 
+class TestPlantSurvivesATrackSwitch(unittest.TestCase):
+    """Regression: Streamlit deletes a widget's session_state entry
+    whenever that widget isn't instantiated on a script run -- since
+    render_controls() only runs for the active Track, a typed-in plant/
+    delay/method used to reset to the hardcoded default the moment the
+    user switched to the MIMO track and back. See streamlit_gui_state.
+    preserve_widget_state/snapshot_widget_state."""
+
+    def test_plant_L_and_method_survive_a_round_trip_to_mimo_and_back(self):
+        at = _fresh_app()
+        at.text_input(key="siso_tf_expr").set_value("1/(90s+1)").run(timeout=30)
+        at.number_input(key="siso_L").set_value(13.0).run(timeout=30)
+        at.selectbox(key="siso_method").set_value("5. SIMC (FOPDT)").run(timeout=30)
+
+        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+        at.radio(key="unified_track").set_value("SISO / PID").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.text_input(key="siso_tf_expr").value, "1/(90s+1)")
+        self.assertEqual(at.number_input(key="siso_L").value, 13.0)
+        self.assertEqual(at.selectbox(key="siso_method").value, "5. SIMC (FOPDT)")
+
+
 if __name__ == "__main__":
     unittest.main()

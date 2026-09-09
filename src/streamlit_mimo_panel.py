@@ -544,11 +544,26 @@ def _render_last_result():
 
 
 # ── entry point ──────────────────────────────────────────────────────────
+# Every plant/sim-setting field this panel owns -- see streamlit_siso_
+# panel.py's own _PROTECTED_KEYS comment for why these need listing (both
+# plant sources' fields included even though only one renders at a time;
+# method-specific args, e.g. mimo_Q_diag, deliberately not included, same
+# narrower-gap reasoning as the SISO side).
+_PROTECTED_KEYS = [
+    "mimo_plant_source", "mimo_preset",
+    "mimo_custom_name", "mimo_custom_A", "mimo_custom_B", "mimo_custom_C", "mimo_custom_D",
+    "mimo_method",
+    "mimo_t_end", "mimo_dt", "mimo_ref_tracking", "mimo_reference",
+    "mimo_pcs_t_max", "mimo_pcs_y_max",
+]
+
+
 def render_controls():
     """The left-hand controls half — called by streamlit_unified_panel.py
     when Track=MIMO/LQR-LQG, Mode=Manual. Split from what used to be one
     render() (see git history), mirroring streamlit_siso_panel.py's own
     split — see its render_controls() docstring for why."""
+    gs.preserve_widget_state(_PROTECTED_KEYS)
     ex = _render_plant_controls()
 
     st.subheader("Compare all methods")
@@ -587,6 +602,7 @@ def render_controls():
     if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
         _do_per_channel_step()
 
+    gs.snapshot_widget_state(_PROTECTED_KEYS)
     _render_session_list()
     _render_last_result()
 

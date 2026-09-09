@@ -172,14 +172,35 @@ def _render_key_entry():
     return provider, api_key, model
 
 
+_PROTECTED_KEYS = ["llm_provider", "llm_api_key_anthropic", "llm_api_key_openai",
+                   "llm_api_key_gemini", "llm_model"]
+
+
 def render_controls(track):
     """The left-hand controls half for Mode=LLM Supervisor — called by
     streamlit_unified_panel.py with whichever Track it currently has
     selected. Mirrors streamlit_siso_panel.py/streamlit_mimo_panel.py's
     own render_controls() split, but this module has no render_plots()
-    of its own — see the module docstring for why."""
+    of its own — see the module docstring for why.
+
+    preserve_widget_state()/snapshot_widget_state() bracket _render_key_
+    entry() specifically (not the whole function) so the snapshot still
+    happens even on this function's own early returns below -- without
+    it, switching to Manual mode and back would silently reset a
+    session-only API key/model choice to blank/default, since Streamlit
+    deletes a widget's state whenever it isn't instantiated on a run.
+    See streamlit_gui_state.py's own note on why this is needed at all.
+
+    preserve_widget_state() runs *before* _init_panel_state(): the latter
+    does st.session_state.setdefault(state_key, "") for every KEY_STATE
+    entry, which -- setdefault only writes when the key is absent -- would
+    otherwise itself count as "already set" and block the restore below
+    from ever firing, permanently pinning every key to "" the moment it's
+    ever garbage-collected."""
+    gs.preserve_widget_state(_PROTECTED_KEYS)
     _init_panel_state()
     provider, api_key, model = _render_key_entry()
+    gs.snapshot_widget_state(_PROTECTED_KEYS)
 
     if not api_key:
         st.info("Enter an API key above to start chatting.")

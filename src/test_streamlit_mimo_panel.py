@@ -14,6 +14,8 @@ import unittest
 
 from streamlit.testing.v1 import AppTest
 
+from lqg_examples import list_examples
+
 APP_PATH = __file__.replace("test_streamlit_mimo_panel.py", "streamlit_app.py")
 
 # 'airc' is the default (alphabetically first) preset — a small aircraft
@@ -338,6 +340,26 @@ class TestSisoMimoStateIsolation(unittest.TestCase):
         entries = at.session_state[gs.CONTROLLERS_KEY]
         self.assertEqual(len([e for e in entries if e.kind == "mimo"]), 0)
         self.assertEqual(len([e for e in entries if e.kind == "siso"]), n_siso)
+
+
+class TestPresetSurvivesATrackSwitch(unittest.TestCase):
+    """Regression: same class of bug as test_streamlit_siso_panel.py's
+    TestPlantSurvivesATrackSwitch, MIMO side -- see streamlit_gui_state.
+    preserve_widget_state/snapshot_widget_state."""
+
+    def test_preset_and_method_survive_a_round_trip_to_siso_and_back(self):
+        at = _fresh_app()  # starts on MIMO/LQG
+        presets = list_examples()
+        non_default = next(p for p in presets if p != DEFAULT_PRESET)
+        _mimo_tab(at).selectbox(key="mimo_preset").set_value(non_default).run(timeout=30)
+        _mimo_tab(at).selectbox(key="mimo_method").set_value("Bryson's rule").run(timeout=30)
+
+        at.radio(key="unified_track").set_value("SISO / PID").run(timeout=30)
+        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.selectbox(key="mimo_preset").value, non_default)
+        self.assertEqual(at.selectbox(key="mimo_method").value, "Bryson's rule")
 
 
 if __name__ == "__main__":

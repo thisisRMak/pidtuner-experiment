@@ -599,6 +599,23 @@ def _render_last_result():
 
 
 # ── entry point ──────────────────────────────────────────────────────────
+# Every plant-form/sim-setting field this panel owns -- listed once so
+# render_controls() can preserve them all across a Track/Mode switch (see
+# streamlit_gui_state.preserve_widget_state's own note on why). Both
+# plant forms' fields are listed even though only one renders at a time
+# (siso_plant_form picks which) -- snapshot_widget_state skips whichever
+# one didn't render this turn, so this is harmless, not a second gap.
+# Method-specific arg widgets (pc_p1, zn1_step, ...) aren't included --
+# only one method's args render at a time even within an active Manual+
+# SISO session, so protecting those needs the same treatment applied
+# inside _render_method_args itself; not done here, narrower gap.
+_PROTECTED_KEYS = [
+    "siso_plant_form", "siso_tf_expr", "siso_gain", "siso_num", "siso_den", "siso_L",
+    "siso_method", "halve_gains",
+    "sp_kind", "sp_amp", "sp_t_end", "u_min", "u_max", "N", "antiwindup", "ka_override",
+]
+
+
 def render_controls():
     """The left-hand controls half — called by streamlit_unified_panel.py
     when Track=SISO/PID, Mode=Manual. Split from what used to be one
@@ -607,6 +624,7 @@ def render_controls():
     for Mode=LLM Supervisor instead, without the two ever coexisting in
     the same script run — see streamlit_unified_panel.py's docstring for
     why that matters."""
+    gs.preserve_widget_state(_PROTECTED_KEYS)
     plant = _render_plant_controls()
 
     st.subheader("Compare all methods")
@@ -624,6 +642,7 @@ def render_controls():
         _do_tune(plant, method)
 
     _render_sim_settings()
+    gs.snapshot_widget_state(_PROTECTED_KEYS)
     _render_session_list()
     _render_last_result()
 

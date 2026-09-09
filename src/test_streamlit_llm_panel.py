@@ -233,6 +233,32 @@ class TestPlotDrainCrashSafety(unittest.TestCase):
         self.assertEqual(messages[-1], "Here's the answer.")
 
 
+class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
+    """Regression: Streamlit deletes a widget's session_state entry
+    whenever that widget isn't instantiated on a script run -- since
+    render_controls() only runs for Mode=LLM Supervisor, a session-only
+    API key/model choice used to reset to blank/default (and lock the
+    user out of chat_input) the moment they switched to Manual mode and
+    back. See streamlit_gui_state.preserve_widget_state/
+    snapshot_widget_state."""
+
+    def test_key_and_model_survive_a_round_trip_to_manual_and_back(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.text_input(key="llm_api_key_anthropic").set_value("sk-ant-my-real-key").run(timeout=30)
+            at.selectbox(key="llm_model").set_value("claude-sonnet-5").run(timeout=30)
+
+            at.radio(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.session_state["llm_api_key_anthropic"], "sk-ant-my-real-key")
+        self.assertEqual(at.session_state["llm_model"], "claude-sonnet-5")
+        self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
+
+
 def _fake_response(status_code):
     import httpx2
     request = httpx2.Request("POST", "https://api.anthropic.com")
