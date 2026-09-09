@@ -296,8 +296,8 @@ class TestPlantSurvivesATrackSwitch(unittest.TestCase):
         at.number_input(key="siso_L").set_value(13.0).run(timeout=30)
         at.selectbox(key="siso_method").set_value("5. SIMC (FOPDT)").run(timeout=30)
 
-        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
-        at.radio(key="unified_track").set_value("SISO / PID").run(timeout=30)
+        at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+        at.segmented_control(key="unified_track").set_value("SISO / PID").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
         self.assertEqual(at.text_input(key="siso_tf_expr").value, "1/(90s+1)")

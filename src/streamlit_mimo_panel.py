@@ -452,7 +452,7 @@ def _render_session_list():
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
         tag = "  🤖 LLM" if entry.source == "llm" else ""
-        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}{tag}")
+        c2.markdown(f"{_circle_shortcode(entry.color)} {entry.label}{tag}")
         stable = "stable" if entry.result.is_stable() else "UNSTABLE"
         checks_ok = all(c.passed for cs in (entry.checks or {}).values() for c in cs)
         plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
@@ -465,6 +465,14 @@ def _palette_name(hex_color):
              "#8c564b": "brown", "#e377c2": "purple", "#7f7f7f": "black",
              "#bcbd22": "yellow", "#393b79": "blue", "#ad494a": "red"}
     return names.get(hex_color, "blue")
+
+
+def _circle_shortcode(hex_color):
+    """Markdown emoji shortcode for a colored-circle swatch -- see
+    streamlit_siso_panel.py's own copy of this function for why "large_"
+    only belongs on blue."""
+    name = _palette_name(hex_color)
+    return f":large_{name}_circle:" if name == "blue" else f":{name}_circle:"
 
 
 def _crop_idx(t, t_max):

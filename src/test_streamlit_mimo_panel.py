@@ -38,7 +38,7 @@ def _fresh_app():
     # is) -- select it once here so every test below finds MIMO's
     # controls in the tree, same as before when both tabs' widgets
     # existed unconditionally.
-    at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+    at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
     return at
 
 
@@ -328,7 +328,7 @@ class TestSisoMimoStateIsolation(unittest.TestCase):
         n_siso = len([e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso"])
         self.assertGreater(n_siso, 0)
 
-        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+        at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
         mimo_tab = _mimo_tab(at)
         mimo_tab.button(key="mimo_compare_all").click()
         at.run(timeout=60)
@@ -354,8 +354,8 @@ class TestPresetSurvivesATrackSwitch(unittest.TestCase):
         _mimo_tab(at).selectbox(key="mimo_preset").set_value(non_default).run(timeout=30)
         _mimo_tab(at).selectbox(key="mimo_method").set_value("Bryson's rule").run(timeout=30)
 
-        at.radio(key="unified_track").set_value("SISO / PID").run(timeout=30)
-        at.radio(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+        at.segmented_control(key="unified_track").set_value("SISO / PID").run(timeout=30)
+        at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
         self.assertEqual(at.selectbox(key="mimo_preset").value, non_default)

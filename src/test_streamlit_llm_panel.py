@@ -47,7 +47,7 @@ def _run_app(env=None):
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
         at = AppTest.from_file(APP_PATH).run(timeout=30)
-        at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+        at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
         return at
 
 
@@ -56,8 +56,8 @@ class TestDefaultState(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), \
              patch("streamlit_llm_panel.load_dotenv"):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
-        self.assertEqual(at.radio(key="unified_mode").value, "Manual")
-        self.assertEqual(at.radio(key="unified_track").value, "SISO / PID")
+        self.assertEqual(at.segmented_control(key="unified_mode").value, "Manual")
+        self.assertEqual(at.segmented_control(key="unified_track").value, "SISO / PID")
         self.assertEqual(len(at.chat_input), 0, "no chat widgets until Mode=LLM Supervisor")
         self.assertIn("siso_tf_expr", [ti.key for ti in at.text_input])
 
@@ -125,7 +125,7 @@ class TestChatErrorHandling(unittest.TestCase):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
              patch("streamlit_llm_panel.load_dotenv"):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
-            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             with patch.object(Session, "handle_user_message", side_effect=raise_exc):
                 at.chat_input[0].set_value("hello").run(timeout=30)
         self.assertEqual(at.exception[:], [], "a bad turn must not crash the app")
@@ -178,7 +178,7 @@ class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
              patch("streamlit_llm_panel.load_dotenv"):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
-            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             session = at.session_state["llm_session_obj"]
             session.plot_calls.append({
                 "kind": "siso", "plant": "1000/((s+1)(10s+1))",
@@ -201,7 +201,7 @@ class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
             # tag must show up in the session list once Manual mode is
             # showing it (siso_panel.render_controls() runs again here,
             # since Track/Mode default to SISO/PID + Manual).
-            at.radio(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
             self.assertEqual(at.exception[:], [])
             markdowns = [m.value for m in at.markdown]
             self.assertTrue(any("🤖 LLM" in m for m in markdowns))
@@ -222,7 +222,7 @@ class TestPlotDrainCrashSafety(unittest.TestCase):
              patch.object(streamlit_siso_panel, "absorb_llm_rows",
                           side_effect=RuntimeError("boom")):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
-            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             session = at.session_state["llm_session_obj"]
             session.plot_calls.append({"kind": "siso", "plant": "1/(s+1)", "rows": [{}]})
             with patch.object(Session, "handle_user_message", return_value="Here's the answer."):
@@ -246,12 +246,12 @@ class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), \
              patch("streamlit_llm_panel.load_dotenv"):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
-            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             at.text_input(key="llm_api_key_anthropic").set_value("sk-ant-my-real-key").run(timeout=30)
             at.selectbox(key="llm_model").set_value("claude-sonnet-5").run(timeout=30)
 
-            at.radio(key="unified_mode").set_value("Manual").run(timeout=30)
-            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
         self.assertEqual(at.session_state["llm_api_key_anthropic"], "sk-ant-my-real-key")

@@ -474,7 +474,7 @@ def _render_session_list():
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
         tag = "  🤖 LLM" if entry.source == "llm" else ""
-        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}{tag}")
+        c2.markdown(f"{_circle_shortcode(entry.color)} {entry.label}{tag}")
         g = entry.params
         plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
         c3.caption(f"Kp={g.Kp:.3g}  Ki={g.Ki:.3g}  Kd={g.Kd:.3g}{plant_tag}")
@@ -488,6 +488,19 @@ def _palette_name(hex_color):
              "#8c564b": "brown", "#e377c2": "purple", "#7f7f7f": "black",
              "#bcbd22": "yellow", "#393b79": "blue", "#ad494a": "red"}
     return names.get(hex_color, "blue")
+
+
+def _circle_shortcode(hex_color):
+    """Markdown emoji shortcode for a colored-circle swatch. Only
+    :large_blue_circle: carries a "large_" prefix (a legacy alias) --
+    every other color's real shortcode (:red_circle:, :yellow_circle:,
+    :green_circle:, ...) has none, so using "large_" unconditionally
+    (the previous behavior here) rendered as literal text for every
+    color but blue -- confirmed against the `emoji` package's own alias
+    table, not assumed. Pre-existing bug (not introduced by this
+    session), also present in streamlit_mimo_panel.py's own copy."""
+    name = _palette_name(hex_color)
+    return f":large_{name}_circle:" if name == "blue" else f":{name}_circle:"
 
 
 # ── comparison views (heatmap / radar) ──────────────────────────────────

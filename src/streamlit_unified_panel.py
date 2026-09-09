@@ -39,8 +39,15 @@ def render():
     controls_col, plots_col = st.columns([35, 65])
 
     with controls_col:
-        track = st.radio("Track", TRACKS, key="unified_track", horizontal=True)
-        mode = st.radio("Mode", MODES, key="unified_mode", horizontal=True)
+        # required=True + default=<first option>: segmented_control allows
+        # deselecting the active pill (down to None) unless required,
+        # unlike st.radio, which always has exactly one option selected --
+        # required=True keeps that same "always exactly one" guarantee the
+        # dispatch below assumes.
+        track = st.segmented_control("Track", TRACKS, key="unified_track",
+                                     default=TRACKS[0], required=True)
+        mode = st.segmented_control("Mode", MODES, key="unified_mode",
+                                    default=MODES[0], required=True)
         st.divider()
 
         if mode == "Manual":
