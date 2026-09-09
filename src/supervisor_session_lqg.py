@@ -96,7 +96,7 @@ class LQGSession:
     (see supervisor_tools_lqg.run_lqg_benchmark).
     """
 
-    def __init__(self, llm_client, lqg_tool, max_tool_hops=MAX_TOOL_HOPS):
+    def __init__(self, llm_client, lqg_tool, max_tool_hops=MAX_TOOL_HOPS, capture_plots=False):
         self.client = llm_client
         self.max_tool_hops = max_tool_hops
         self.worksheet = LQGPrioritiesWorksheet()
@@ -104,7 +104,12 @@ class LQGSession:
         # Every successful benchmark call, most recent last -- see
         # _wrap_benchmark. A caller like streamlit_llm_panel.py drains
         # this after handle_user_message() to turn it into plottable
-        # session entries; nothing here ever reaches the model.
+        # session entries; nothing here ever reaches the model. Only
+        # populated when capture_plots=True -- a plain CLI conversation
+        # (cli_supervisor_lqg.py) has no drain step, so left at the
+        # default it would otherwise retain every simulated trajectory
+        # for the life of the process.
+        self.capture_plots = capture_plots
         self.plot_calls = []
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT_LQG}]
 
@@ -120,25 +125,28 @@ class LQGSession:
     def _wrap_benchmark(self, fn):
         """Unlike supervisor_session_pid.Session, there's only one
         benchmark tool here and it always has a real plant (preset or
-        user-supplied custom A/B/C/D) -- so this always asks for
-        return_sim=True and pops "_sim_rows" (each row's .sim intact, not
-        JSON-safe) off the result before it goes anywhere near
-        json.dumps/the model.
+        user-supplied custom A/B/C/D) -- so whenever self.capture_plots
+        is True (see __init__), this asks for return_sim=True and pops
+        "_sim_rows" (each row's .sim intact, not JSON-safe) off the
+        result before it goes anywhere near json.dumps/the model.
+        capture_plots=False (the default) asks for return_sim=False
+        instead, skipping that simulation work entirely for a caller
+        (e.g. cli_supervisor_lqg.py) with no drain step to use it.
 
-        dict(kwargs, return_sim=True) rather than fn(**kwargs,
-        return_sim=True): the latter raises TypeError if a tool-calling
-        model ever echoes its own return_sim argument back (nothing in
-        RUN_LQG_BENCHMARK_SCHEMA forbids that) -- dict(...) lets an
-        injected kwarg win instead of crashing. Tagging with
-        result.get("plant_name") rather than "plant_preset": the preset
-        *key* collapses every custom plant to the constant "custom" (see
-        _build_custom_example), so two different custom plants benchmarked
-        in one conversation would otherwise get identical, indistinguishable
-        plot_calls tags -- plant_name is always the actual, distinguishing
-        name."""
+        dict(kwargs, return_sim=self.capture_plots) rather than
+        fn(**kwargs, return_sim=self.capture_plots): the latter raises
+        TypeError if a tool-calling model ever echoes its own return_sim
+        argument back (nothing in RUN_LQG_BENCHMARK_SCHEMA forbids that)
+        -- dict(...) lets an injected kwarg win instead of crashing.
+        Tagging with result.get("plant_name") rather than "plant_preset":
+        the preset *key* collapses every custom plant to the constant
+        "custom" (see _build_custom_example), so two different custom
+        plants benchmarked in one conversation would otherwise get
+        identical, indistinguishable plot_calls tags -- plant_name is
+        always the actual, distinguishing name."""
 
         def _wrapped(**kwargs):
-            result = fn(**dict(kwargs, return_sim=True))
+            result = fn(**dict(kwargs, return_sim=self.capture_plots))
             sim_rows = result.pop("_sim_rows", None)
             if result.get("ok") and "rows" in result:
                 for row in result["rows"]:

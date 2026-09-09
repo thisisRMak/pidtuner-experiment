@@ -267,11 +267,13 @@ class TestSessionToolLoop(unittest.TestCase):
 class TestSessionPlotCalls(unittest.TestCase):
     """plot_calls -- the side-channel streamlit_llm_panel.py drains into
     plottable session entries after each turn (see Session._wrap_benchmark's
-    docstring). Must never leak into what the model sees."""
+    docstring). Must never leak into what the model sees. capture_plots=True
+    here since these tests are exercising that capture; the default-off
+    case (a plain CLI-style Session) is covered separately below."""
 
     def _session(self, script):
         return Session(ScriptedClient(script), whitebox_tool=_fake_whitebox_tool(),
-                        blackbox_tool=_fake_blackbox_tool())
+                        blackbox_tool=_fake_blackbox_tool(), capture_plots=True)
 
     def test_whitebox_call_populates_plot_calls_with_sim_and_plant(self):
         script = [
@@ -340,6 +342,23 @@ class TestSessionPlotCalls(unittest.TestCase):
         benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_whitebox_benchmark")
         self.assertNotIn("_sim_rows", benchmark_msg["content"])
         json.loads(benchmark_msg["content"])  # must not have raised building it, either
+
+
+class TestSessionPlotCallsDefaultOff(unittest.TestCase):
+    """capture_plots defaults to False -- a plain CLI-style Session
+    (cli_supervisor_pid.py, which never drains plot_calls) must never
+    accumulate simulated trajectories for the life of the process."""
+
+    def test_whitebox_call_never_populates_plot_calls_by_default(self):
+        script = [
+            _response(tool_calls=[_tool_call("set_priorities", {"tf_known": True})]),
+            _response(tool_calls=[_tool_call("run_whitebox_benchmark", {"plant_tf": "1/(s+1)"})]),
+            _response(content="done"),
+        ]
+        session = Session(ScriptedClient(script), whitebox_tool=_fake_whitebox_tool(),
+                           blackbox_tool=_fake_blackbox_tool())
+        session.handle_user_message("go")
+        self.assertEqual(session.plot_calls, [])
 
 
 if __name__ == "__main__":

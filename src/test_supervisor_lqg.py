@@ -384,10 +384,13 @@ class TestLQGSessionToolLoop(unittest.TestCase):
 class TestLQGSessionPlotCalls(unittest.TestCase):
     """plot_calls -- the side-channel streamlit_llm_panel.py drains into
     plottable session entries after each turn (see LQGSession._wrap_
-    benchmark's docstring). Must never leak into what the model sees."""
+    benchmark's docstring). Must never leak into what the model sees.
+    capture_plots=True here since these tests are exercising that
+    capture; the default-off case (a plain CLI-style LQGSession) is
+    covered separately below."""
 
     def _session(self, script):
-        return LQGSession(ScriptedClient(script), lqg_tool=_fake_lqg_tool())
+        return LQGSession(ScriptedClient(script), lqg_tool=_fake_lqg_tool(), capture_plots=True)
 
     def test_benchmark_call_populates_plot_calls_with_sim_and_plant(self):
         script = [
@@ -424,7 +427,7 @@ class TestLQGSessionPlotCalls(unittest.TestCase):
                                              {"custom_plant": {"name": "My widget", "A": [[0]],
                                                                "B": [[1]], "C": [[1]]}})]),
             _response(content="done"),
-        ]), lqg_tool=(RUN_LQG_BENCHMARK_SCHEMA, fn))
+        ]), lqg_tool=(RUN_LQG_BENCHMARK_SCHEMA, fn), capture_plots=True)
         session.handle_user_message("go")
         # No rows -- sim_rows is [] (falsy-but-not-None), so plot_calls
         # still gets populated per the "is not None" guard.
@@ -441,6 +444,21 @@ class TestLQGSessionPlotCalls(unittest.TestCase):
         benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_lqg_benchmark")
         self.assertNotIn("_sim_rows", benchmark_msg["content"])
         json.loads(benchmark_msg["content"])  # must not have raised building it, either
+
+
+class TestLQGSessionPlotCallsDefaultOff(unittest.TestCase):
+    """capture_plots defaults to False -- a plain CLI-style LQGSession
+    (cli_supervisor_lqg.py, which never drains plot_calls) must never
+    accumulate simulated trajectories for the life of the process."""
+
+    def test_benchmark_call_never_populates_plot_calls_by_default(self):
+        script = [
+            _response(tool_calls=[_tool_call("run_lqg_benchmark", {"plant_preset": "aircraft_hall"})]),
+            _response(content="done"),
+        ]
+        session = LQGSession(ScriptedClient(script), lqg_tool=_fake_lqg_tool())
+        session.handle_user_message("go")
+        self.assertEqual(session.plot_calls, [])
 
 
 if __name__ == "__main__":

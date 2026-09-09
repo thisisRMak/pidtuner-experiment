@@ -135,8 +135,9 @@ def _log_exception(exc: Exception) -> None:
 def _new_session(provider: str, api_key: str, track: str, model: str):
     client = AnthropicClient(api_key=api_key, model=model)
     if track == "SISO / PID":
-        return Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL)
-    return LQGSession(client, lqg_tool=LQG_TOOL)
+        return Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL,
+                        capture_plots=True)
+    return LQGSession(client, lqg_tool=LQG_TOOL, capture_plots=True)
 
 
 def _render_key_entry():

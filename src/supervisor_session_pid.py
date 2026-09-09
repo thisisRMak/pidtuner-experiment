@@ -40,7 +40,7 @@ class Session:
     """
 
     def __init__(self, llm_client, whitebox_tool, blackbox_tool,
-                 max_tool_hops=MAX_TOOL_HOPS):
+                 max_tool_hops=MAX_TOOL_HOPS, capture_plots=False):
         self.client = llm_client
         self.max_tool_hops = max_tool_hops
         self.worksheet = PrioritiesWorksheet()
@@ -48,7 +48,12 @@ class Session:
         # Every successful sim-capable benchmark call, most recent last --
         # see _wrap_benchmark. A caller like streamlit_llm_panel.py drains
         # this after handle_user_message() to turn it into plottable
-        # session entries; nothing here ever reaches the model.
+        # session entries; nothing here ever reaches the model. Only
+        # populated when capture_plots=True -- a plain CLI conversation
+        # (cli_supervisor_pid.py) has no drain step, so left at the
+        # default it would otherwise retain every simulated trajectory
+        # for the life of the process.
+        self.capture_plots = capture_plots
         self.plot_calls = []
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -73,20 +78,25 @@ class Session:
         white-box tool. The black-box tool has no ground-truth plant to
         simulate against (see supervisor_tools_blackbox_pid.py's isolation
         contract), so it's called plain, with no return_sim and nothing
-        appended to plot_calls. When given, every successful call asks the
-        tool for return_sim=True and pops "_sim_rows" (row["sim"] intact,
-        not JSON-safe) off the result before it goes anywhere near
-        json.dumps/the model -- the model only ever sees exactly what it
-        saw before this existed. plot_calls also carries the call's raw
-        "delay" kwarg (0.0 if the model never passed one) alongside
-        "plant" -- both are the exact strings/numbers TransferFunction.
-        parse() takes, not a display-formatted plant, so a caller can
-        re-derive the plant this call actually ran against."""
+        appended to plot_calls. When given *and* self.capture_plots is
+        True, every successful call asks the tool for return_sim=True and
+        pops "_sim_rows" (row["sim"] intact, not JSON-safe) off the result
+        before it goes anywhere near json.dumps/the model -- the model
+        only ever sees exactly what it saw before this existed.
+        capture_plots=False (the default -- see __init__) skips the
+        return_sim request entirely, not just the plot_calls append: a
+        caller with no drain step gets neither the retained trajectories
+        nor the extra simulation work that produces them. plot_calls also
+        carries the call's raw "delay" kwarg (0.0 if the model never
+        passed one) alongside "plant" -- both are the exact strings/
+        numbers TransferFunction.parse() takes, not a display-formatted
+        plant, so a caller can re-derive the plant this call actually ran
+        against."""
 
         def _wrapped(**kwargs):
-            call_kwargs = dict(kwargs, return_sim=True) if kind else kwargs
+            call_kwargs = dict(kwargs, return_sim=True) if kind and self.capture_plots else kwargs
             result = fn(**call_kwargs)
-            sim_rows = result.pop("_sim_rows", None) if kind else None
+            sim_rows = result.pop("_sim_rows", None) if kind and self.capture_plots else None
             if result.get("ok") and "rows" in result:
                 for row in result["rows"]:
                     if row.get("stable", row.get("available")):
