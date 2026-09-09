@@ -52,6 +52,20 @@ PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
            "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
 
 
+def _assign_colors(entries):
+    """entry.color isn't a stored field (see gs.ControllerEntry) — it's
+    assigned here, by current list position, so removing/reordering
+    entries reflows the palette rather than leaving gaps. Used to only
+    run as a side effect of _render_session_list(), which was fine while
+    render() always called both halves together — now that
+    render_controls() (Mode=Manual only) and render_plots() (every Mode)
+    can run independently, render_plots() needs its own call too, or an
+    LLM-only session (no manual controls ever rendered this run) would
+    plot with unset colors."""
+    for i, entry in enumerate(entries):
+        entry.color = PALETTE[i % len(PALETTE)]
+
+
 def _download_fig_button(fig, filename, key):
     """PNG download button for a matplotlib Figure already shown via
     st.pyplot — used so the stacked Response/Heatmap/Radar views (no
@@ -314,7 +328,7 @@ def _do_tune(plant, method):
         return
     label = _next_label(method, st.session_state.get("halve_gains", False), sim)
     entry = gs.ControllerEntry(kind="siso", label=label, params=result.gains,
-                               result=result, sim=sim)
+                               result=result, sim=sim, plant=plant.pretty())
     entry.mrow = metric_row(plant, label, result.gains,
                             black_box=result.black_box, fopdt=result.fopdt)
     gs.add_controller(entry)
@@ -362,11 +376,48 @@ def _do_compare_all(plant):
                 continue
         entry = gs.ControllerEntry(
             kind="siso", label=row["name"] + _antiwindup_tag(sim),
-            params=gains, result=None, sim=sim)
+            params=gains, result=None, sim=sim, plant=plant.pretty())
         entry.mrow = row
         gs.add_controller(entry)
         n_ok += 1
     st.success(f"Compared {n_ok} methods. Untick any below to declutter.")
+
+
+def absorb_llm_rows(plant_id, rows):
+    """Turn raw run_whitebox_benchmark(return_sim=True) rows (row["sim"]
+    intact) into session entries — the same gs.ControllerEntry shape
+    _do_compare_all builds for a manual "Compare all methods" click, so
+    an LLM-triggered run lands in the same session list/plots/heatmap/
+    radar as a manual one, tagged source="llm" so the two are still
+    distinguishable. Called by streamlit_llm_panel.py's _drain_plot_calls
+    after each chat turn — see supervisor_session_pid.Session.plot_calls.
+    A row with no gains/sim (a method that failed) is skipped, same as
+    _do_compare_all's own guard."""
+    # plant_id is the raw plant_tf string the LLM passed (see
+    # supervisor_session_pid.Session's plant_of); re-parse it to the same
+    # pretty()-formatted form _render_plant_controls() tags manual entries
+    # with, so the same plant doesn't show two differently-formatted tags
+    # depending on who ran it. Falls back to the raw string on a parse
+    # failure -- cosmetic only, never blocks absorbing the rows themselves
+    # (the tool already parsed and simulated against this same string).
+    plant_label = plant_id
+    try:
+        plant_label = TransferFunction.parse(plant_id).pretty()
+    except Exception:
+        pass
+    n_ok = 0
+    for row in rows:
+        gains = row.get("gains")
+        sim = row.get("sim")
+        if gains is None or sim is None:
+            continue
+        entry = gs.ControllerEntry(
+            kind="siso", label=row["name"] + _antiwindup_tag(sim),
+            params=gains, result=None, sim=sim, source="llm", plant=plant_label)
+        entry.mrow = row
+        gs.add_controller(entry)
+        n_ok += 1
+    return n_ok
 
 
 # ── session list ─────────────────────────────────────────────────────────
@@ -408,8 +459,8 @@ def _render_session_list():
         gs.remove_unchecked_by_kind("siso")
     siso_entries = gs.get_by_kind("siso")
 
+    _assign_colors(siso_entries)
     for i, entry in enumerate(siso_entries):
-        entry.color = PALETTE[i % len(PALETTE)]
         c1, c2, c3 = st.columns([1, 3, 4])
         checkbox_key = f"siso_en_{entry.id}"
         # Once a widget's key has a value in session_state, Streamlit warns
@@ -422,9 +473,11 @@ def _render_session_list():
                               label_visibility="collapsed")
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
-        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}")
+        tag = "  🤖 LLM" if entry.source == "llm" else ""
+        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}{tag}")
         g = entry.params
-        c3.caption(f"Kp={g.Kp:.3g}  Ki={g.Ki:.3g}  Kd={g.Kd:.3g}")
+        plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
+        c3.caption(f"Kp={g.Kp:.3g}  Ki={g.Ki:.3g}  Kd={g.Kd:.3g}{plant_tag}")
 
 
 def _palette_name(hex_color):
@@ -546,40 +599,69 @@ def _render_last_result():
 
 
 # ── entry point ──────────────────────────────────────────────────────────
-def render():
-    controls, plots = st.columns([2, 3])
+# Every plant-form/sim-setting field this panel owns -- listed once so
+# render_controls() can preserve them all across a Track/Mode switch (see
+# streamlit_gui_state.preserve_widget_state's own note on why). Both
+# plant forms' fields are listed even though only one renders at a time
+# (siso_plant_form picks which) -- snapshot_widget_state skips whichever
+# one didn't render this turn, so this is harmless, not a second gap.
+# Method-specific arg widgets (pc_p1, zn1_step, ...) aren't included --
+# only one method's args render at a time even within an active Manual+
+# SISO session, so protecting those needs the same treatment applied
+# inside _render_method_args itself; not done here, narrower gap.
+_PROTECTED_KEYS = [
+    "siso_plant_form", "siso_tf_expr", "siso_gain", "siso_num", "siso_den", "siso_L",
+    "siso_method", "halve_gains",
+    "sp_kind", "sp_amp", "sp_t_end", "u_min", "u_max", "N", "antiwindup", "ka_override",
+]
 
-    with controls:
-        plant = _render_plant_controls()
 
-        st.subheader("Compare all methods")
-        if st.button("⊞  Compare all methods", key="siso_compare_all",
-                    disabled=plant is None):
-            _do_compare_all(plant)
+def render_controls():
+    """The left-hand controls half — called by streamlit_unified_panel.py
+    when Track=SISO/PID, Mode=Manual. Split from what used to be one
+    render() (see git history) so the unified layout can put this in its
+    own column and streamlit_llm_panel.py's chat can occupy the same slot
+    for Mode=LLM Supervisor instead, without the two ever coexisting in
+    the same script run — see streamlit_unified_panel.py's docstring for
+    why that matters."""
+    gs.preserve_widget_state(_PROTECTED_KEYS)
+    plant = _render_plant_controls()
 
-        st.subheader("Tune one method at a time")
-        method = st.selectbox("Method", METHODS, key="siso_method")
-        _render_method_args(method)
-        st.checkbox("Halve gains (divide Kp, Ki, Kd by 2)", value=False,
-                   key="halve_gains")
-        st.caption("Recommended for ZN-I/II when tracking setpoints.")
-        if st.button("Tune & simulate", key="siso_tune", disabled=plant is None):
-            _do_tune(plant, method)
+    st.subheader("Compare all methods")
+    if st.button("⊞  Compare all methods", key="siso_compare_all",
+                disabled=plant is None):
+        _do_compare_all(plant)
 
-        _render_sim_settings()
-        _render_session_list()
-        _render_last_result()
+    st.subheader("Tune one method at a time")
+    method = st.selectbox("Method", METHODS, key="siso_method")
+    _render_method_args(method)
+    st.checkbox("Halve gains (divide Kp, Ki, Kd by 2)", value=False,
+               key="halve_gains")
+    st.caption("Recommended for ZN-I/II when tracking setpoints.")
+    if st.button("Tune & simulate", key="siso_tune", disabled=plant is None):
+        _do_tune(plant, method)
 
-    with plots:
-        # Stacked vertically rather than switched via tabs/radio — the outer
-        # app already uses st.tabs for SISO/MIMO/LLM Chat, and nesting a
-        # second st.tabs inside one of those tabs renders unreliably in
-        # Streamlit's frontend (no error at the Python level, but the inner
-        # tab bar can end up invisible/non-interactive). A radio switch
-        # avoided that, but showing all three at once sidesteps it entirely.
-        st.subheader("Response")
-        _render_response_plot()
-        st.subheader("Heatmap")
-        scv.render_heatmap(_session_rows())
-        st.subheader("Radar")
-        scv.render_radar(_session_rows())
+    _render_sim_settings()
+    gs.snapshot_widget_state(_PROTECTED_KEYS)
+    _render_session_list()
+    _render_last_result()
+
+
+def render_plots():
+    """The right-hand plots half — called by streamlit_unified_panel.py
+    whenever Track=SISO/PID, regardless of Mode: entries in
+    gs.get_by_kind("siso") come from either the manual controls above or
+    streamlit_llm_panel.py's absorb_llm_rows(), tagged by entry.source,
+    so this reads and draws the same session list either way. Stacked
+    vertically rather than switched via tabs/radio — an inner st.tabs
+    nested inside the outer layout render unreliably in Streamlit's
+    frontend (no error at the Python level, but the inner tab bar can end
+    up invisible/non-interactive); showing all three at once sidesteps
+    that entirely."""
+    _assign_colors(gs.get_by_kind("siso"))
+    st.subheader("Response")
+    _render_response_plot()
+    st.subheader("Heatmap")
+    scv.render_heatmap(_session_rows())
+    st.subheader("Radar")
+    scv.render_radar(_session_rows())

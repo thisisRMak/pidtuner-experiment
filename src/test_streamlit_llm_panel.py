@@ -9,8 +9,15 @@ or:
 
 Covers: key-source gating (env/secrets-configured vs. session textbox),
 the model picker's contents/default, the cost warning, the unwired-provider
-path, and each exception branch's friendly message -- via a monkeypatched
-Session.handle_user_message so no real network call happens.
+path, each exception branch's friendly message -- via a monkeypatched
+Session.handle_user_message so no real network call happens -- and an
+LLM-triggered benchmark call landing in the same session entries a manual
+run would (source="llm" tagging, shared plots).
+
+Mode=LLM Supervisor isn't streamlit_unified_panel.py's default (Manual
+is) -- every test here selects it first via _run_app()/_send_and_get_reply,
+mirroring how test_streamlit_mimo_panel.py's _fresh_app() selects the
+MIMO/LQG Track first for the same reason.
 
 What this does NOT cover (see docs/gui_plan.md "Testing debt" for the
 general caveat, and this session's live Playwright check for the one thing
@@ -39,7 +46,20 @@ def _run_app(env=None):
     so with nothing pre-set it would otherwise happily load the real file."""
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
-        return AppTest.from_file(APP_PATH).run(timeout=30)
+        at = AppTest.from_file(APP_PATH).run(timeout=30)
+        at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+        return at
+
+
+class TestDefaultState(unittest.TestCase):
+    def test_manual_siso_is_the_unified_panel_default_not_llm_chat(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+        self.assertEqual(at.radio(key="unified_mode").value, "Manual")
+        self.assertEqual(at.radio(key="unified_track").value, "SISO / PID")
+        self.assertEqual(len(at.chat_input), 0, "no chat widgets until Mode=LLM Supervisor")
+        self.assertIn("siso_tf_expr", [ti.key for ti in at.text_input])
 
 
 class TestKeyGating(unittest.TestCase):
@@ -99,12 +119,13 @@ class TestChatErrorHandling(unittest.TestCase):
         from supervisor_session_pid import Session
 
         # ANTHROPIC_API_KEY must stay patched (and the real .env blocked --
-        # see _run_app) across *both* reruns -- the follow-up chat_input
-        # interaction below reruns the whole script too, and
-        # _configured_key() re-reads os.environ fresh every time.
+        # see _run_app) across *every* rerun in this block, including the
+        # Mode switch -- _configured_key() re-reads os.environ fresh every
+        # time.
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
              patch("streamlit_llm_panel.load_dotenv"):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             with patch.object(Session, "handle_user_message", side_effect=raise_exc):
                 at.chat_input[0].set_value("hello").run(timeout=30)
         self.assertEqual(at.exception[:], [], "a bad turn must not crash the app")
@@ -136,6 +157,106 @@ class TestChatErrorHandling(unittest.TestCase):
     def test_unexpected_exception_falls_back_to_generic_message(self):
         reply = self._send_and_get_reply(ValueError("something unrelated broke"))
         self.assertIn("check the server logs", reply)
+
+
+class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
+    """The point of streamlit_unified_panel.py's redesign: an LLM-triggered
+    benchmark call lands in the exact same gs.ControllerEntry list (and
+    plots) a manual "Compare all methods" click would, tagged source="llm"
+    -- not a separate plotting path. Uses the real
+    run_whitebox_benchmark(return_sim=True) output, not a hand-faked sim
+    object, so this exercises the exact shape absorb_llm_rows() has to
+    handle."""
+
+    def test_benchmark_call_creates_llm_tagged_entries_visible_in_manual_mode(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="Ran the comparison."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso"]
+            llm_entries = [e for e in entries if e.source == "llm"]
+            self.assertGreater(len(llm_entries), 0)
+            # absorb_llm_rows re-parses the raw plant_tf string into the
+            # same pretty()-formatted tag manual entries use (see its own
+            # docstring) -- not the raw string verbatim.
+            self.assertTrue(all(e.plant == "num=[1000.]  den=[10., 11.,  1.]  L=0 s   (order 2)"
+                                for e in llm_entries))
+
+            # Switching back to Manual mode must not crash, and the LLM
+            # tag must show up in the session list once Manual mode is
+            # showing it (siso_panel.render_controls() runs again here,
+            # since Track/Mode default to SISO/PID + Manual).
+            at.radio(key="unified_mode").set_value("Manual").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            markdowns = [m.value for m in at.markdown]
+            self.assertTrue(any("🤖 LLM" in m for m in markdowns))
+
+
+class TestPlotDrainCrashSafety(unittest.TestCase):
+    """A bug in absorb_llm_rows (a malformed row, a future regression)
+    must not crash the app or swallow the turn's already-computed reply
+    -- _drain_plot_calls() has its own try/except, separate from the one
+    around handle_user_message() itself."""
+
+    def test_a_broken_absorb_does_not_crash_or_lose_the_reply(self):
+        from supervisor_session_pid import Session
+        import streamlit_siso_panel
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(streamlit_siso_panel, "absorb_llm_rows",
+                          side_effect=RuntimeError("boom")):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({"kind": "siso", "plant": "1/(s+1)", "rows": [{}]})
+            with patch.object(Session, "handle_user_message", return_value="Here's the answer."):
+                at.chat_input[0].set_value("go").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        messages = [m.markdown[0].value for m in at.chat_message if m.markdown]
+        self.assertEqual(messages[-1], "Here's the answer.")
+
+
+class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
+    """Regression: Streamlit deletes a widget's session_state entry
+    whenever that widget isn't instantiated on a script run -- since
+    render_controls() only runs for Mode=LLM Supervisor, a session-only
+    API key/model choice used to reset to blank/default (and lock the
+    user out of chat_input) the moment they switched to Manual mode and
+    back. See streamlit_gui_state.preserve_widget_state/
+    snapshot_widget_state."""
+
+    def test_key_and_model_survive_a_round_trip_to_manual_and_back(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.text_input(key="llm_api_key_anthropic").set_value("sk-ant-my-real-key").run(timeout=30)
+            at.selectbox(key="llm_model").set_value("claude-sonnet-5").run(timeout=30)
+
+            at.radio(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.radio(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.session_state["llm_api_key_anthropic"], "sk-ant-my-real-key")
+        self.assertEqual(at.session_state["llm_model"], "claude-sonnet-5")
+        self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
 
 
 def _fake_response(status_code):

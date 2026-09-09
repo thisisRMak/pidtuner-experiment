@@ -45,29 +45,52 @@ class Session:
         self.max_tool_hops = max_tool_hops
         self.worksheet = PrioritiesWorksheet()
         self.known_stable_methods = set()
+        # Every successful sim-capable benchmark call, most recent last --
+        # see _wrap_benchmark. A caller like streamlit_llm_panel.py drains
+        # this after handle_user_message() to turn it into plottable
+        # session entries; nothing here ever reaches the model.
+        self.plot_calls = []
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         self._whitebox_schema, whitebox_fn = whitebox_tool
         self._blackbox_schema, blackbox_fn = blackbox_tool
 
         self._tool_fns = {
-            self._whitebox_schema["function"]["name"]: self._wrap_benchmark(whitebox_fn),
+            self._whitebox_schema["function"]["name"]: self._wrap_benchmark(
+                whitebox_fn, kind="siso", plant_of=lambda kwargs: kwargs.get("plant_tf")),
             self._blackbox_schema["function"]["name"]: self._wrap_benchmark(blackbox_fn),
             "set_priorities": make_set_priorities_tool(self.worksheet),
             "finalize_recommendation": make_finalize_recommendation_tool(self.known_stable_methods),
         }
 
-    def _wrap_benchmark(self, fn):
+    def _wrap_benchmark(self, fn, kind=None, plant_of=None):
         """Feed the grounding cache from every successful benchmark call,
         whichever entity it came from -- whitebox rows use 'stable',
-        blackbox rows use 'available'."""
+        blackbox rows use 'available'.
+
+        `kind`/`plant_of` are given only for a benchmark tool that can
+        produce plottable simulation traces -- currently just the
+        white-box tool. The black-box tool has no ground-truth plant to
+        simulate against (see supervisor_tools_blackbox_pid.py's isolation
+        contract), so it's called plain, with no return_sim and nothing
+        appended to plot_calls. When given, every successful call asks the
+        tool for return_sim=True and pops "_sim_rows" (row["sim"] intact,
+        not JSON-safe) off the result before it goes anywhere near
+        json.dumps/the model -- the model only ever sees exactly what it
+        saw before this existed."""
 
         def _wrapped(**kwargs):
-            result = fn(**kwargs)
+            call_kwargs = dict(kwargs, return_sim=True) if kind else kwargs
+            result = fn(**call_kwargs)
+            sim_rows = result.pop("_sim_rows", None) if kind else None
             if result.get("ok") and "rows" in result:
                 for row in result["rows"]:
                     if row.get("stable", row.get("available")):
                         self.known_stable_methods.add(row["name"])
+            if result.get("ok") and sim_rows is not None:
+                self.plot_calls.append({
+                    "kind": kind, "plant": plant_of(kwargs), "rows": sim_rows,
+                })
             return result
 
         return _wrapped

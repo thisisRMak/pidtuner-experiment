@@ -101,6 +101,11 @@ class LQGSession:
         self.max_tool_hops = max_tool_hops
         self.worksheet = LQGPrioritiesWorksheet()
         self.known_stable_methods = set()
+        # Every successful benchmark call, most recent last -- see
+        # _wrap_benchmark. A caller like streamlit_llm_panel.py drains
+        # this after handle_user_message() to turn it into plottable
+        # session entries; nothing here ever reaches the model.
+        self.plot_calls = []
         self.messages = [{"role": "system", "content": SYSTEM_PROMPT_LQG}]
 
         self._lqg_schema, lqg_fn = lqg_tool
@@ -113,12 +118,36 @@ class LQGSession:
         }
 
     def _wrap_benchmark(self, fn):
+        """Unlike supervisor_session_pid.Session, there's only one
+        benchmark tool here and it always has a real plant (preset or
+        user-supplied custom A/B/C/D) -- so this always asks for
+        return_sim=True and pops "_sim_rows" (each row's .sim intact, not
+        JSON-safe) off the result before it goes anywhere near
+        json.dumps/the model.
+
+        dict(kwargs, return_sim=True) rather than fn(**kwargs,
+        return_sim=True): the latter raises TypeError if a tool-calling
+        model ever echoes its own return_sim argument back (nothing in
+        RUN_LQG_BENCHMARK_SCHEMA forbids that) -- dict(...) lets an
+        injected kwarg win instead of crashing. Tagging with
+        result.get("plant_name") rather than "plant_preset": the preset
+        *key* collapses every custom plant to the constant "custom" (see
+        _build_custom_example), so two different custom plants benchmarked
+        in one conversation would otherwise get identical, indistinguishable
+        plot_calls tags -- plant_name is always the actual, distinguishing
+        name."""
+
         def _wrapped(**kwargs):
-            result = fn(**kwargs)
+            result = fn(**dict(kwargs, return_sim=True))
+            sim_rows = result.pop("_sim_rows", None)
             if result.get("ok") and "rows" in result:
                 for row in result["rows"]:
                     if row.get("stable"):
                         self.known_stable_methods.add(row["name"])
+            if result.get("ok") and sim_rows is not None:
+                self.plot_calls.append({
+                    "kind": "mimo", "plant": result.get("plant_name"), "rows": sim_rows,
+                })
             return result
 
         return _wrapped

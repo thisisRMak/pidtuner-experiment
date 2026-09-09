@@ -62,6 +62,15 @@ PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
            "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
 
 
+def _assign_colors(entries):
+    """entry.color isn't a stored field (see gs.ControllerEntry) — it's
+    assigned here, by current list position. See
+    streamlit_siso_panel.py's own _assign_colors() docstring for why
+    render_plots() needs its own call, not just _render_session_list()'s."""
+    for i, entry in enumerate(entries):
+        entry.color = PALETTE[i % len(PALETTE)]
+
+
 def _broadcast(text, n):
     """Parse a comma/space-separated numeric text field into an array of
     length n — one value broadcasts to all n, matching cli_lqg.py's
@@ -241,7 +250,7 @@ def _do_design(method, ex):
         return
     label = _next_label(method, ex)
     entry = gs.ControllerEntry(kind="mimo", label=label, params=result,
-                               result=result, sim=sim)
+                               result=result, sim=sim, plant=ex.name)
     entry.checks = checks_for_result(result)
     gs.add_controller(entry)
     st.session_state["mimo_last_result"] = (result, sim, entry.checks)
@@ -384,10 +393,31 @@ def _do_compare_all(ex):
     for row in rows:
         entry = gs.ControllerEntry(
             kind="mimo", label=f"{row.name} ({ex.key})",
-            params=row.result, result=row.result, sim=row.sim)
+            params=row.result, result=row.result, sim=row.sim, plant=ex.name)
         entry.checks = row.checks
         gs.add_controller(entry)
     st.success(f"Compared {len(rows)} regulator-family methods. Untick any below to declutter.")
+
+
+def absorb_llm_rows(plant_id, rows):
+    """Turn raw run_lqg_benchmark(return_sim=True) rows (ComparisonRow
+    objects, .sim intact) into session entries — the same gs.
+    ControllerEntry shape _do_compare_all builds for a manual "Compare
+    all methods" click, so an LLM-triggered run lands in the same
+    session list/plots as a manual one, tagged source="llm". Called by
+    streamlit_llm_panel.py's _drain_plot_calls after each chat turn —
+    see supervisor_session_lqg.LQGSession.plot_calls."""
+    n_ok = 0
+    for row in rows:
+        if row.sim is None:
+            continue
+        entry = gs.ControllerEntry(
+            kind="mimo", label=row.name, params=row.result,
+            result=row.result, sim=row.sim, source="llm", plant=plant_id)
+        entry.checks = row.checks
+        gs.add_controller(entry)
+        n_ok += 1
+    return n_ok
 
 
 # ── session list ─────────────────────────────────────────────────────────
@@ -413,18 +443,20 @@ def _render_session_list():
         gs.remove_unchecked_by_kind("mimo")
     mimo_entries = gs.get_by_kind("mimo")
 
+    _assign_colors(mimo_entries)
     for i, entry in enumerate(mimo_entries):
-        entry.color = PALETTE[i % len(PALETTE)]
         c1, c2, c3 = st.columns([1, 3, 4])
         checkbox_key = f"mimo_en_{entry.id}"
         st.session_state.setdefault(checkbox_key, entry.enabled)
         enabled = c1.checkbox("enabled", key=checkbox_key, label_visibility="collapsed")
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
-        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}")
+        tag = "  🤖 LLM" if entry.source == "llm" else ""
+        c2.markdown(f":large_{_palette_name(entry.color)}_circle: {entry.label}{tag}")
         stable = "stable" if entry.result.is_stable() else "UNSTABLE"
         checks_ok = all(c.passed for cs in (entry.checks or {}).values() for c in cs)
-        c3.caption(f"{stable}, checks {'PASS' if checks_ok else 'FAIL'}")
+        plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
+        c3.caption(f"{stable}, checks {'PASS' if checks_ok else 'FAIL'}{plant_tag}")
 
 
 def _palette_name(hex_color):
@@ -512,52 +544,75 @@ def _render_last_result():
 
 
 # ── entry point ──────────────────────────────────────────────────────────
-def render():
-    controls, plots = st.columns([2, 3])
+# Every plant/sim-setting field this panel owns -- see streamlit_siso_
+# panel.py's own _PROTECTED_KEYS comment for why these need listing (both
+# plant sources' fields included even though only one renders at a time;
+# method-specific args, e.g. mimo_Q_diag, deliberately not included, same
+# narrower-gap reasoning as the SISO side).
+_PROTECTED_KEYS = [
+    "mimo_plant_source", "mimo_preset",
+    "mimo_custom_name", "mimo_custom_A", "mimo_custom_B", "mimo_custom_C", "mimo_custom_D",
+    "mimo_method",
+    "mimo_t_end", "mimo_dt", "mimo_ref_tracking", "mimo_reference",
+    "mimo_pcs_t_max", "mimo_pcs_y_max",
+]
 
-    with controls:
-        ex = _render_plant_controls()
 
-        st.subheader("Compare all methods")
-        if st.button("⊞  Compare all methods", key="mimo_compare_all",
-                    disabled=ex is None):
-            _do_compare_all(ex)
+def render_controls():
+    """The left-hand controls half — called by streamlit_unified_panel.py
+    when Track=MIMO/LQR-LQG, Mode=Manual. Split from what used to be one
+    render() (see git history), mirroring streamlit_siso_panel.py's own
+    split — see its render_controls() docstring for why."""
+    gs.preserve_widget_state(_PROTECTED_KEYS)
+    ex = _render_plant_controls()
 
-        st.subheader("4-curve comparison")
-        st.caption("Bryson's rule / Output-weighted LQR / Implicit / Explicit "
-                  "model-following, step response overlaid per output channel "
-                  "(2026-08-18 meeting notes item 5).")
-        if st.button("⊞  4-curve comparison", key="mimo_four_curve_btn",
-                    disabled=ex is None):
-            _do_four_curve(ex)
+    st.subheader("Compare all methods")
+    if st.button("⊞  Compare all methods", key="mimo_compare_all",
+                disabled=ex is None):
+        _do_compare_all(ex)
 
-        st.subheader("Design one method at a time")
-        method = st.selectbox("Method", METHODS, key="mimo_method")
-        if ex is not None:
-            _render_method_args(method, ex)
-        if st.button("Design & simulate", key="mimo_design", disabled=ex is None):
-            _do_design(method, ex)
+    st.subheader("4-curve comparison")
+    st.caption("Bryson's rule / Output-weighted LQR / Implicit / Explicit "
+              "model-following, step response overlaid per output channel "
+              "(2026-08-18 meeting notes item 5).")
+    if st.button("⊞  4-curve comparison", key="mimo_four_curve_btn",
+                disabled=ex is None):
+        _do_four_curve(ex)
 
-        _render_sim_settings()
+    st.subheader("Design one method at a time")
+    method = st.selectbox("Method", METHODS, key="mimo_method")
+    if ex is not None:
+        _render_method_args(method, ex)
+    if st.button("Design & simulate", key="mimo_design", disabled=ex is None):
+        _do_design(method, ex)
 
-        st.subheader("Per-channel step response")
-        st.caption("Steps each reference channel individually (others held at 0), "
-                  "reporting the response across all outputs — matching MATLAB's "
-                  "default step() grid, as opposed to the combined simultaneous "
-                  "step above. Requires the last design above to have been run "
-                  "with Reference tracking checked.")
-        pcs_cols = st.columns(2)
-        pcs_cols[0].text_input("Grid t_max (blank = auto-cropped)", value="",
-                               key="mimo_pcs_t_max")
-        pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", value="",
-                               key="mimo_pcs_y_max")
-        if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
-            _do_per_channel_step()
+    _render_sim_settings()
 
-        _render_session_list()
-        _render_last_result()
+    st.subheader("Per-channel step response")
+    st.caption("Steps each reference channel individually (others held at 0), "
+              "reporting the response across all outputs — matching MATLAB's "
+              "default step() grid, as opposed to the combined simultaneous "
+              "step above. Requires the last design above to have been run "
+              "with Reference tracking checked.")
+    pcs_cols = st.columns(2)
+    pcs_cols[0].text_input("Grid t_max (blank = auto-cropped)", value="",
+                           key="mimo_pcs_t_max")
+    pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", value="",
+                           key="mimo_pcs_y_max")
+    if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
+        _do_per_channel_step()
 
-    with plots:
-        _render_response_plot()
-        _render_four_curve_plot()
-        _render_per_channel_step_plot()
+    gs.snapshot_widget_state(_PROTECTED_KEYS)
+    _render_session_list()
+    _render_last_result()
+
+
+def render_plots():
+    """The right-hand plots half — called by streamlit_unified_panel.py
+    whenever Track=MIMO/LQR-LQG, regardless of Mode — see
+    streamlit_siso_panel.py's render_plots() docstring for why entries
+    from both Manual and LLM Supervisor mode show up here the same way."""
+    _assign_colors(gs.get_by_kind("mimo"))
+    _render_response_plot()
+    _render_four_curve_plot()
+    _render_per_channel_step_plot()

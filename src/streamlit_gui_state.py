@@ -32,6 +32,17 @@ class ControllerEntry:
     stores PIDGains/TuningResult/ClosedLoopResult objects, MIMO stores
     its own LQR/LQG equivalents. The session-list machinery (add,
     remove, enable/disable) doesn't need to know which.
+
+    `source`/`plant` are provenance tags — who triggered this run ("you"
+    via the manual controls, or "llm" via the chat's supervisor tool
+    calls, see streamlit_llm_panel.py's absorb_llm_rows() calls) and
+    which plant it ran against. Both entries a manual run and an
+    LLM-triggered one land in this same list (streamlit_unified_panel.py
+    doesn't separate them), so the session list can show the tag rather
+    than silently mixing runs from different origins or plants into one
+    overlay. Both optional: existing call sites that don't pass them get
+    the "you"/"" defaults, correct for every entry that predates this
+    field.
     """
 
     kind: Literal["siso", "mimo"]
@@ -43,6 +54,8 @@ class ControllerEntry:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     mrow: Any = None    # cached pid_compare.metric_row() (SISO), for heatmap/radar
     checks: Any = None  # cached lqg_checks.checks_for_result() (MIMO)
+    source: Literal["you", "llm"] = "you"
+    plant: str = ""
 
 
 def init_state() -> None:
@@ -119,3 +132,41 @@ def append_chat_message(role: Literal["user", "assistant"], content: str) -> Non
 
 def clear_chat() -> None:
     st.session_state[CHAT_KEY] = []
+
+
+# ── widget state across a Mode/Track switch ─────────────────────────────
+# Streamlit deletes a widget's session_state entry whenever that widget
+# isn't instantiated on a script run (confirmed directly via a live
+# AppTest repro, not assumed). streamlit_unified_panel.py's
+# Track/Mode dispatch means exactly one of siso_panel/mimo_panel/
+# llm_panel's render_controls() runs per script run, so every OTHER
+# panel's widgets get wiped the moment you're not looking at them --
+# without this, switching Track or Mode away and back resets every
+# field in the panel you left (a plant you typed in, an API key,
+# whatever) back to its hardcoded default. The fix: mirror each key into
+# a shadow entry that's never itself a widget's `key=` (so Streamlit
+# never reclaims it), then reseed the real key from the shadow right
+# before the widget using it is instantiated again -- the same
+# "pre-set session_state before creating the widget" trick
+# streamlit_siso_panel.py's own "Select all" button already relies on.
+_SHADOW_PREFIX = "_shadow__"
+
+
+def preserve_widget_state(keys) -> None:
+    """Call at the very top of a render function, before any of `keys`'
+    widgets are instantiated. Pair with snapshot_widget_state(keys) after
+    they've all rendered -- see the module note above."""
+    for key in keys:
+        shadow_key = _SHADOW_PREFIX + key
+        if key not in st.session_state and shadow_key in st.session_state:
+            st.session_state[key] = st.session_state[shadow_key]
+
+
+def snapshot_widget_state(keys) -> None:
+    """Call once `keys`' widgets have all rendered and hold this turn's
+    values -- see preserve_widget_state(). A key that didn't render this
+    turn (e.g. a method-specific field for a method that isn't currently
+    selected) is simply skipped, not treated as cleared."""
+    for key in keys:
+        if key in st.session_state:
+            st.session_state[_SHADOW_PREFIX + key] = st.session_state[key]
