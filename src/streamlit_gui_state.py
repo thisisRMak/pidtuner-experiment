@@ -182,3 +182,18 @@ def snapshot_widget_state(keys) -> None:
     for key in keys:
         if key in st.session_state:
             st.session_state[_SHADOW_PREFIX + key] = st.session_state[key]
+
+
+def peek(key: str, default=None):
+    """`key`'s live widget value if it rendered this run, else whatever
+    snapshot_widget_state() last saved for it -- so a caller can read
+    another panel's widget state without that panel's own widgets having
+    rendered this run at all (unlike preserve_widget_state(), this never
+    writes `key` back into session_state). Used by streamlit_llm_panel.
+    py's Manual-mode plant hint to read the SISO/MIMO panels' plant
+    widgets while Mode=LLM Supervisor is showing instead. Returns
+    `default` if neither is set -- e.g. that panel hasn't rendered even
+    once yet this session."""
+    if key in st.session_state:
+        return st.session_state[key]
+    return st.session_state.get(_SHADOW_PREFIX + key, default)

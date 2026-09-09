@@ -115,6 +115,28 @@ def _render_custom_plant_controls():
     return ex
 
 
+def current_manual_plant_name() -> str | None:
+    """ex.name for the plant currently sitting in this panel's own plant
+    widgets, read via their shadow state (gs.peek()) rather than
+    requiring the widgets to have rendered this run -- see streamlit_
+    siso_panel.current_manual_plant()'s twin docstring for why. Same
+    name ControllerEntry.plant already carries for both a manual
+    "Compare all methods" entry and an LLM-tagged one (see absorb_llm_
+    rows()/_do_compare_all()), so the hint's caller can compare it
+    against existing LLM entries directly. Returns None if Manual/MIMO
+    hasn't rendered at least once this session (no shadow state yet) or
+    its preset key no longer resolves."""
+    source = gs.peek("mimo_plant_source")
+    if source is None:
+        return None
+    if source == "Custom (MATLAB matrix entry)":
+        return gs.peek("mimo_custom_name") or "Custom plant"
+    try:
+        return load_example(gs.peek("mimo_preset")).name
+    except Exception:
+        return None
+
+
 def _render_plant_controls():
     st.subheader("Plant")
     st.radio("Source", ["Preset", "Custom (MATLAB matrix entry)"],

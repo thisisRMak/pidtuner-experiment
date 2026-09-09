@@ -89,6 +89,35 @@ def _build_plant():
     return TransferFunction.from_coeffs(num=num, den=den, L=L, gain=gain)
 
 
+def current_manual_plant() -> str | None:
+    """The pretty()-formatted plant currently sitting in this panel's own
+    plant widgets, read via their shadow state (gs.peek()) rather than
+    requiring the widgets to have rendered this run -- so Mode=LLM
+    Supervisor can show a "you were just looking at this plant" hint
+    (streamlit_llm_panel._render_manual_plant_hint) without instantiating
+    Manual mode's own controls. Same pretty()-formatted string
+    ControllerEntry.plant already carries, so the hint's caller can
+    compare it against existing LLM entries directly. Returns None if
+    Manual/SISO hasn't rendered at least once this session (no shadow
+    state yet) or its plant doesn't currently parse -- mirrors
+    _build_plant()'s own try/except in _render_plant_controls()."""
+    form = gs.peek("siso_plant_form")
+    if form is None:
+        return None
+    L = gs.peek("siso_L", 0.0)
+    try:
+        if form == "Symbolic":
+            plant = TransferFunction.parse(gs.peek("siso_tf_expr", ""), L=L)
+        else:
+            gain = float(gs.peek("siso_gain"))
+            num = parse_coeff_list(gs.peek("siso_num"))
+            den = parse_coeff_list(gs.peek("siso_den"))
+            plant = TransferFunction.from_coeffs(num=num, den=den, L=L, gain=gain)
+        return plant.pretty()
+    except Exception:
+        return None
+
+
 def _render_plant_controls():
     st.subheader("Plant G(s)")
     st.radio("Plant form", ["Symbolic", "MATLAB coefficients"],

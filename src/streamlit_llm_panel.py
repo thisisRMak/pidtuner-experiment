@@ -175,6 +175,36 @@ def _render_key_entry():
 _PROTECTED_KEYS = ["llm_provider", "llm_api_key_anthropic", "llm_api_key_openai",
                    "llm_api_key_gemini", "llm_model"]
 
+_TRACK_KIND = {"SISO / PID": "siso", "MIMO / LQG": "mimo"}
+
+
+def _render_manual_plant_hint(track):
+    """"Currently in Manual mode: <plant> — mention this to the
+    supervisor to pick up where you left off.", shown only when Manual
+    mode currently holds a plant for this Track that no LLM-sourced
+    entry already covers. The mirror image of streamlit_siso_panel.
+    _render_llm_plant_carryover()'s "Load this plant" affordance, but
+    hint-only: st.chat_input has no pre-fill mechanism, and firing a
+    real, billed API call from a click was explicitly ruled out (see the
+    module docstring's Key resolution note on cost) -- so there's
+    nothing to click here, just a nudge to mention it.
+
+    Reads Manual mode's plant via its shadow state rather than requiring
+    Manual's own widgets to have rendered this run -- see streamlit_siso_
+    panel.current_manual_plant()/streamlit_mimo_panel.current_manual_
+    plant_name()."""
+    if track == "SISO / PID":
+        plant = siso_panel.current_manual_plant()
+    else:
+        plant = mimo_panel.current_manual_plant_name()
+    if plant is None:
+        return
+    kind = _TRACK_KIND[track]
+    if any(e.plant == plant for e in gs.get_by_kind(kind) if e.source == "llm"):
+        return
+    st.caption(f"Currently in Manual mode: {plant} — mention this to the "
+               "supervisor to pick up where you left off.")
+
 
 def render_controls(track):
     """The left-hand controls half for Mode=LLM Supervisor — called by
@@ -217,6 +247,8 @@ def render_controls(track):
     if st.button("Reset conversation", key="llm_reset"):
         st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
         gs.clear_chat()
+
+    _render_manual_plant_hint(track)
 
     # Reserving this container before chat_input (below) puts it above
     # chat_input in the DOM regardless of Streamlit's own auto-bottom-pin

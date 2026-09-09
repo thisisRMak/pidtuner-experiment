@@ -259,6 +259,70 @@ class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
         self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
 
 
+class TestManualPlantHint(unittest.TestCase):
+    """Regression: Mode=LLM Supervisor nudges the visitor to mention
+    whatever plant is still sitting in Manual mode's own widgets -- see
+    streamlit_llm_panel._render_manual_plant_hint(). The mirror image of
+    test_streamlit_siso_panel.TestLlmPlantCarryoverAffordance's "Load
+    this plant" affordance, which mirrors this same style."""
+
+    def test_hint_shows_the_default_manual_siso_plant_once_llm_mode_is_active(self):
+        # Track/Mode default to SISO/PID + Manual, so Manual/SISO's own
+        # render_controls() -- with the default siso_tf_expr value --
+        # already ran once before _run_app() switches to LLM Supervisor.
+        at = _run_app({"ANTHROPIC_API_KEY": "sk-ant-test"})
+        captions = [c.value for c in at.caption]
+        self.assertTrue(any("Currently in Manual mode:" in c for c in captions))
+        self.assertTrue(any("num=[1000.]" in c for c in captions),
+                         "should show the default siso_tf_expr's plant")
+
+    def test_hint_hides_once_an_llm_entry_already_covers_that_plant(self):
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+
+        at = _run_app({"ANTHROPIC_API_KEY": "sk-ant-test"})
+        session = at.session_state["llm_session_obj"]
+        session.plot_calls.append({
+            "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+            "rows": real_result["_sim_rows"],
+        })
+        with patch.object(Session, "handle_user_message", return_value="Ran it."):
+            at.chat_input[0].set_value("tune it").run(timeout=30)
+        self.assertEqual(at.exception[:], [])
+
+        captions = [c.value for c in at.caption]
+        self.assertFalse(any("Currently in Manual mode:" in c for c in captions),
+                          "must not nudge to mention a plant the supervisor already analyzed")
+
+    def test_hint_absent_for_mimo_track_when_manual_mimo_never_rendered(self):
+        # Mode switches to LLM Supervisor while Track is still SISO/PID
+        # (Manual/MIMO's own widgets never instantiated this session), so
+        # gs.peek("mimo_plant_source") has no shadow state to fall back
+        # on once the Track switch below brings up the MIMO/LQG hint.
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+        captions = [c.value for c in at.caption]
+        self.assertFalse(any("Currently in Manual mode:" in c for c in captions),
+                          "Manual/MIMO never rendered this session -- nothing to hint at")
+
+    def test_hint_shows_the_mimo_preset_once_manual_mimo_has_rendered(self):
+        from lqg_examples import load_example
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            preset = at.selectbox(key="mimo_preset").value
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+        captions = [c.value for c in at.caption]
+        self.assertTrue(any(load_example(preset).name in c for c in captions))
+
+
 def _fake_response(status_code):
     import httpx2
     request = httpx2.Request("POST", "https://api.anthropic.com")
