@@ -69,11 +69,18 @@ executable. This changes what "accessible" means here:
 
 ## Build plan
 
-1. **DONE.** App skeleton and multi-panel structure. `streamlit_app.py`,
-   `st.tabs` for the three top-level sections (SISO PID / MIMO LQR-LQG /
-   LLM chat) — resolved in favor of tabs over a sidebar radio (see
-   Resolved decisions below). *Check: app launches, all three sections
-   render, no backend calls yet. Verified.*
+1. **DONE, later superseded.** App skeleton and multi-panel structure.
+   `streamlit_app.py`, `st.tabs` for the three top-level sections (SISO
+   PID / MIMO LQR-LQG / LLM chat) — resolved in favor of tabs over a
+   sidebar radio (see Resolved decisions below). *Check: app launches,
+   all three sections render, no backend calls yet. Verified.*
+   **Superseded**: `st.tabs` was later dropped entirely in favor of a
+   single-page layout (`streamlit_unified_panel.py`) with two
+   `st.segmented_control` selectors — Track (SISO/PID, MIMO/LQG) and
+   Mode (Manual, LLM Supervisor) — so the LLM Supervisor chat's own
+   benchmark runs could land in the same session list/plots as a
+   manual run instead of being chat-only. See the "Resolved decisions"
+   entry below.
 2. **DONE.** Session-state design for the tuned-controllers list.
    `streamlit_gui_state.py` — `ControllerEntry` dataclass (kind/label/
    params/result/sim/enabled/id/mrow) plus a full mutation contract
@@ -194,15 +201,23 @@ per-view download buttons change:
 
 ## Resolved decisions
 
-- **Tabs, not sidebar** — `st.tabs` for the three top-level panels.
-  Within a panel with its own sub-views (SISO's Response/Heatmap/Radar),
-  avoid a nested `st.tabs` — Streamlit allows nesting tabs at the Python
-  level with no error, but the inner tab bar can render
-  invisible/non-interactive in the actual frontend. Found live, not
-  caught by `AppTest`. Originally worked around with a radio switch
-  between the three views; later changed to showing all three stacked
-  vertically instead (each individually downloadable), which sidesteps
-  the nested-tabs bug just as well.
+- **Tabs, not sidebar — superseded.** `st.tabs` for the three top-level
+  panels, originally chosen over a sidebar radio. Within a panel with
+  its own sub-views (SISO's Response/Heatmap/Radar), avoid a nested
+  `st.tabs` — Streamlit allows nesting tabs at the Python level with no
+  error, but the inner tab bar can render invisible/non-interactive in
+  the actual frontend. Found live, not caught by `AppTest`. Originally
+  worked around with a radio switch between the three views; later
+  changed to showing all three stacked vertically instead (each
+  individually downloadable), which sidesteps the nested-tabs bug just
+  as well — that part still stands. The top-level `st.tabs` choice
+  itself does not: the app now has no tabs at all. It's a single page
+  (`streamlit_unified_panel.py`) with a Track selector (SISO/PID,
+  MIMO/LQG) and a Mode selector (Manual, LLM Supervisor), both
+  `st.segmented_control`, so a Manual run and an LLM Supervisor run
+  against the same Track share one session list/plot instead of living
+  in separate tabs. Driven by wanting the LLM Supervisor chat to show
+  the same plots Manual mode does, without a tab switch to see them.
 - **Chat history: ephemeral**, `st.session_state` only, lost on
   refresh — no persistence layer for v1.
 - **File naming: flat `src/`, `streamlit_` prefix** — not a `src/webapp/`
