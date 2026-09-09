@@ -145,6 +145,44 @@ def set_all_enabled_by_kind(kind: str, value: bool) -> None:
             e.enabled = value
 
 
+# ── session-overlay color assignment ────────────────────────────────────
+# entry.color isn't a stored field (see ControllerEntry) — it's assigned
+# here, by current list position, so removing/reordering entries reflows
+# the palette rather than leaving gaps. Was duplicated byte-for-byte
+# between streamlit_siso_panel.py and streamlit_mimo_panel.py; both call
+# this from their own render_plots() (as well as _render_session_list()),
+# since render_controls() (Mode=Manual only) and render_plots() (every
+# Mode) can run independently -- an LLM-only session (no manual controls
+# ever rendered this run) would otherwise plot with unset colors.
+PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
+           "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
+           "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
+
+
+def assign_colors(entries) -> None:
+    for i, entry in enumerate(entries):
+        entry.color = PALETTE[i % len(PALETTE)]
+
+
+# ── LLM-triggered session entries ───────────────────────────────────────
+def add_llm_entry(*, kind: str, label: str, params: Any, result: Any,
+                   sim: Any, plant: str, **extra) -> ControllerEntry:
+    """Shared entry-construction tail for absorb_llm_rows() in both
+    streamlit_siso_panel.py and streamlit_mimo_panel.py: builds a
+    ControllerEntry tagged source="llm", adds it to the session, and
+    returns it so the caller can attach its own kind-specific field
+    (mrow for SISO, checks for MIMO) before moving to the next row.
+    `extra` covers ControllerEntry kwargs that only one caller passes
+    (SISO's plant_tf/plant_L) -- the row-shape differences themselves
+    (dict vs. object access, the reuse-vs-resimulate check) stay local
+    to each panel."""
+    entry = ControllerEntry(kind=kind, label=label, params=params,
+                             result=result, sim=sim, source="llm",
+                             plant=plant, **extra)
+    add_controller(entry)
+    return entry
+
+
 def append_chat_message(role: Literal["user", "assistant"], content: str) -> None:
     st.session_state[CHAT_KEY].append({"role": role, "content": content})
 

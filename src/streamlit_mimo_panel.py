@@ -57,20 +57,6 @@ METHODS = [
     "LQG (Kalman filter)",
 ]
 
-PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-           "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
-           "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
-
-
-def _assign_colors(entries):
-    """entry.color isn't a stored field (see gs.ControllerEntry) — it's
-    assigned here, by current list position. See
-    streamlit_siso_panel.py's own _assign_colors() docstring for why
-    render_plots() needs its own call, not just _render_session_list()'s."""
-    for i, entry in enumerate(entries):
-        entry.color = PALETTE[i % len(PALETTE)]
-
-
 def _broadcast(text, n):
     """Parse a comma/space-separated numeric text field into an array of
     length n — one value broadcasts to all n, matching cli_lqg.py's
@@ -409,7 +395,7 @@ def _render_four_curve_plot():
     for j in range(ny):
         ax = axes[j]
         ax.plot(t[:idx_target], xm_ref[:idx_target, j], "k--", linewidth=1.5, label="target model xm")
-        for row, color in zip(rows, PALETTE):
+        for row, color in zip(rows, gs.PALETTE):
             idx_row = _crop_idx(row.sim.t, t_max)
             ax.plot(row.sim.t[:idx_row], row.sim.y[:idx_row, j], color=color, label=row.name, linewidth=1.3)
         ax.set_ylabel(f"y{j}(t)")
@@ -449,11 +435,10 @@ def absorb_llm_rows(plant_id, rows):
     for row in rows:
         if row.sim is None:
             continue
-        entry = gs.ControllerEntry(
+        entry = gs.add_llm_entry(
             kind="mimo", label=row.name, params=row.result,
-            result=row.result, sim=row.sim, source="llm", plant=plant_id)
+            result=row.result, sim=row.sim, plant=plant_id)
         entry.checks = row.checks
-        gs.add_controller(entry)
         n_ok += 1
     return n_ok
 
@@ -481,7 +466,7 @@ def _render_session_list():
         gs.remove_unchecked_by_kind("mimo")
     mimo_entries = gs.get_by_kind("mimo")
 
-    _assign_colors(mimo_entries)
+    gs.assign_colors(mimo_entries)
     for i, entry in enumerate(mimo_entries):
         c1, c2, c3 = st.columns([1, 3, 4])
         checkbox_key = f"mimo_en_{entry.id}"
@@ -659,7 +644,7 @@ def render_plots():
     whenever Track=MIMO/LQR-LQG, regardless of Mode — see
     streamlit_siso_panel.py's render_plots() docstring for why entries
     from both Manual and LLM Supervisor mode show up here the same way."""
-    _assign_colors(gs.get_by_kind("mimo"))
+    gs.assign_colors(gs.get_by_kind("mimo"))
     _render_response_plot()
     _render_four_curve_plot()
     _render_per_channel_step_plot()

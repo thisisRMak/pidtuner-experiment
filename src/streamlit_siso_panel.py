@@ -47,25 +47,6 @@ METHODS = [
     "9. Tyreus–Luyben (ultimate gain)",
 ]
 
-PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-           "#ff7f0e", "#17becf", "#8c564b", "#e377c2",
-           "#7f7f7f", "#bcbd22", "#393b79", "#ad494a"]
-
-
-def _assign_colors(entries):
-    """entry.color isn't a stored field (see gs.ControllerEntry) — it's
-    assigned here, by current list position, so removing/reordering
-    entries reflows the palette rather than leaving gaps. Used to only
-    run as a side effect of _render_session_list(), which was fine while
-    render() always called both halves together — now that
-    render_controls() (Mode=Manual only) and render_plots() (every Mode)
-    can run independently, render_plots() needs its own call too, or an
-    LLM-only session (no manual controls ever rendered this run) would
-    plot with unset colors."""
-    for i, entry in enumerate(entries):
-        entry.color = PALETTE[i % len(PALETTE)]
-
-
 def _download_fig_button(fig, filename, key):
     """PNG download button for a matplotlib Figure already shown via
     st.pyplot — used so the stacked Response/Heatmap/Radar views (no
@@ -507,12 +488,11 @@ def absorb_llm_rows(plant_id, rows, delay=0.0):
             # rebuild the plant to re-simulate against, so fall back to
             # the unconstrained trace rather than dropping the row.
             sim = base_sim
-        entry = gs.ControllerEntry(
+        entry = gs.add_llm_entry(
             kind="siso", label=row["name"] + _antiwindup_tag(sim),
-            params=gains, result=None, sim=sim, source="llm", plant=plant_label,
+            params=gains, result=None, sim=sim, plant=plant_label,
             plant_tf=plant_id, plant_L=delay)
         entry.mrow = row
-        gs.add_controller(entry)
         n_ok += 1
     return n_ok
 
@@ -556,7 +536,7 @@ def _render_session_list():
         gs.remove_unchecked_by_kind("siso")
     siso_entries = gs.get_by_kind("siso")
 
-    _assign_colors(siso_entries)
+    gs.assign_colors(siso_entries)
     for i, entry in enumerate(siso_entries):
         c1, c2, c3 = st.columns([1, 3, 4])
         checkbox_key = f"siso_en_{entry.id}"
@@ -803,7 +783,7 @@ def render_plots():
     frontend (no error at the Python level, but the inner tab bar can end
     up invisible/non-interactive); showing all three at once sidesteps
     that entirely."""
-    _assign_colors(gs.get_by_kind("siso"))
+    gs.assign_colors(gs.get_by_kind("siso"))
     st.subheader("Response")
     _render_response_plot()
     st.subheader("Heatmap")
