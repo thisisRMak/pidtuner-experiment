@@ -149,11 +149,23 @@ class OpenAIClient:
 
     def chat(self, messages, tools=None):
         """Return a _Response whose `.message` matches OllamaClient's
-        `.chat()` return shape -- see module docstring."""
+        `.chat()` return shape -- see module docstring.
+
+        reasoning_effort="none" is required here, not optional, whenever
+        tools are passed -- live-discovered (not in any doc consulted
+        while building this client): gpt-5.6-luna's Chat Completions
+        endpoint hard-rejects a tool-calling request with a 400
+        ("Function tools with reasoning_effort are not supported for
+        gpt-5.6-luna in /v1/chat/completions... set reasoning_effort to
+        'none'") unless this is set explicitly. Scoped to the tools-present
+        branch only, not every call -- the final tool-free turn that
+        produces the actual reply to the user is left with the model's own
+        default reasoning behavior, since nothing forces it off there."""
         openai_messages = _translate_messages(messages)
         kwargs = {}
         if tools:
             kwargs["tools"] = tools
+            kwargs["reasoning_effort"] = "none"
 
         response = self._client.chat.completions.create(
             model=self.model,

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from supervisor_llm_openai import (
     OpenAIClient,
@@ -233,6 +234,46 @@ class TestOpenAIClientConstruction(unittest.TestCase):
         client = OpenAIClient(api_key="sk-fake", model="gpt-5.6-terra", max_completion_tokens=1234)
         self.assertEqual(client.model, "gpt-5.6-terra")
         self.assertEqual(client.max_completion_tokens, 1234)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# .chat() request construction -- self._client.chat.completions.create is
+# mocked out, no real network call. Regression coverage for a live-discovered
+# (not documented anywhere consulted while building this client) API
+# constraint: gpt-5.6-luna's Chat Completions endpoint 400s on a tool-calling
+# request unless reasoning_effort="none" is passed explicitly. Reproduced
+# against the real API before this fix existed, confirmed fixed after.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fake_completion(content="", tool_calls=None, refusal=None):
+    message = SimpleNamespace(content=content, tool_calls=tool_calls, refusal=refusal)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class TestChatReasoningEffort(unittest.TestCase):
+    def _client_with_mocked_create(self, response):
+        client = OpenAIClient(api_key="sk-fake")
+        client._client = MagicMock()
+        client._client.chat.completions.create.return_value = response
+        return client
+
+    def test_reasoning_effort_none_passed_when_tools_given(self):
+        client = self._client_with_mocked_create(_fake_completion(content="hi"))
+        client.chat([{"role": "user", "content": "hello"}],
+                    tools=[{"type": "function", "function": {"name": "f", "parameters": {}}}])
+        kwargs = client._client.chat.completions.create.call_args.kwargs
+        self.assertEqual(kwargs["reasoning_effort"], "none")
+
+    def test_reasoning_effort_omitted_when_no_tools(self):
+        """Only forced off on tool-calling requests -- the actual API
+        constraint this works around is specific to combining tools with
+        reasoning_effort, not reasoning in general (see supervisor_llm_
+        openai.py's chat() docstring)."""
+        client = self._client_with_mocked_create(_fake_completion(content="hi"))
+        client.chat([{"role": "user", "content": "hello"}], tools=None)
+        kwargs = client._client.chat.completions.create.call_args.kwargs
+        self.assertNotIn("reasoning_effort", kwargs)
+        self.assertNotIn("tools", kwargs)
 
 
 if __name__ == "__main__":
