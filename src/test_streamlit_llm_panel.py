@@ -24,8 +24,9 @@ general caveat, and this session's live Playwright check for the one thing
 AppTest genuinely cannot see): the real chat_input/history layout order --
 that was a rendering-only bug AppTest's element-tree inspection missed
 entirely; a real browser check found and confirmed the fix. Also not
-covered: an actual live conversation against the real Anthropic API (see
-docs/aituner_plan.md and the scripted live check run alongside this file).
+covered: an actual live conversation against the real Anthropic or OpenAI
+API (see docs/aituner_plan.md and the scripted live check run alongside
+this file).
 """
 
 from __future__ import annotations
@@ -39,15 +40,25 @@ from streamlit.testing.v1 import AppTest
 APP_PATH = __file__.replace("test_streamlit_llm_panel.py", "streamlit_app.py")
 
 
-def _run_app(env=None):
+def _run_app(env=None, provider=None):
     """clear=True so these tests never depend on whatever the machine's own
     .env/shell happens to have set (e.g. a real ANTHROPIC_API_KEY someone
     added locally) -- load_dotenv() only skips vars that are *already* set,
-    so with nothing pre-set it would otherwise happily load the real file."""
+    so with nothing pre-set it would otherwise happily load the real file.
+
+    `provider`, when given, switches the Provider selectbox away from the
+    default (Claude) -- for OpenAI/Gemini-specific coverage now that
+    ChatGPT is a second wired provider. Done *inside* the same
+    patch.dict(os.environ, ...) block as the initial run, not as a
+    separate call after this function returns -- env's patched vars
+    (e.g. OPENAI_API_KEY) must still be in effect for _configured_key()
+    to see them on the rerun the provider switch triggers."""
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
         at = AppTest.from_file(APP_PATH).run(timeout=30)
         at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+        if provider:
+            at.selectbox(key="llm_provider").set_value(provider).run(timeout=30)
         return at
 
 
@@ -76,11 +87,18 @@ class TestKeyGating(unittest.TestCase):
                        [s.value for s in at.success])
         self.assertEqual(len(at.chat_input), 1)
 
+    def test_openai_env_configured_key_skips_textbox_and_unlocks_chat(self):
+        at = _run_app({"OPENAI_API_KEY": "sk-openai-test-from-env"}, provider="ChatGPT (OpenAI)")
+        self.assertNotIn("ChatGPT (OpenAI) API key", [ti.label for ti in at.text_input])
+        self.assertIn("ChatGPT (OpenAI) key configured by the operator — nothing to enter.",
+                       [s.value for s in at.success])
+        self.assertEqual(len(at.chat_input), 1)
+
 
 class TestModelPicker(unittest.TestCase):
     def test_offers_only_haiku_and_sonnet_defaulting_to_haiku(self):
         at = _run_app({"ANTHROPIC_API_KEY": "sk-ant-test"})
-        sb = at.selectbox(key="llm_model")
+        sb = at.selectbox(key="llm_model_anthropic")
         self.assertEqual(len(sb.options), 2)
         self.assertTrue(any("Haiku" in o for o in sb.options))
         self.assertTrue(any("Sonnet" in o for o in sb.options))
@@ -97,12 +115,26 @@ class TestModelPicker(unittest.TestCase):
         warnings = [w.value for w in at.warning]
         self.assertTrue(any("billed" in w for w in warnings))
 
+    def test_openai_offers_only_luna_and_terra_defaulting_to_luna(self):
+        at = _run_app({"OPENAI_API_KEY": "sk-openai-test"}, provider="ChatGPT (OpenAI)")
+        sb = at.selectbox(key="llm_model_openai")
+        self.assertEqual(len(sb.options), 2)
+        self.assertTrue(any("Luna" in o for o in sb.options))
+        self.assertTrue(any("Terra" in o for o in sb.options))
+        self.assertFalse(any("Sol" in o or "Astra" in o for o in sb.options),
+                          "the pricier gpt-5.6-sol/gpt-6-astra tiers must not be offered")
+        self.assertEqual(sb.value, "gpt-5.6-luna")
+
+    def test_openai_cost_warning_shown_once_a_model_is_selectable(self):
+        at = _run_app({"OPENAI_API_KEY": "sk-openai-test"}, provider="ChatGPT (OpenAI)")
+        warnings = [w.value for w in at.warning]
+        self.assertTrue(any("billed" in w for w in warnings))
+
 
 class TestUnwiredProvider(unittest.TestCase):
-    def test_openai_key_accepted_but_not_unlocked(self):
-        at = _run_app()
-        at.selectbox(key="llm_provider").set_value("ChatGPT (OpenAI)").run(timeout=30)
-        at.text_input(key="llm_api_key_openai").set_value("sk-fake-openai-key").run(timeout=30)
+    def test_gemini_key_accepted_but_not_unlocked(self):
+        at = _run_app(provider="Gemini (Google)")
+        at.text_input(key="llm_api_key_gemini").set_value("fake-gemini-key").run(timeout=30)
         infos = [i.value for i in at.info]
         self.assertTrue(any("isn't built yet" in i for i in infos))
         self.assertEqual(len(at.chat_input), 0, "chat must stay locked for an unwired provider")
@@ -157,6 +189,36 @@ class TestChatErrorHandling(unittest.TestCase):
     def test_unexpected_exception_falls_back_to_generic_message(self):
         reply = self._send_and_get_reply(ValueError("something unrelated broke"))
         self.assertIn("check the server logs", reply)
+
+    # The active session here is still Claude-backed (_send_and_get_reply
+    # only ever configures ANTHROPIC_API_KEY) -- these raise a real
+    # openai.* exception anyway, directly exercising the (anthropic.X,
+    # openai.X) tuples added to each except clause in streamlit_llm_panel.
+    # render_controls() for the newly-wired ChatGPT provider; which
+    # provider actually built the session is irrelevant to whether that
+    # except clause catches the right type.
+
+    def test_openai_authentication_error(self):
+        import openai
+        reply = self._send_and_get_reply(
+            openai.AuthenticationError("bad key", response=_fake_response(401), body=None)
+        )
+        self.assertIn("rejected", reply)
+
+    def test_openai_rate_limit_error(self):
+        import openai
+        reply = self._send_and_get_reply(
+            openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+        )
+        self.assertIn("Rate limited", reply)
+
+    def test_openai_api_connection_error(self):
+        import openai
+        import httpx2
+        reply = self._send_and_get_reply(
+            openai.APIConnectionError(request=httpx2.Request("POST", "https://api.openai.com"))
+        )
+        self.assertIn("Couldn't reach", reply)
 
 
 class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
@@ -313,14 +375,35 @@ class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
             at.text_input(key="llm_api_key_anthropic").set_value("sk-ant-my-real-key").run(timeout=30)
-            at.selectbox(key="llm_model").set_value("claude-sonnet-5").run(timeout=30)
+            at.selectbox(key="llm_model_anthropic").set_value("claude-sonnet-5").run(timeout=30)
 
             at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
         self.assertEqual(at.session_state["llm_api_key_anthropic"], "sk-ant-my-real-key")
-        self.assertEqual(at.session_state["llm_model"], "claude-sonnet-5")
+        self.assertEqual(at.session_state["llm_model_anthropic"], "claude-sonnet-5")
+        self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
+
+    def test_openai_key_and_model_survive_a_round_trip_to_manual_and_back(self):
+        """Same regression as above, for the ChatGPT provider -- covers
+        the llm_api_key_openai/llm_model_openai entries added to
+        _PROTECTED_KEYS alongside the Anthropic ones."""
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.selectbox(key="llm_provider").set_value("ChatGPT (OpenAI)").run(timeout=30)
+            at.text_input(key="llm_api_key_openai").set_value("sk-openai-my-real-key").run(timeout=30)
+            at.selectbox(key="llm_model_openai").set_value("gpt-5.6-terra").run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.session_state["llm_provider"], "ChatGPT (OpenAI)")
+        self.assertEqual(at.session_state["llm_api_key_openai"], "sk-openai-my-real-key")
+        self.assertEqual(at.session_state["llm_model_openai"], "gpt-5.6-terra")
         self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
 
 

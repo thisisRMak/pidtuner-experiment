@@ -34,9 +34,9 @@ Key resolution, checked in order per provider (see _configured_key):
    lost on refresh. This is the only source on a public deploy with no
    operator-configured key.
 
-Only Claude is wired to an actual client so far (supervisor_llm_anthropic.
-AnthropicClient). OpenAI/Gemini keys are accepted here but not yet
-connected to anything — see docs/aituner_plan.md.
+Claude and ChatGPT are wired to actual clients (supervisor_llm_anthropic.
+AnthropicClient, supervisor_llm_openai.OpenAIClient). Gemini's key is
+accepted here but not yet connected to anything — see docs/aituner_plan.md.
 """
 
 from __future__ import annotations
@@ -46,10 +46,12 @@ import sys
 import traceback
 
 import anthropic
+import openai
 import streamlit as st
 from dotenv import load_dotenv
 
 from supervisor_llm_anthropic import AnthropicClient
+from supervisor_llm_openai import OpenAIClient
 from supervisor_session_pid import Session
 from supervisor_session_lqg import LQGSession
 from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
@@ -65,7 +67,7 @@ BLACKBOX_TOOL = (RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark)
 LQG_TOOL = (RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark)
 
 PROVIDERS = ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"]
-WIRED_PROVIDERS = {"Claude (Anthropic)"}
+WIRED_PROVIDERS = {"Claude (Anthropic)", "ChatGPT (OpenAI)"}
 
 KEY_STATE = {
     "Claude (Anthropic)": "llm_api_key_anthropic",
@@ -94,13 +96,58 @@ ANTHROPIC_MODELS = [
 ]
 ANTHROPIC_DEFAULT_MODEL_INDEX = 0  # Haiku -- see comment above
 
+# Same cheapest/most-capable tradeoff as ANTHROPIC_MODELS above, for
+# OpenAI's current (2026-09) tier lineup -- gpt-5.6-sol/gpt-6-astra
+# deliberately not offered here, same "most expensive tier, no reason to
+# offer it in this app" reasoning as excluding Opus above. See
+# supervisor_llm_openai.py's module docstring for where these ids/prices
+# were verified.
+OPENAI_MODELS = [
+    ("gpt-5.6-luna", "GPT-5.6 Luna -- fastest, cheapest (default)"),
+    ("gpt-5.6-terra", "GPT-5.6 Terra -- more capable, more expensive"),
+]
+OPENAI_DEFAULT_MODEL_INDEX = 0  # Luna -- see comment above
+
+# Per-provider (model list, default index) and per-provider model widget
+# key -- a second wired provider means the model picker can no longer
+# unconditionally use ANTHROPIC_MODELS/a single "llm_model" key: switching
+# Provider would otherwise carry the previous provider's selected model id
+# into a selectbox whose options no longer include it. A separate widget
+# key per provider (rather than resetting a shared one) sidesteps that and
+# matches the existing per-provider-key pattern already used for KEY_STATE/
+# ENV_VAR above; only wired providers need an entry.
+MODELS_BY_PROVIDER = {
+    "Claude (Anthropic)": (ANTHROPIC_MODELS, ANTHROPIC_DEFAULT_MODEL_INDEX),
+    "ChatGPT (OpenAI)": (OPENAI_MODELS, OPENAI_DEFAULT_MODEL_INDEX),
+}
+MODEL_KEY_STATE = {
+    "Claude (Anthropic)": "llm_model_anthropic",
+    "ChatGPT (OpenAI)": "llm_model_openai",
+}
+
 
 def _init_panel_state() -> None:
+    """Deliberately does NOT setdefault() KEY_STATE's/MODEL_KEY_STATE's
+    entries the way an earlier version of this function did for KEY_STATE --
+    st.text_input()/st.selectbox() already default a genuinely-new key to
+    ""/their first option with no help needed here, and pre-seeding a
+    provider's key *before* its own widget has ever been instantiated (e.g.
+    while a different provider is selected) turned out to poison that key's
+    Streamlit-internal widget lifecycle: once real openai/gemini providers
+    started using KEY_STATE too (not just Claude), a key first created via
+    setdefault -- rather than born as a widget -- stopped being cleanly
+    removed from st.session_state on a run where its widget doesn't render
+    (e.g. Mode=Manual); Streamlit instead left it behind reset to "",
+    which is *present*, so preserve_widget_state()'s `key not in
+    st.session_state` check never fires and the stale "" silently wins over
+    the real value sitting in the shadow copy. Confirmed via a scripted
+    AppTest repro (switch provider, type a key, flip to Manual and back --
+    the key came back blank) before landing this fix; Claude alone never
+    exposed it since it was always the sole default-selected, always-a-
+    widget provider."""
     if "llm_dotenv_loaded" not in st.session_state:
         load_dotenv()
         st.session_state["llm_dotenv_loaded"] = True
-    for state_key in KEY_STATE.values():
-        st.session_state.setdefault(state_key, "")
     st.session_state.setdefault("llm_session_obj", None)
     st.session_state.setdefault("llm_session_fingerprint", None)
 
@@ -133,7 +180,10 @@ def _log_exception(exc: Exception) -> None:
 
 
 def _new_session(provider: str, api_key: str, track: str, model: str):
-    client = AnthropicClient(api_key=api_key, model=model)
+    if provider == "ChatGPT (OpenAI)":
+        client = OpenAIClient(api_key=api_key, model=model)
+    else:
+        client = AnthropicClient(api_key=api_key, model=model)
     if track == "SISO / PID":
         return Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL,
                         capture_plots=True)
@@ -159,10 +209,11 @@ def _render_key_entry():
 
     model = None
     if provider in WIRED_PROVIDERS:
+        models, default_index = MODELS_BY_PROVIDER[provider]
         model = st.selectbox(
-            "Model", [m[0] for m in ANTHROPIC_MODELS],
-            format_func=lambda m: dict(ANTHROPIC_MODELS)[m],
-            index=ANTHROPIC_DEFAULT_MODEL_INDEX, key="llm_model",
+            "Model", [m[0] for m in models],
+            format_func=lambda m: dict(models)[m],
+            index=default_index, key=MODEL_KEY_STATE[provider],
         )
         st.warning(
             "Chatting here sends real, billed requests to the provider using "
@@ -174,7 +225,7 @@ def _render_key_entry():
 
 
 _PROTECTED_KEYS = ["llm_provider", "llm_api_key_anthropic", "llm_api_key_openai",
-                   "llm_api_key_gemini", "llm_model"]
+                   "llm_api_key_gemini", "llm_model_anthropic", "llm_model_openai"]
 
 _TRACK_KIND = {"SISO / PID": "siso", "MIMO / LQG": "mimo"}
 
@@ -222,12 +273,14 @@ def render_controls(track):
     deletes a widget's state whenever it isn't instantiated on a run.
     See streamlit_gui_state.py's own note on why this is needed at all.
 
-    preserve_widget_state() runs *before* _init_panel_state(): the latter
-    does st.session_state.setdefault(state_key, "") for every KEY_STATE
-    entry, which -- setdefault only writes when the key is absent -- would
-    otherwise itself count as "already set" and block the restore below
-    from ever firing, permanently pinning every key to "" the moment it's
-    ever garbage-collected."""
+    preserve_widget_state() runs *before* _init_panel_state() -- harmless
+    ordering now that _init_panel_state() no longer setdefaults KEY_STATE/
+    MODEL_KEY_STATE entries at all (see that function's own docstring for
+    why a setdefault there, even ordered after preserve_widget_state(),
+    used to permanently break restoration for any provider that wasn't
+    the currently-selected one), kept this way regardless since preserve
+    must still run before _render_key_entry()'s widgets are instantiated
+    either way."""
     gs.preserve_widget_state(_PROTECTED_KEYS)
     _init_panel_state()
     provider, api_key, model = _render_key_entry()
@@ -284,16 +337,16 @@ def render_controls(track):
                 with st.spinner("Thinking..."):
                     try:
                         reply = session.handle_user_message(user_text)
-                    except anthropic.AuthenticationError as exc:
+                    except (anthropic.AuthenticationError, openai.AuthenticationError) as exc:
                         _log_exception(exc)
                         reply = "That API key was rejected — double-check it and try again."
-                    except anthropic.RateLimitError as exc:
+                    except (anthropic.RateLimitError, openai.RateLimitError) as exc:
                         _log_exception(exc)
                         reply = "Rate limited by the provider — wait a moment and try again."
-                    except anthropic.APIStatusError as exc:
+                    except (anthropic.APIStatusError, openai.APIStatusError) as exc:
                         _log_exception(exc)
                         reply = f"The model provider returned an error: {exc.message}"
-                    except anthropic.APIConnectionError as exc:
+                    except (anthropic.APIConnectionError, openai.APIConnectionError) as exc:
                         _log_exception(exc)
                         reply = "Couldn't reach the model provider — check your connection and try again."
                     except Exception as exc:  # noqa: BLE001 - a bad turn must not crash the app

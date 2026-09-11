@@ -4,5 +4,6 @@ matplotlib
 ollama
 streamlit
 anthropic
+openai
 python-dotenv
 Brotli>=1.1

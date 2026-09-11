@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from supervisor_llm import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL, OllamaClient
 from supervisor_llm_anthropic import AnthropicClient, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
+from supervisor_llm_openai import OpenAIClient, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
 
 import cli_supervisor_lqg as cli
 
@@ -53,6 +54,27 @@ class TestResolveAnthropicKey(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True), \
              patch("cli_supervisor_lqg.load_dotenv"):
             key = cli._resolve_anthropic_key(None)
+        self.assertIsNone(key)
+
+
+class TestResolveOpenAIKey(unittest.TestCase):
+    def test_explicit_key_wins_without_consulting_env(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-env"}), \
+             patch("cli_supervisor_lqg.load_dotenv") as mock_load_dotenv:
+            key = cli._resolve_openai_key("sk-explicit")
+        self.assertEqual(key, "sk-explicit")
+        mock_load_dotenv.assert_not_called()
+
+    def test_falls_back_to_env_var_when_no_explicit_key(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-env"}), \
+             patch("cli_supervisor_lqg.load_dotenv"):
+            key = cli._resolve_openai_key(None)
+        self.assertEqual(key, "sk-env")
+
+    def test_no_explicit_key_and_no_env_var_returns_none(self):
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("cli_supervisor_lqg.load_dotenv"):
+            key = cli._resolve_openai_key(None)
         self.assertIsNone(key)
 
 
@@ -100,6 +122,31 @@ class TestBuildClient(unittest.TestCase):
                 cli._build_client(_args(provider="anthropic"))
         self.assertEqual(cm.exception.code, 1)
         self.assertIn("no Anthropic API key found", stderr.getvalue())
+
+    def test_openai_uses_explicit_api_key_and_default_model(self):
+        client = cli._build_client(_args(provider="openai", api_key="sk-explicit"))
+        self.assertIsInstance(client, OpenAIClient)
+        self.assertEqual(client.model, OPENAI_DEFAULT_MODEL)
+
+    def test_openai_explicit_model_overrides_default(self):
+        client = cli._build_client(_args(provider="openai", api_key="sk-explicit", model="gpt-5.6-terra"))
+        self.assertEqual(client.model, "gpt-5.6-terra")
+
+    def test_openai_falls_back_to_env_key_when_no_flag(self):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "sk-env"}), \
+             patch("cli_supervisor_lqg.load_dotenv"):
+            client = cli._build_client(_args(provider="openai"))
+        self.assertIsInstance(client, OpenAIClient)
+
+    def test_openai_missing_key_exits_with_error(self):
+        stderr = io.StringIO()
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("cli_supervisor_lqg.load_dotenv"), \
+             contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as cm:
+                cli._build_client(_args(provider="openai"))
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("no OpenAI API key found", stderr.getvalue())
 
 
 if __name__ == "__main__":

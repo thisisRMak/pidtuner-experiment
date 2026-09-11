@@ -1,13 +1,115 @@
 # aituner — multi-provider LLM supervisor
 
-**Status (2026-09-11): Claude/Anthropic implemented and live-verified on
-both the GUI and the CLI. OpenAI and Gemini are not started, on either
-surface — confirmed by grepping `src/` fresh, the only hits are the
-pre-existing "key accepted, not wired" GUI stub and the Anthropic test
-files. See "Implementation status" and "Update (2026-09-11)" below for
-what's actually built; the sections after that are progressively older
-plan/status snapshots, kept for the reasoning trail — read top-down, most
-current first, don't take the tail of the doc as current.**
+**Status (2026-09-11, OpenAI pass): Claude/Anthropic and ChatGPT/OpenAI are
+both implemented and unit-tested on the GUI and the CLI. Gemini is not
+started, on either surface — confirmed by grepping `src/` fresh, the only
+hit is the pre-existing "key accepted, not wired" GUI stub. Unlike
+Anthropic, OpenAI has not been live-verified against the real API (no key
+available to this session) — offline/mocked coverage only. See "Update
+(2026-09-11, OpenAI pass)" immediately below for what's actually built;
+the sections after that are progressively older plan/status snapshots,
+kept for the reasoning trail — read top-down, most current first, don't
+take the tail of the doc as current.**
+
+## Update (2026-09-11, OpenAI pass)
+
+OpenAI/ChatGPT wired end-to-end on a branch (`supervisor-openai-gemini`,
+not merged to `main`), following up on the "Next up" item 3 in the
+previous update (below). Treated as its own research pass per the plan
+that preceded this work — Gemini is a separate, not-yet-started pass on
+the same branch.
+
+- **Chat Completions API, not Responses — a deliberate choice, confirmed
+  with the person requesting this work, not assumed.** OpenAI's own docs
+  now call the Responses API primary, but Chat Completions is documented
+  as supported indefinitely and is the structurally closer match to every
+  other client in this codebase (Ollama, Anthropic) — flat role-tagged
+  messages list, not Responses' separate call_id-addressed input/output
+  items. Revisit if OpenAI ever actually deprecates Chat Completions, not
+  before.
+- **`src/supervisor_llm_openai.py`** (new): hand-rolled `OpenAIClient`,
+  structured like `supervisor_llm_anthropic.AnthropicClient` but genuinely
+  different where the APIs differ — verified against current
+  openai-python SDK source (not assumed by analogy to Anthropic), see
+  that module's own docstring for the specifics: no tool-schema
+  translation needed (Ollama's tool shape already *is* Chat Completions'
+  shape), `role: "system"` is a normal message not a separate top-level
+  parameter, no same-turn tool-result batching requirement,
+  `function.arguments` round-trips as a JSON string (not a dict, the
+  opposite of Anthropic), and `max_completion_tokens` (not the deprecated
+  `max_tokens`).
+- **The parallel-tool-call id-collision fix (this doc's prior update,
+  and docs/memos/2026-09-07/2026-09-07-supervisor-robustness-memo.md
+  §3/§7 TODO #1) ported, confirmed necessary, not just precautionary.**
+  Chat Completions is id-based (`tool_calls[].id`/`tool_call_id`) the same
+  way Anthropic's Messages API is, and the actual risk was always
+  Session's own name-keyed `{"role": "tool", "tool_name": ...}" result
+  dicts, not anything Anthropic-specific — so the identical per-name FIFO
+  queue fix applies here too. Regression test ported directly:
+  `test_duplicate_tool_name_in_one_turn_resolves_each_result_to_its_own_id`
+  in `test_supervisor_llm_openai.py`.
+- **Model ids verified against OpenAI's current docs, not guessed**:
+  `gpt-5.6-luna` (cheapest tier, default) and `gpt-5.6-terra` (mid-tier,
+  offered) — mirroring the Haiku/Sonnet split. `gpt-5.6-sol`/`gpt-6-astra`
+  deliberately excluded as defaults/options, same "most expensive tier, no
+  reason to offer it here" reasoning as excluding Opus.
+- **CLI**: `cli_supervisor_pid.py`/`cli_supervisor_lqg.py` `--provider`
+  gained `openai`, alongside a `_resolve_openai_key` mirroring
+  `_resolve_anthropic_key` (`--api-key` > `OPENAI_API_KEY` env/`.env`).
+- **GUI (`streamlit_llm_panel.py`)**: `WIRED_PROVIDERS` now includes
+  ChatGPT; a second per-provider model list (`OPENAI_MODELS`) and a
+  `MODELS_BY_PROVIDER`/`MODEL_KEY_STATE` indirection replaced the
+  single-provider-assumed `ANTHROPIC_MODELS`/`"llm_model"` widget key —
+  needed because a second wired provider's model list doesn't share the
+  first's valid option set. Exception handling extended with
+  `openai.AuthenticationError`/`RateLimitError`/`APIStatusError`/
+  `APIConnectionError` alongside the existing `anthropic.*` ones —
+  confirmed (via openai-python's `_exceptions.py`) to be the same class
+  hierarchy/shape as Anthropic's, so the existing except-blocks extend
+  with a tuple rather than needing new branches.
+- **A real bug found and fixed while wiring the second provider, not just
+  a new one**: `streamlit_llm_panel._init_panel_state()` used to
+  `setdefault()` every provider's API-key widget key on every render,
+  including providers that weren't currently selected. That was inert
+  with only one wired provider (Claude was always the selected,
+  always-instantiated-as-a-widget one), but once ChatGPT could actually be
+  selected, a key first created via `setdefault` (i.e., while some *other*
+  provider was active) stopped being cleanly removed from
+  `st.session_state` by Streamlit on a run where its own widget doesn't
+  render (e.g. Mode=Manual) — Streamlit left it behind reset to `""`
+  instead, which reads as "present," so `preserve_widget_state()`'s
+  `key not in st.session_state` restore-from-shadow check never fired and
+  the stale blank silently beat the real value sitting in the shadow copy.
+  Concretely: pick ChatGPT, type a key, switch to Manual mode and back —
+  the key came back blank. Found via a scripted `AppTest` repro (not
+  guessed), fixed by removing the setdefault loop entirely — it was
+  already redundant with `st.text_input`'s own default-to-`""` behavior
+  for a genuinely new key, and `MODEL_KEY_STATE` never had an equivalent
+  loop in the first place. See `_init_panel_state()`'s own docstring for
+  the full mechanism. New regression test:
+  `test_openai_key_and_model_survive_a_round_trip_to_manual_and_back` in
+  `test_streamlit_llm_panel.py`.
+- **Tests**: `test_supervisor_llm_openai.py` (14 tests, mirroring
+  `test_supervisor_llm_anthropic.py`), `test_cli_supervisor_pid.py`/
+  `test_cli_supervisor_lqg.py` extended with the OpenAI equivalents of the
+  existing Anthropic provider-dispatch cases, `test_streamlit_llm_panel.py`
+  extended (env-key gating, model picker contents/default, cost warning,
+  three new `openai.*` exception-branch tests, the mode-switch
+  persistence regression above, and `TestUnwiredProvider` repointed at
+  Gemini now that ChatGPT is wired). Full project suite green after this
+  pass (see the commit for the exact count) — no regressions in the
+  pre-existing Anthropic/Ollama/PID/LQG coverage.
+- **Not done in this pass, deliberately**: no live call against the real
+  OpenAI API (no key available to this session; same "manual/scripted
+  verification step" treatment the Anthropic work got, still pending
+  whoever has a key). No OpenAI demo shell script — the cost-gating
+  question blocking the Anthropic-only demo script (see the memo and the
+  "Next up" section below) still applies equally here and was not
+  re-litigated, per instruction to flag rather than silently decide it;
+  default is to leave it deferred, matching existing precedent.
+- **requirements.txt/environment.yml**: added `openai`, unpinned, matching
+  the existing convention (only `Brotli` is pinned, defensively, for an
+  unrelated reason — see this doc's "Update (2026-09-11)" below).
 
 ## Update (2026-09-11)
 
