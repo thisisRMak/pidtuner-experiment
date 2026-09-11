@@ -1,12 +1,64 @@
 # aituner — multi-provider LLM supervisor
 
-**Status: Claude/Anthropic implemented and live-verified — GUI only.
-CLI is still Ollama-only. OpenAI and Gemini are not started, on either
-surface. See "Implementation status" below for what's actually built;
-the sections after it are the original pre-implementation plan, kept for
-the reasoning trail — read status first, don't take the rest as current.**
+**Status (2026-09-11): Claude/Anthropic implemented and live-verified on
+both the GUI and the CLI. OpenAI and Gemini are not started, on either
+surface — confirmed by grepping `src/` fresh, the only hits are the
+pre-existing "key accepted, not wired" GUI stub and the Anthropic test
+files. See "Implementation status" and "Update (2026-09-11)" below for
+what's actually built; the sections after that are progressively older
+plan/status snapshots, kept for the reasoning trail — read top-down, most
+current first, don't take the tail of the doc as current.**
 
-## Implementation status (this session)
+## Update (2026-09-11)
+
+A lot landed between the "Implementation status" section below (written
+right after the initial Claude/GUI work) and now — 30 commits, largely
+outside a session that had direct visibility into all of them, so treat
+this update as a summary of what was checked, not an exhaustive diff:
+
+- **CLI now has Claude too** (`2abf5fd`): `cli_supervisor_pid.py`/
+  `cli_supervisor_lqg.py` got `--provider {ollama,anthropic}`, `--model`,
+  `--api-key`. The "CLI is still Ollama-only" line in the section below is
+  no longer true — superseded by this update, kept there only for history.
+- **The 3-tab GUI layout is gone.** `streamlit_app.py` now just calls
+  `streamlit_unified_panel.render()` — one page, a Track selector
+  (SISO/PID vs MIMO/LQG) and a Mode selector (Manual vs LLM Supervisor)
+  instead of tabs. `streamlit_llm_panel.py`/`streamlit_siso_panel.py`/
+  `streamlit_mimo_panel.py` still exist and are composed by the unified
+  panel, not replaced outright. SISO's Response/Heatmap/Radar also
+  changed independently (`8aa1c78`): stacked vertically instead of an
+  `st.radio` single-view switch, plus per-view download buttons.
+- **`supervisor_llm_anthropic.py` (the shared client both CLI and GUI use)
+  gained a real fix, not just features**: parallel tool calls repeating
+  the *same* tool name in one turn (e.g. comparing two Q/R weightings)
+  were colliding on `tool_use_id` — a name-keyed dict silently resolved
+  both to the last id, and Claude's own API then hard-rejects the
+  malformed request. Fixed with a per-name FIFO queue instead of a dict.
+  This lives in the shared client, so it protects both PID/SISO and
+  MIMO/LQG, not just whichever track found it. Regression test:
+  `test_duplicate_tool_name_in_one_turn_resolves_each_result_to_its_own_id`
+  in `test_supervisor_llm_anthropic.py`.
+- **`MAX_TOOL_HOPS` diverged between tracks, deliberately, not by
+  accident**: PID/SISO stayed at `6`; LQG was re-derived to `8`
+  (`supervisor_session_lqg.py`) after live testing showed the Q/R-sweep
+  workflow needed more room. Not a uniform bump — check which file before
+  assuming a number.
+- **LQG supervisor gained**: a custom A/B/C/D plant path (not preset-only
+  anymore, `ea9487e`/`f2c581e`), a `Q_diag_list`/`R_diag_list` sweep
+  (compare several weightings in one tool call — the actual fix for the
+  hop-budget pressure, not just a bigger ceiling), and a `capture_plots`
+  flag on both `Session`/`LQGSession` constructors.
+- **Full write-up of the four LQG findings above**:
+  `docs/memos/2026-09-07/2026-09-07-supervisor-robustness-memo.{md,html,pdf}`
+  — read that before touching the supervisor session classes again, it's
+  the authoritative record, more detailed than this bullet list.
+- **An open design question surfaced but not resolved**: a demo/smoke-test
+  shell script for Anthropic was deliberately not built because cost
+  gating (who pays, how much, confirmed how) was still undecided — same
+  unresolved question as this doc's own "cost-confirmation UX" gap below,
+  now also relevant to whatever OpenAI/Gemini demo tooling gets built.
+
+## Implementation status (as of the initial Claude/GUI build — see update above for what's changed since)
 
 **GUI (`src/streamlit_llm_panel.py` + `src/supervisor_llm_anthropic.py`)**:
 hand-rolled `AnthropicClient` (see "Decision: hand-rolled, not aisuite"
@@ -151,22 +203,26 @@ actually work" questions mid-session, not assumptions):
    visible `st.warning` once a key/model exist. Not a spending cap or
    running total, just a disclosure. Fine as a first cut.
 
-## Next up (not started this session)
+## Next up
 
-1. **SISO GUI usability**: stack the Response/Heatmap/Radar views in
-   `streamlit_siso_panel.py` (currently an `st.radio` single-view switch,
-   chosen specifically to avoid a nested-`st.tabs` rendering bug — see
-   that file's comment at the view-switch call site) vertically instead,
-   all three visible at once, page scrolls. Streamlit webapp only —
-   `pid_app.py` (Tkinter) keeps its own separate UI, untouched.
-2. **Anthropic over the CLI** — give `cli_supervisor_pid.py`/
-   `cli_supervisor_lqg.py` the same `AnthropicClient` option the GUI has,
-   with CLI-appropriate provider/model selection (flags, not a picker).
+1. ~~SISO GUI usability~~ — **done** (`8aa1c78`), then superseded by a
+   bigger change: the whole 3-tab layout was replaced with
+   `streamlit_unified_panel.py`. See "Update (2026-09-11)" above.
+2. ~~Anthropic over the CLI~~ — **done** (`2abf5fd`). See "Update
+   (2026-09-11)" above.
 3. **OpenAI + Gemini**, both CLI and GUI — the two still-unwired
-   providers. Each needs its own current-docs verification pass (no
-   bundled skill for either, unlike `claude-api` for Anthropic) before
-   writing a hand-rolled client, per the aisuite investigation's lesson
-   above: don't assume, check.
+   providers, not started as of 2026-09-11 (confirmed by grepping `src/`
+   fresh). Each needs its own current-docs verification pass (no bundled
+   skill for either, unlike `claude-api` for Anthropic) before writing a
+   hand-rolled client, per the aisuite investigation's lesson above: don't
+   assume, check. Two things to inherit from the Anthropic work, not
+   rediscover: the per-name FIFO tool_use_id fix (see "Update
+   (2026-09-11)" — a hand-rolled OpenAI/Gemini client needs the equivalent
+   of whatever each provider's own parallel-tool-call ID scheme requires,
+   verified against their docs, not assumed safe by analogy) and the
+   robustness memo's findings generally (`docs/memos/2026-09-07/
+   2026-09-07-supervisor-robustness-memo.md`) — read before assuming the
+   current `supervisor_llm_anthropic.py` is a naive first-draft template.
 4. **Anthropic demo shell script** — `src/examples/run_supervisor_demo.sh`/
    `run_supervisor_lqg_demo.sh` only exercise `--provider ollama` (checking
    for a local daemon + pulled model, skipping with instructions if
