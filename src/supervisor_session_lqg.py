@@ -127,13 +127,14 @@ class LQGSession:
         benchmark tool here and it always has a real plant (preset or
         user-supplied custom A/B/C/D) -- so whenever self.capture_plots
         is True (see __init__), this asks for return_sim=True and pops
-        "_sim_rows" (each row's .sim intact, not JSON-safe) and
-        "_custom_plant_literals" (present only for a custom plant --
-        see run_lqg_benchmark) off the result before it goes anywhere
-        near json.dumps/the model. capture_plots=False (the default)
-        asks for return_sim=False instead, skipping that simulation
-        work entirely for a caller (e.g. cli_supervisor_lqg.py) with no
-        drain step to use it.
+        "_sim_rows" (each row's .sim intact, not JSON-safe),
+        "_custom_plant_literals" (present only for a custom plant), and
+        "_four_curve" (present only when am_diag was supplied -- see
+        run_lqg_benchmark) off the result before it goes anywhere near
+        json.dumps/the model. capture_plots=False (the default) asks for
+        return_sim=False instead, skipping that simulation work entirely
+        for a caller (e.g. cli_supervisor_lqg.py) with no drain step to
+        use it.
 
         dict(kwargs, return_sim=self.capture_plots) rather than
         fn(**kwargs, return_sim=self.capture_plots): the latter raises
@@ -151,6 +152,7 @@ class LQGSession:
             result = fn(**dict(kwargs, return_sim=self.capture_plots))
             sim_rows = result.pop("_sim_rows", None)
             custom_plant_literals = result.pop("_custom_plant_literals", None)
+            four_curve = result.pop("_four_curve", None)
             if result.get("ok") and "rows" in result:
                 for row in result["rows"]:
                     if row.get("stable"):
@@ -160,6 +162,7 @@ class LQGSession:
                     "kind": "mimo", "plant": result.get("plant_name"),
                     "plant_preset": result.get("plant_preset"),
                     "custom_plant_literals": custom_plant_literals,
+                    "four_curve": four_curve,
                     "rows": sim_rows,
                 })
             return result

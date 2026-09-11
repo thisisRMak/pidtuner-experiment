@@ -342,4 +342,5 @@ def _drain_plot_calls(session):
             mimo_panel.absorb_llm_rows(
                 call["plant"] or "?", call["rows"],
                 plant_preset=call.get("plant_preset", ""),
-                custom_plant_literals=call.get("custom_plant_literals"))
+                custom_plant_literals=call.get("custom_plant_literals"),
+                four_curve=call.get("four_curve"))

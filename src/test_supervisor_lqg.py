@@ -159,6 +159,31 @@ class TestRunLqgBenchmark(unittest.TestCase):
         self.assertIn("K2", explicit_row)
         self.assertNotIn("K", explicit_row)
 
+    def test_am_diag_and_return_sim_bundles_the_four_curve_rows(self):
+        """streamlit_mimo_panel.py's "4-curve comparison" button
+        (Bryson/Output-weighted/Implicit/Explicit) needs exactly these 4
+        rows plus (Am, t, xm_ref) -- already computed above for the
+        regular rows/model-following rows, so this must reuse them
+        rather than re-simulating."""
+        result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07], return_sim=True)
+        self.assertTrue(result["ok"], result.get("error"))
+        four_curve = result["_four_curve"]
+        names = [row.name for row in four_curve["rows"]]
+        self.assertEqual(names, ["Bryson's rule", "Output-weighted LQR",
+                                 "Implicit model-following", "Explicit model-following"])
+        self.assertEqual(four_curve["Am"].shape, (2, 2))
+        self.assertEqual(len(four_curve["t"]), len(four_curve["xm_ref"]))
+
+    def test_no_four_curve_without_am_diag(self):
+        result = run_lqg_benchmark("aircraft_hall", return_sim=True)
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertNotIn("_four_curve", result)
+
+    def test_no_four_curve_without_return_sim(self):
+        result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07])
+        self.assertTrue(result["ok"], result.get("error"))
+        self.assertNotIn("_four_curve", result)
+
     def test_am_diag_wrong_length_reports_error(self):
         result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07, 0.03])
         self.assertFalse(result["ok"])
@@ -438,10 +463,36 @@ class TestLQGSessionPlotCalls(unittest.TestCase):
         self.assertEqual(call["plant_preset"], "aircraft_hall")
         self.assertEqual(call["rows"][0].name, "LQR (suggested Q/R)")
         self.assertIsNotNone(call["rows"][0].sim)
-        # _fake_lqg_tool never sets _custom_plant_literals -- see
-        # test_custom_plant_literals_land_in_plot_calls_not_the_model
-        # below for the field actually populated.
+        # _fake_lqg_tool never sets _custom_plant_literals/_four_curve --
+        # see the tests actually exercising those fields for why.
         self.assertIsNone(call["custom_plant_literals"])
+        self.assertIsNone(call["four_curve"])
+
+    def test_am_diag_call_populates_plot_calls_four_curve(self):
+        """Uses the real run_lqg_benchmark (not _fake_lqg_tool) so the
+        actual Bryson/Output-weighted/Implicit/Explicit bundling in
+        run_lqg_benchmark itself is exercised end to end, through
+        _wrap_benchmark, into plot_calls."""
+        script = [
+            _response(tool_calls=[_tool_call(
+                "run_lqg_benchmark",
+                {"plant_preset": "aircraft_hall", "am_diag": [0.1, 0.07]})]),
+            _response(content="done"),
+        ]
+        session = LQGSession(ScriptedClient(script),
+                             lqg_tool=(RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark),
+                             capture_plots=True)
+        session.handle_user_message("go")
+        call = session.plot_calls[0]
+        four_curve = call["four_curve"]
+        self.assertIsNotNone(four_curve)
+        names = [row.name for row in four_curve["rows"]]
+        self.assertEqual(names, ["Bryson's rule", "Output-weighted LQR",
+                                 "Implicit model-following", "Explicit model-following"])
+
+        tool_msgs = [m for m in session.messages if isinstance(m, dict) and m.get("role") == "tool"]
+        benchmark_msg = next(m for m in tool_msgs if m["tool_name"] == "run_lqg_benchmark")
+        self.assertNotIn("_four_curve", benchmark_msg["content"])
 
     def test_custom_plant_gets_its_own_name_not_the_generic_preset_key(self):
         """Regression: _wrap_benchmark used to tag every custom-plant call

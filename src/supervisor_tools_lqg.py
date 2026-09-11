@@ -328,6 +328,7 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
         return {"ok": False, "error": str(exc)}
     plant = ex.plant
 
+    four_curve = None
     try:
         raw_rows = compare_regulator_methods(
             ex, x_max=x_max, u_max=u_max, Q_diag=Q_diag, R_diag=R_diag,
@@ -345,9 +346,24 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
             Am = np.diag(-am_diag_)
             Q1 = q1_scale * np.eye(plant.ny)
             R = ex.build_suggested_R()
-            mf_rows, _ = compare_model_following(plant, Am, Q1, R)
+            mf_rows, (mf_t, mf_xm_ref) = compare_model_following(plant, Am, Q1, R)
             raw_rows.extend(mf_rows)
             rows.extend(_serialize_row(r) for r in mf_rows)
+            # Bryson's rule/Output-weighted LQR (from compare_regulator_
+            # methods above) plus Implicit/Explicit model-following (just
+            # computed) are exactly compare_bryson_output_modelfollowing's
+            # 4-curve bundle (streamlit_mimo_panel.py's "4-curve
+            # comparison" button) -- reuse them by name rather than a
+            # second, redundant simulation. Only when all 4 are actually
+            # present (a Q_diag_list/custom-row name collision is the only
+            # way one of the fixed 4 could be missing here, since raw_rows
+            # is always these 4 + whatever's appended).
+            by_name = {row.name: row for row in raw_rows}
+            curve_names = ["Bryson's rule", "Output-weighted LQR",
+                          "Implicit model-following", "Explicit model-following"]
+            if all(name in by_name for name in curve_names):
+                four_curve = {"rows": [by_name[name] for name in curve_names],
+                             "Am": Am, "t": mf_t, "xm_ref": mf_xm_ref}
     except Exception as exc:  # noqa: BLE001 - report, don't crash the session
         return {"ok": False, "error": f"Benchmark failed: {exc}"}
 
@@ -382,4 +398,10 @@ def run_lqg_benchmark(plant_preset: str = None, custom_plant: dict = None,
                 "A": format_matlab_literal(plant.A), "B": format_matlab_literal(plant.B),
                 "C": format_matlab_literal(plant.C), "D": format_matlab_literal(plant.D),
             }
+        if four_curve is not None:
+            # Same treatment as _sim_rows -- popped before json.dumps,
+            # never reaches the model. See its own assembly above for
+            # why this is free (already-computed rows, no second
+            # simulation) and only present when am_diag was supplied.
+            result["_four_curve"] = four_curve
     return result

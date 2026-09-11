@@ -551,5 +551,41 @@ class TestSessionListVisibleWhileChatting(unittest.TestCase):
             self.assertGreater(len(rows), 0)
 
 
+class TestLlmAmDiagAutoPopulatesFourCurvePlot(unittest.TestCase):
+    """Regression: an LLM benchmark call that supplies am_diag used to
+    auto-show only the regular session-overlay plot -- the "4-curve
+    comparison" view stayed empty ("Tune methods to compare them here"),
+    reachable only via Manual mode's own button, even though its 4 rows
+    (Bryson/Output-weighted/Implicit/Explicit) were already computed as
+    part of the same call. See run_lqg_benchmark's _four_curve note."""
+
+    def test_four_curve_plot_renders_from_an_llm_am_diag_call(self):
+        from supervisor_session_lqg import LQGSession
+        from supervisor_tools_lqg import run_lqg_benchmark
+
+        real_result = run_lqg_benchmark("aircraft_hall", am_diag=[0.1, 0.07], return_sim=True)
+        self.assertTrue(real_result["ok"], real_result.get("error"))
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "mimo", "plant": real_result["plant_name"],
+                "plant_preset": real_result["plant_preset"],
+                "custom_plant_literals": None,
+                "four_curve": real_result["_four_curve"],
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(LQGSession, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+
+            self.assertEqual(at.exception[:], [])
+            headers = [h.value for h in at.subheader]
+            self.assertTrue(any("4-curve comparison" in h for h in headers))
+
+
 if __name__ == "__main__":
     unittest.main()

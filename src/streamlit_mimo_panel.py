@@ -467,7 +467,8 @@ def _do_compare_all(ex):
     st.success(f"Compared {len(rows)} regulator-family methods. Untick any below to declutter.")
 
 
-def absorb_llm_rows(plant_id, rows, plant_preset="", custom_plant_literals=None):
+def absorb_llm_rows(plant_id, rows, plant_preset="", custom_plant_literals=None,
+                    four_curve=None):
     """Turn raw run_lqg_benchmark(return_sim=True) rows (ComparisonRow
     objects, .sim intact) into session entries — the same gs.
     ControllerEntry shape _do_compare_all builds for a manual "Compare
@@ -479,7 +480,15 @@ def absorb_llm_rows(plant_id, rows, plant_preset="", custom_plant_literals=None)
     plant_preset/custom_plant_literals carry the reloadable plant
     identity through to each entry (see gs.ControllerEntry's own note
     on why plant_id alone -- a display name -- isn't enough), for
-    _render_llm_plant_carryover() below."""
+    _render_llm_plant_carryover() below.
+
+    four_curve (present only when the LLM's call supplied am_diag -- see
+    run_lqg_benchmark's own note) seeds st.session_state["mimo_four_
+    curve"] directly, the same shape _do_four_curve's manual button
+    leaves it in, so _render_four_curve_plot() picks it up without a
+    second, separate simulation -- its 4 rows are already among `rows`
+    above (this doesn't skip adding them to the regular session list
+    too, just reuses them for the extra view)."""
     literals = custom_plant_literals or {}
     n_ok = 0
     for row in rows:
@@ -493,6 +502,10 @@ def absorb_llm_rows(plant_id, rows, plant_preset="", custom_plant_literals=None)
             plant_C=literals.get("C", ""), plant_D=literals.get("D", ""))
         entry.checks = row.checks
         n_ok += 1
+    if four_curve is not None:
+        st.session_state["mimo_four_curve"] = (
+            four_curve["rows"], four_curve["Am"], four_curve["t"],
+            four_curve["xm_ref"], plant_id)
     return n_ok
 
 
