@@ -510,9 +510,10 @@ def _render_session_list():
         return
 
     # No st.rerun() needed after these — they mutate state that the rest
-    # of this same render() pass (the checkbox loop right below, and the
-    # plots column after it) reads fresh, so the mutation is already
-    # reflected by the time this script run finishes. Clear/remove-unchecked
+    # of this same render_plots() pass (the checkbox loop right below,
+    # and the Response/Heatmap/Radar plots after it) reads fresh, so the
+    # mutation is already reflected by the time this script run finishes.
+    # Clear/remove-unchecked
     # replace the list itself rather than mutating entries in place, so
     # siso_entries is re-fetched afterward instead of relying on the
     # now-stale snapshot from the top of this function.
@@ -787,7 +788,6 @@ def render_controls():
 
     _render_sim_settings()
     gs.snapshot_widget_state(_PROTECTED_KEYS)
-    _render_session_list()
     _render_last_result()
 
 
@@ -796,13 +796,23 @@ def render_plots():
     whenever Track=SISO/PID, regardless of Mode: entries in
     gs.get_by_kind("siso") come from either the manual controls above or
     streamlit_llm_panel.py's absorb_llm_rows(), tagged by entry.source,
-    so this reads and draws the same session list either way. Stacked
-    vertically rather than switched via tabs/radio — an inner st.tabs
-    nested inside the outer layout render unreliably in Streamlit's
-    frontend (no error at the Python level, but the inner tab bar can end
-    up invisible/non-interactive); showing all three at once sidesteps
-    that entirely."""
+    so this reads and draws the same session list either way.
+
+    The session list itself renders here too, not in render_controls()
+    -- it used to live there, but that meant it was invisible in Mode=
+    LLM Supervisor (render_controls() shows the chat instead), so an
+    LLM-triggered entry's checkbox/badge/Clear-all were only reachable
+    by switching to Manual first. Reported live; moved here so it's
+    visible and manageable regardless of Mode, same as the plots below
+    it already were.
+
+    The three plots are stacked vertically rather than switched via
+    tabs/radio — an inner st.tabs nested inside the outer layout render
+    unreliably in Streamlit's frontend (no error at the Python level,
+    but the inner tab bar can end up invisible/non-interactive); showing
+    all three at once sidesteps that entirely."""
     gs.assign_colors(gs.get_by_kind("siso"))
+    _render_session_list()
     st.subheader("Response")
     _render_response_plot()
     st.subheader("Heatmap")

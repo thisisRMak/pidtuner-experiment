@@ -530,5 +530,39 @@ class TestLlmPlantCarryoverAffordance(unittest.TestCase):
                              "affordance must not still offer to load the plant it just loaded")
 
 
+class TestSessionListVisibleWhileChatting(unittest.TestCase):
+    """Regression: the session list (entries, badges, Select all/
+    Deselect all/Clear all) used to render only inside render_controls(),
+    which Mode=LLM Supervisor replaces with the chat -- so an LLM-
+    triggered entry's checkbox/badge/bulk actions were only reachable by
+    switching to Manual first. Reported live. Now renders in
+    render_plots() (always called regardless of Mode), so it's visible
+    without switching Mode at all."""
+
+    def test_llm_entries_and_bulk_actions_visible_without_switching_to_manual(self):
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1/(90s+1)", delay=13.0, return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1/(90s+1)", "delay": 13.0,
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+
+            # Still in LLM Supervisor mode -- never switched to Manual.
+            self.assertEqual(at.exception[:], [])
+            self.assertTrue(any(b.key == "siso_select_all" for b in at.button))
+            rows = [m.value for m in at.markdown if ":violet-badge[🤖 LLM]" in m.value]
+            self.assertGreater(len(rows), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

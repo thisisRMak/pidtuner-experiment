@@ -694,7 +694,6 @@ def render_controls():
         _do_per_channel_step()
 
     gs.snapshot_widget_state(_PROTECTED_KEYS)
-    _render_session_list()
     _render_last_result()
 
 
@@ -702,8 +701,11 @@ def render_plots():
     """The right-hand plots half — called by streamlit_unified_panel.py
     whenever Track=MIMO/LQR-LQG, regardless of Mode — see
     streamlit_siso_panel.py's render_plots() docstring for why entries
-    from both Manual and LLM Supervisor mode show up here the same way."""
+    from both Manual and LLM Supervisor mode show up here the same way,
+    and why the session list itself renders here now too rather than in
+    render_controls()."""
     gs.assign_colors(gs.get_by_kind("mimo"))
+    _render_session_list()
     _render_response_plot()
     _render_four_curve_plot()
     _render_per_channel_step_plot()

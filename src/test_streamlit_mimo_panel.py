@@ -516,5 +516,40 @@ class TestMethodArgsSurviveAMethodSwitch(unittest.TestCase):
         self.assertEqual(at.text_input(key="mimo_R_diag").value, "3.0")
 
 
+class TestSessionListVisibleWhileChatting(unittest.TestCase):
+    """Regression: same fix as streamlit_siso_panel.py's -- see its own
+    copy of this test for the live report that motivated it."""
+
+    def test_llm_entries_and_bulk_actions_visible_without_switching_to_manual(self):
+        from supervisor_session_lqg import LQGSession
+        from supervisor_tools_lqg import run_lqg_benchmark
+
+        custom_plant = {"name": "My widget", "A": [[0, 1], [-2, -3]], "B": [[0], [1]],
+                        "C": [[1, 0]], "D": [[0]]}
+        real_result = run_lqg_benchmark(custom_plant=custom_plant, return_sim=True)
+        self.assertTrue(real_result["ok"], real_result.get("error"))
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "mimo", "plant": real_result["plant_name"],
+                "plant_preset": real_result["plant_preset"],
+                "custom_plant_literals": real_result["_custom_plant_literals"],
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(LQGSession, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+
+            # Still in LLM Supervisor mode -- never switched to Manual.
+            self.assertEqual(at.exception[:], [])
+            self.assertTrue(any(b.key == "mimo_select_all" for b in at.button))
+            rows = [m.value for m in at.markdown if ":violet-badge[🤖 LLM]" in m.value]
+            self.assertGreater(len(rows), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
