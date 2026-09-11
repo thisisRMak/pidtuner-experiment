@@ -223,6 +223,35 @@ class TestErrorPaths(unittest.TestCase):
         self.assertEqual(_n_entries(at), before)
 
 
+class TestCircleSwatchIsRealUnicodeNotAShortcode(unittest.TestCase):
+    """Regression: the color swatch used to be a markdown :color_circle:
+    shortcode, on the assumption Streamlit's frontend converts it the
+    way GitHub's does. Confirmed live in a real browser (AppTest can't
+    see this -- it only inspects the raw markdown source, never what a
+    browser does with it) that only :large_blue_circle:/:red_circle:/
+    :black_circle: actually convert -- every other color rendered as
+    literal, unconverted shortcode text. Now a literal Unicode
+    character, so there's no conversion step left to fail."""
+
+    def test_circle_emoji_covers_every_palette_color_with_a_real_character(self):
+        import streamlit_gui_state as gs
+        from streamlit_siso_panel import _circle_emoji
+
+        for hex_color in gs.PALETTE:
+            swatch = _circle_emoji(hex_color)
+            self.assertNotIn(":", swatch, f"{hex_color} still returns shortcode-shaped text")
+
+    def test_no_leftover_shortcode_text_in_a_real_session_list(self):
+        at = _fresh_app()
+        tab = _siso_tab(at)
+        tab.button(key="siso_compare_all").click()
+        at.run(timeout=60)
+        self.assertGreater(_n_entries(at), 5)  # several distinct palette colors in play
+        for m in at.markdown:
+            self.assertNotRegex(m.value, r":\w+_circle:",
+                               f"shortcode-shaped text leaked into a rendered row: {m.value!r}")
+
+
 class TestLlmEntryTagIsABadge(unittest.TestCase):
     """Regression: the 🤖 LLM tag on a source="llm" session-list row used
     to be plain markdown text appended after the label, which rendered

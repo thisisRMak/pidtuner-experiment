@@ -551,7 +551,7 @@ def _render_session_list():
         if enabled != entry.enabled:
             gs.set_enabled(entry.id, enabled)
         tag = "  :violet-badge[🤖 LLM]" if entry.source == "llm" else ""
-        c2.markdown(f"{_circle_shortcode(entry.color)} {entry.label}{tag}")
+        c2.markdown(f"{_circle_emoji(entry.color)} {entry.label}{tag}")
         g = entry.params
         plant_tag = f"  ·  {entry.plant}" if entry.plant else ""
         c3.caption(f"Kp={g.Kp:.3g}  Ki={g.Ki:.3g}  Kd={g.Kd:.3g}{plant_tag}")
@@ -567,17 +567,32 @@ def _palette_name(hex_color):
     return names.get(hex_color, "blue")
 
 
-def _circle_shortcode(hex_color):
-    """Markdown emoji shortcode for a colored-circle swatch. Only
-    :large_blue_circle: carries a "large_" prefix (a legacy alias) --
-    every other color's real shortcode (:red_circle:, :yellow_circle:,
-    :green_circle:, ...) has none, so using "large_" unconditionally
-    (the previous behavior here) rendered as literal text for every
-    color but blue -- confirmed against the `emoji` package's own alias
-    table, not assumed. Pre-existing bug (not introduced by this
-    session), also present in streamlit_mimo_panel.py's own copy."""
-    name = _palette_name(hex_color)
-    return f":large_{name}_circle:" if name == "blue" else f":{name}_circle:"
+_CIRCLE_EMOJI = {
+    "blue": "🔵", "red": "🔴", "green": "🟢", "purple": "🟣",
+    "orange": "🟠", "brown": "🟤", "black": "⚫", "yellow": "🟡",
+}
+
+
+def _circle_emoji(hex_color):
+    """Colored-circle swatch for a session-list row, as a literal
+    Unicode character rather than a markdown :shortcode: (e.g.
+    :green_circle:). An earlier version of this function returned
+    shortcode text instead, on the theory that Streamlit's markdown
+    renderer converts :shortcode: to the matching emoji the way GitHub's
+    does -- checked, at the time, against the `emoji` Python package's
+    own alias table. Confirmed live in an actual browser (not just
+    AppTest, which only inspects the server-side element tree/raw
+    markdown source and so cannot see this) that Streamlit's frontend
+    only recognizes a narrow subset: :large_blue_circle:, :red_circle:,
+    and :black_circle: converted correctly, but :green_circle:,
+    :purple_circle:, :orange_circle:, :brown_circle:, and
+    :yellow_circle: all rendered as literal, unconverted text. Embedding
+    the actual emoji character sidesteps shortcode conversion (and
+    whatever narrower set Streamlit happens to support) entirely -- the
+    same way the 🤖 tag elsewhere in this file has always worked, since
+    it was never a shortcode to begin with. Also present, identically,
+    in streamlit_mimo_panel.py's own copy."""
+    return _CIRCLE_EMOJI[_palette_name(hex_color)]
 
 
 # ── comparison views (heatmap / radar) ──────────────────────────────────

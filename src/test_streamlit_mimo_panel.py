@@ -275,6 +275,29 @@ class TestErrorPaths(unittest.TestCase):
         self.assertEqual(_n_entries(at), before)
 
 
+class TestCircleSwatchIsRealUnicodeNotAShortcode(unittest.TestCase):
+    """Regression: same fix as streamlit_siso_panel.py's -- see its own
+    copy of this test for the real-browser finding that motivated it."""
+
+    def test_circle_emoji_covers_every_palette_color_with_a_real_character(self):
+        import streamlit_gui_state as gs
+        from streamlit_mimo_panel import _circle_emoji
+
+        for hex_color in gs.PALETTE:
+            swatch = _circle_emoji(hex_color)
+            self.assertNotIn(":", swatch, f"{hex_color} still returns shortcode-shaped text")
+
+    def test_no_leftover_shortcode_text_in_a_real_session_list(self):
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_compare_all").click()
+        at.run(timeout=60)
+        self.assertGreater(_n_entries(at), 1)
+        for m in at.markdown:
+            self.assertNotRegex(m.value, r":\w+_circle:",
+                               f"shortcode-shaped text leaked into a rendered row: {m.value!r}")
+
+
 class TestLlmEntryTagIsABadge(unittest.TestCase):
     """Regression: same fix as streamlit_siso_panel.py's -- the 🤖 LLM
     tag now renders as a :violet-badge[...] pill instead of plain
