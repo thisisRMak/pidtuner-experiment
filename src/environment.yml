@@ -23,5 +23,6 @@ dependencies:
       - streamlit
       - anthropic
       - openai
+      - google-genai
       - python-dotenv
       - Brotli>=1.1

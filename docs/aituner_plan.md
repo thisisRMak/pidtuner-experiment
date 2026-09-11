@@ -1,15 +1,110 @@
 # aituner — multi-provider LLM supervisor
 
-**Status (2026-09-11, OpenAI pass): Claude/Anthropic and ChatGPT/OpenAI are
-both implemented and unit-tested on the GUI and the CLI. Gemini is not
-started, on either surface — confirmed by grepping `src/` fresh, the only
-hit is the pre-existing "key accepted, not wired" GUI stub. Unlike
-Anthropic, OpenAI has not been live-verified against the real API (no key
-available to this session) — offline/mocked coverage only. See "Update
-(2026-09-11, OpenAI pass)" immediately below for what's actually built;
-the sections after that are progressively older plan/status snapshots,
-kept for the reasoning trail — read top-down, most current first, don't
-take the tail of the doc as current.**
+**Status (2026-09-11, Gemini pass): all three providers — Claude/
+Anthropic, ChatGPT/OpenAI, Gemini/Google — are now implemented and
+unit-tested on both the GUI and the CLI, closing out the "Next up" item 3
+that has tracked this since the Anthropic-only build. Anthropic and OpenAI
+are also live-verified against the real API this same day (a real key was
+available for both); Gemini is offline/mocked coverage only so far — no
+Gemini key available to this session, so its live-verification step is
+still open, same as OpenAI's was before its own live check. Correcting
+this doc's own immediately-prior status line, which said OpenAI was
+offline-only — that was accurate when written, superseded by a live check
+later the same session (see "Update (2026-09-11, OpenAI pass)" below).
+See "Update (2026-09-11, Gemini pass)" immediately below for what's
+actually built; the sections after that are progressively older plan/
+status snapshots, kept for the reasoning trail — read top-down, most
+current first, don't take the tail of the doc as current.**
+
+## Update (2026-09-11, Gemini pass)
+
+Gemini/Google wired end-to-end on the same branch as the OpenAI pass
+(`supervisor-openai-gemini`, still not merged to `main`), closing out the
+"Next up" item 3 first opened when only Anthropic was built. Same
+"separate pass, separate research" treatment the user asked for.
+
+- **`src/supervisor_llm_gemini.py`** (new): hand-rolled `GeminiClient`
+  over the `google-genai` SDK, structured like the Anthropic/OpenAI
+  clients but verified against the *installed* `google-genai` 2.23.0
+  package's actual source — not just its docs or README, which on the
+  single most important point (how to match a function call to its
+  response) turned out to **disagree with the code that actually ships**.
+  Three genuinely surprising, source-confirmed findings, all documented
+  in the client's own module docstring:
+  - **No id-based matching, despite `id` fields existing on both
+    `FunctionCall` and `FunctionResponse`, and despite the SDK's own
+    README example implying id-based matching.** The installed package's
+    real, shipped automatic-function-calling implementation
+    (`google/genai/_extra_utils.py`'s `get_function_response_parts`,
+    called from `models.py`) never sets `id` — correctness instead comes
+    from building response `Part`s in the same order the `FunctionCall`
+    `Part`s appeared. This client follows the same shipped behavior. This
+    also **reverses** an early-session doc-search finding ("Gemini 3
+    always returns id, must match by it") that turned out to describe a
+    different API surface, not the actual `google-genai` Python SDK this
+    project uses — caught by cross-checking the installed package's own
+    source rather than trusting the doc search.
+  - **`role="user"` for function-response turns, not `"tool"`.** The
+    SDK's README manual-function-calling example shows `role='tool'`,
+    and `Content.role`'s own field docstring says "Must be either 'user'
+    or 'model'" — two different answers from two different doc sources.
+    The actual shipped code (`models.py`'s reference implementation)
+    settled it: `types.Content(role='user', parts=func_response_parts)`.
+    Trusted the code that runs over both doc sources.
+  - **`parameters_json_schema`** on `FunctionDeclaration` accepts the
+    same plain lowercase JSON-schema dict already used throughout
+    supervisor_tools_*.py — confirmed via `model_fields` on the installed
+    package — so, like OpenAI, no schema translation step was needed.
+  - One turn's function responses batch into one `Content`, like
+    Anthropic's same-turn-batching requirement, not OpenAI's one-message-
+    per-result shape — also confirmed from the shipped reference code.
+  - `automatic_function_calling` explicitly disabled whenever tools are
+    passed, defensively — not because it was confirmed to misfire here,
+    but because a real, filed SDK issue (googleapis/python-genai#1818)
+    describes this config persisting unexpectedly across calls on the
+    same `Client`.
+- **`test_supervisor_llm_gemini.py`** (new, 17 tests): mirrors the other
+  two clients' test files, adapted for the above — an order-preservation
+  regression test stands in for the Anthropic/OpenAI id-collision
+  regression test, since there's no id to collide on here.
+- **Model ids verified against Google's official pricing docs**
+  (ai.google.dev/gemini-api/docs/pricing, not just third-party
+  aggregators, which were cross-checked against it): `gemini-3.5-flash-
+  lite` (cheapest, default) / `gemini-3.8-flash` (more capable) offered,
+  `gemini-3.1-pro-preview` excluded — same "most expensive tier" pattern
+  as Opus/gpt-5.6-sol.
+- **`GOOGLE_API_KEY` vs `GEMINI_API_KEY`** (open since the 2026-09-07
+  robustness memo): confirmed from the SDK's own source — both are read,
+  `GOOGLE_API_KEY` wins if both are set. CLI's `_resolve_gemini_key`
+  checks both, in that order; `streamlit_llm_panel.py`'s existing
+  `ENV_VAR` guess (`GOOGLE_API_KEY`) was already right.
+- **CLI**: `cli_supervisor_pid.py`/`cli_supervisor_lqg.py` `--provider`
+  gains `gemini`.
+- **GUI**: Gemini wired into `WIRED_PROVIDERS` (now equal to all of
+  `PROVIDERS` — no unwired provider left, so `TestUnwiredProvider` was
+  removed from the test file rather than kept pointed at a moot case).
+  Exception handling required a real structural difference, not just a
+  tuple extension like OpenAI's: `google.genai.errors` has no per-error-
+  type classes the way anthropic/openai do (confirmed from its source) —
+  just `ClientError`/`ServerError` for the whole 4xx/5xx range, so
+  auth/rate-limit are distinguished by branching on `exc.code` inside one
+  `except genai_errors.ClientError` block instead.
+- **A pre-existing inaccuracy noticed and fixed while touching this
+  code, not introduced by this pass**: the cost-warning text still said
+  "(Haiku is cheapest)" unconditionally, stale since the OpenAI pass
+  already made it provider-specific-but-unstated; generalized to "the
+  default is the cheapest option offered" now that a third provider makes
+  the hardcoded name even more obviously wrong.
+- **Tests**: `test_supervisor_llm_gemini.py` (17), CLI test files extended
+  with Gemini's provider-dispatch cases including the GOOGLE_API_KEY-wins-
+  when-both-set precedence check, `test_streamlit_llm_panel.py` extended
+  (env-key gating, model picker, cost warning, four new Gemini exception-
+  branch tests, the mode-switch persistence regression, `TestUnwiredProvider`
+  removed). Full project suite green after this pass, no regressions.
+- **Not done in this pass, deliberately**: no live call against the real
+  Gemini API (no key available to this session); no Gemini demo shell
+  script (same open cost-gating question as the other two providers).
+- **requirements.txt/environment.yml**: added `google-genai`, unpinned.
 
 ## Update (2026-09-11, OpenAI pass)
 
@@ -312,9 +407,12 @@ actually work" questions mid-session, not assumptions):
    `streamlit_unified_panel.py`. See "Update (2026-09-11)" above.
 2. ~~Anthropic over the CLI~~ — **done** (`2abf5fd`). See "Update
    (2026-09-11)" above.
-3. **OpenAI + Gemini**, both CLI and GUI — the two still-unwired
-   providers, not started as of 2026-09-11 (confirmed by grepping `src/`
-   fresh). Each needs its own current-docs verification pass (no bundled
+3. ~~OpenAI + Gemini, both CLI and GUI~~ — **done** (both passes, on
+   branch `supervisor-openai-gemini`, not merged to `main`). See "Update
+   (2026-09-11, OpenAI pass)" and "Update (2026-09-11, Gemini pass)"
+   above. The two still-unwired providers, not started as of 2026-09-11
+   (confirmed by grepping `src/` fresh) — as of when this item was
+   written. Each needed its own current-docs verification pass (no bundled
    skill for either, unlike `claude-api` for Anthropic) before writing a
    hand-rolled client, per the aisuite investigation's lesson above: don't
    assume, check. Two things to inherit from the Anthropic work, not

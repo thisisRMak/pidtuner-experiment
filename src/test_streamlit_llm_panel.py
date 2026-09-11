@@ -24,9 +24,9 @@ general caveat, and this session's live Playwright check for the one thing
 AppTest genuinely cannot see): the real chat_input/history layout order --
 that was a rendering-only bug AppTest's element-tree inspection missed
 entirely; a real browser check found and confirmed the fix. Also not
-covered: an actual live conversation against the real Anthropic or OpenAI
-API (see docs/aituner_plan.md and the scripted live check run alongside
-this file).
+covered: an actual live conversation against the real Anthropic, OpenAI,
+or Gemini API (see docs/aituner_plan.md and the scripted live check run
+alongside this file).
 """
 
 from __future__ import annotations
@@ -47,12 +47,12 @@ def _run_app(env=None, provider=None):
     so with nothing pre-set it would otherwise happily load the real file.
 
     `provider`, when given, switches the Provider selectbox away from the
-    default (Claude) -- for OpenAI/Gemini-specific coverage now that
-    ChatGPT is a second wired provider. Done *inside* the same
-    patch.dict(os.environ, ...) block as the initial run, not as a
-    separate call after this function returns -- env's patched vars
-    (e.g. OPENAI_API_KEY) must still be in effect for _configured_key()
-    to see them on the rerun the provider switch triggers."""
+    default (Claude) -- for OpenAI/Gemini-specific coverage now that both
+    are wired providers too. Done *inside* the same patch.dict(os.environ,
+    ...) block as the initial run, not as a separate call after this
+    function returns -- env's patched vars (e.g. OPENAI_API_KEY) must
+    still be in effect for _configured_key() to see them on the rerun the
+    provider switch triggers."""
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
         at = AppTest.from_file(APP_PATH).run(timeout=30)
@@ -94,6 +94,13 @@ class TestKeyGating(unittest.TestCase):
                        [s.value for s in at.success])
         self.assertEqual(len(at.chat_input), 1)
 
+    def test_gemini_env_configured_key_skips_textbox_and_unlocks_chat(self):
+        at = _run_app({"GOOGLE_API_KEY": "fake-gemini-test-from-env"}, provider="Gemini (Google)")
+        self.assertNotIn("Gemini (Google) API key", [ti.label for ti in at.text_input])
+        self.assertIn("Gemini (Google) key configured by the operator — nothing to enter.",
+                       [s.value for s in at.success])
+        self.assertEqual(len(at.chat_input), 1)
+
 
 class TestModelPicker(unittest.TestCase):
     def test_offers_only_haiku_and_sonnet_defaulting_to_haiku(self):
@@ -130,14 +137,29 @@ class TestModelPicker(unittest.TestCase):
         warnings = [w.value for w in at.warning]
         self.assertTrue(any("billed" in w for w in warnings))
 
+    def test_gemini_offers_only_flash_lite_and_flash_defaulting_to_flash_lite(self):
+        at = _run_app({"GOOGLE_API_KEY": "fake-gemini-test"}, provider="Gemini (Google)")
+        sb = at.selectbox(key="llm_model_gemini")
+        self.assertEqual(len(sb.options), 2)
+        self.assertTrue(any("Flash-Lite" in o for o in sb.options))
+        self.assertTrue(any("3.8 Flash" in o for o in sb.options))
+        self.assertFalse(any("Pro" in o for o in sb.options),
+                          "the pricier gemini-3.1-pro-preview tier must not be offered")
+        self.assertEqual(sb.value, "gemini-3.5-flash-lite")
 
-class TestUnwiredProvider(unittest.TestCase):
-    def test_gemini_key_accepted_but_not_unlocked(self):
-        at = _run_app(provider="Gemini (Google)")
-        at.text_input(key="llm_api_key_gemini").set_value("fake-gemini-key").run(timeout=30)
-        infos = [i.value for i in at.info]
-        self.assertTrue(any("isn't built yet" in i for i in infos))
-        self.assertEqual(len(at.chat_input), 0, "chat must stay locked for an unwired provider")
+    def test_gemini_cost_warning_shown_once_a_model_is_selectable(self):
+        at = _run_app({"GOOGLE_API_KEY": "fake-gemini-test"}, provider="Gemini (Google)")
+        warnings = [w.value for w in at.warning]
+        self.assertTrue(any("billed" in w for w in warnings))
+
+
+# No TestUnwiredProvider class -- Claude, ChatGPT, and Gemini are all wired
+# now (WIRED_PROVIDERS == set(PROVIDERS)), so there's no remaining provider
+# to exercise the "key accepted, not wired" path with. The code path itself
+# (_render_key_entry's `if provider not in WIRED_PROVIDERS`) is left as
+# defensive dead code for a hypothetical future 4th provider, not removed --
+# see the module's own note on leaving pre-existing dead code alone rather
+# than deleting it speculatively.
 
 
 class TestChatErrorHandling(unittest.TestCase):
@@ -219,6 +241,48 @@ class TestChatErrorHandling(unittest.TestCase):
             openai.APIConnectionError(request=httpx2.Request("POST", "https://api.openai.com"))
         )
         self.assertIn("Couldn't reach", reply)
+
+    # Same reasoning as above, for the newly-wired Gemini provider -- these
+    # exercise the genai_errors.ClientError/ServerError branch, which
+    # google-genai shapes differently from anthropic/openai (one exception
+    # class per 4xx/5xx range, not per error type -- see streamlit_llm_
+    # panel.py's except block comment). No Gemini-specific "connection
+    # error" test: google-genai has no distinct exception class for that
+    # (confirmed from its errors.py source, just ClientError/ServerError
+    # for actual HTTP responses) -- a real connection failure would
+    # propagate as a raw httpx exception straight into the generic
+    # fallback already covered by test_unexpected_exception_falls_back_to_
+    # generic_message above.
+
+    def test_gemini_client_error_401_reads_as_rejected(self):
+        from google.genai import errors as genai_errors
+        reply = self._send_and_get_reply(
+            genai_errors.ClientError(401, {"error": {"message": "bad key"}})
+        )
+        self.assertIn("rejected", reply)
+
+    def test_gemini_client_error_429_reads_as_rate_limited(self):
+        from google.genai import errors as genai_errors
+        reply = self._send_and_get_reply(
+            genai_errors.ClientError(429, {"error": {"message": "slow down"}})
+        )
+        self.assertIn("Rate limited", reply)
+
+    def test_gemini_client_error_other_4xx_reads_as_generic_provider_error(self):
+        from google.genai import errors as genai_errors
+        reply = self._send_and_get_reply(
+            genai_errors.ClientError(400, {"error": {"message": "bad request"}})
+        )
+        self.assertIn("returned an error", reply)
+        self.assertIn("bad request", reply)
+
+    def test_gemini_server_error_reads_as_generic_provider_error(self):
+        from google.genai import errors as genai_errors
+        reply = self._send_and_get_reply(
+            genai_errors.ServerError(500, {"error": {"message": "internal error"}})
+        )
+        self.assertIn("returned an error", reply)
+        self.assertIn("internal error", reply)
 
 
 class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
@@ -404,6 +468,26 @@ class TestApiKeySurvivesAModeSwitch(unittest.TestCase):
         self.assertEqual(at.session_state["llm_provider"], "ChatGPT (OpenAI)")
         self.assertEqual(at.session_state["llm_api_key_openai"], "sk-openai-my-real-key")
         self.assertEqual(at.session_state["llm_model_openai"], "gpt-5.6-terra")
+        self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
+
+    def test_gemini_key_and_model_survive_a_round_trip_to_manual_and_back(self):
+        """Same regression again, for the Gemini provider -- covers the
+        llm_api_key_gemini/llm_model_gemini entries in _PROTECTED_KEYS."""
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.selectbox(key="llm_provider").set_value("Gemini (Google)").run(timeout=30)
+            at.text_input(key="llm_api_key_gemini").set_value("fake-gemini-my-real-key").run(timeout=30)
+            at.selectbox(key="llm_model_gemini").set_value("gemini-3.8-flash").run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        self.assertEqual(at.session_state["llm_provider"], "Gemini (Google)")
+        self.assertEqual(at.session_state["llm_api_key_gemini"], "fake-gemini-my-real-key")
+        self.assertEqual(at.session_state["llm_model_gemini"], "gemini-3.8-flash")
         self.assertEqual(len(at.chat_input), 1, "must not be locked out of chat after the round trip")
 
 

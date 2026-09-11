@@ -34,9 +34,9 @@ Key resolution, checked in order per provider (see _configured_key):
    lost on refresh. This is the only source on a public deploy with no
    operator-configured key.
 
-Claude and ChatGPT are wired to actual clients (supervisor_llm_anthropic.
-AnthropicClient, supervisor_llm_openai.OpenAIClient). Gemini's key is
-accepted here but not yet connected to anything — see docs/aituner_plan.md.
+Claude, ChatGPT, and Gemini are all wired to actual clients
+(supervisor_llm_anthropic.AnthropicClient, supervisor_llm_openai.
+OpenAIClient, supervisor_llm_gemini.GeminiClient) — see docs/aituner_plan.md.
 """
 
 from __future__ import annotations
@@ -49,9 +49,11 @@ import anthropic
 import openai
 import streamlit as st
 from dotenv import load_dotenv
+from google.genai import errors as genai_errors
 
 from supervisor_llm_anthropic import AnthropicClient
 from supervisor_llm_openai import OpenAIClient
+from supervisor_llm_gemini import GeminiClient
 from supervisor_session_pid import Session
 from supervisor_session_lqg import LQGSession
 from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark
@@ -67,7 +69,7 @@ BLACKBOX_TOOL = (RUN_BLACKBOX_BENCHMARK_SCHEMA, run_blackbox_benchmark)
 LQG_TOOL = (RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark)
 
 PROVIDERS = ["Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"]
-WIRED_PROVIDERS = {"Claude (Anthropic)", "ChatGPT (OpenAI)"}
+WIRED_PROVIDERS = {"Claude (Anthropic)", "ChatGPT (OpenAI)", "Gemini (Google)"}
 
 KEY_STATE = {
     "Claude (Anthropic)": "llm_api_key_anthropic",
@@ -108,6 +110,17 @@ OPENAI_MODELS = [
 ]
 OPENAI_DEFAULT_MODEL_INDEX = 0  # Luna -- see comment above
 
+# Same cheapest/most-capable tradeoff again, for Gemini's current (2026-09)
+# tier lineup -- gemini-3.1-pro-preview deliberately not offered here, same
+# "most expensive tier, no reason to offer it in this app" reasoning as
+# excluding Opus/gpt-5.6-sol above. See supervisor_llm_gemini.py's module
+# docstring for where these ids/prices were verified.
+GEMINI_MODELS = [
+    ("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite -- fastest, cheapest (default)"),
+    ("gemini-3.8-flash", "Gemini 3.8 Flash -- more capable, more expensive"),
+]
+GEMINI_DEFAULT_MODEL_INDEX = 0  # Flash-Lite -- see comment above
+
 # Per-provider (model list, default index) and per-provider model widget
 # key -- a second wired provider means the model picker can no longer
 # unconditionally use ANTHROPIC_MODELS/a single "llm_model" key: switching
@@ -119,10 +132,12 @@ OPENAI_DEFAULT_MODEL_INDEX = 0  # Luna -- see comment above
 MODELS_BY_PROVIDER = {
     "Claude (Anthropic)": (ANTHROPIC_MODELS, ANTHROPIC_DEFAULT_MODEL_INDEX),
     "ChatGPT (OpenAI)": (OPENAI_MODELS, OPENAI_DEFAULT_MODEL_INDEX),
+    "Gemini (Google)": (GEMINI_MODELS, GEMINI_DEFAULT_MODEL_INDEX),
 }
 MODEL_KEY_STATE = {
     "Claude (Anthropic)": "llm_model_anthropic",
     "ChatGPT (OpenAI)": "llm_model_openai",
+    "Gemini (Google)": "llm_model_gemini",
 }
 
 
@@ -182,6 +197,8 @@ def _log_exception(exc: Exception) -> None:
 def _new_session(provider: str, api_key: str, track: str, model: str):
     if provider == "ChatGPT (OpenAI)":
         client = OpenAIClient(api_key=api_key, model=model)
+    elif provider == "Gemini (Google)":
+        client = GeminiClient(api_key=api_key, model=model)
     else:
         client = AnthropicClient(api_key=api_key, model=model)
     if track == "SISO / PID":
@@ -218,14 +235,15 @@ def _render_key_entry():
         st.warning(
             "Chatting here sends real, billed requests to the provider using "
             f"the key above -- cost depends on conversation length and the "
-            "model picked (Haiku is cheapest).",
+            "model picked (the default is the cheapest option offered).",
             icon="💸",
         )
     return provider, api_key, model
 
 
 _PROTECTED_KEYS = ["llm_provider", "llm_api_key_anthropic", "llm_api_key_openai",
-                   "llm_api_key_gemini", "llm_model_anthropic", "llm_model_openai"]
+                   "llm_api_key_gemini", "llm_model_anthropic", "llm_model_openai",
+                   "llm_model_gemini"]
 
 _TRACK_KIND = {"SISO / PID": "siso", "MIMO / LQG": "mimo"}
 
@@ -343,7 +361,20 @@ def render_controls(track):
                     except (anthropic.RateLimitError, openai.RateLimitError) as exc:
                         _log_exception(exc)
                         reply = "Rate limited by the provider — wait a moment and try again."
-                    except (anthropic.APIStatusError, openai.APIStatusError) as exc:
+                    except genai_errors.ClientError as exc:
+                        # google-genai has no per-error-type exception classes
+                        # the way anthropic/openai do (confirmed from its
+                        # errors.py source) -- ClientError covers every 4xx,
+                        # so auth/rate-limit are distinguished by status code
+                        # instead of exception type.
+                        _log_exception(exc)
+                        if exc.code in (401, 403):
+                            reply = "That API key was rejected — double-check it and try again."
+                        elif exc.code == 429:
+                            reply = "Rate limited by the provider — wait a moment and try again."
+                        else:
+                            reply = f"The model provider returned an error: {exc.message}"
+                    except (anthropic.APIStatusError, openai.APIStatusError, genai_errors.ServerError) as exc:
                         _log_exception(exc)
                         reply = f"The model provider returned an error: {exc.message}"
                     except (anthropic.APIConnectionError, openai.APIConnectionError) as exc:
