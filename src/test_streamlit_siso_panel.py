@@ -276,6 +276,35 @@ class TestLlmEntryTagIsABadge(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
 
+class TestCompareAllDoesNotWipeLlmEntries(unittest.TestCase):
+    """Regression: "Compare all methods" used to call gs.clear_by_kind
+    ("siso"), wiping every entry of that kind -- including source="llm"
+    ones from an earlier chat turn, which this button has no business
+    touching. Reported live: running a manual comparison after chatting
+    with the LLM Supervisor made the LLM's entries vanish, with no
+    "Clear LLM entries" click involved. Now scoped to source="you" --
+    "Clear all" stays the one explicit, unscoped way to drop everything."""
+
+    def test_compare_all_leaves_llm_entries_in_place(self):
+        import streamlit_gui_state as gs
+
+        at = _fresh_app()
+        tab = _siso_tab(at)
+        tab.button(key="siso_compare_all").click()
+        at.run(timeout=60)
+        entries = at.session_state[gs.CONTROLLERS_KEY]
+        self.assertGreater(len(entries), 0)
+        n_you = len(entries)
+        entries[0].source = "llm"
+
+        tab = _siso_tab(at)
+        tab.button(key="siso_compare_all").click()
+        at.run(timeout=60)
+        entries = at.session_state[gs.CONTROLLERS_KEY]
+        self.assertEqual(sum(1 for e in entries if e.source == "llm"), 1)
+        self.assertEqual(sum(1 for e in entries if e.source == "you"), n_you)
+
+
 class TestSessionListBulkActions(unittest.TestCase):
     """Regression test for the widget-key/state desync bug: bulk actions
     (select/deselect all) must actually change what the checkboxes show,

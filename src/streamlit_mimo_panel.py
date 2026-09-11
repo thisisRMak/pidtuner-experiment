@@ -454,7 +454,10 @@ def _do_compare_all(ex):
     except Exception as exc:
         st.error(f"Comparison failed: {exc}")
         return
-    gs.clear_by_kind("mimo")
+    # Only "you"-sourced entries -- see streamlit_siso_panel.py's own
+    # _do_compare_all for why "Clear all" (below) stays the one place
+    # that clears source="llm" entries too, unscoped and explicit.
+    gs.clear_by_kind_and_source("mimo", "you")
     for row in rows:
         entry = gs.ControllerEntry(
             kind="mimo", label=f"{row.name} ({ex.key})",

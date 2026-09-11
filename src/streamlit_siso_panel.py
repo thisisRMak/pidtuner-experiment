@@ -390,7 +390,11 @@ def _do_compare_all(plant):
                 and settings["setpoint"] == 1.0
                 and settings["N"] == 80.0
                 and settings["t_end"] is None)
-    gs.clear_by_kind("siso")
+    # Only "you"-sourced entries -- clearing the whole kind (the previous
+    # behavior here) also silently wiped any source="llm" entries the
+    # user had no reason to expect this button to touch. "Clear all"
+    # (below) stays the explicit, unscoped way to drop everything.
+    gs.clear_by_kind_and_source("siso", "you")
     n_ok = 0
     for row in rows:
         gains = row.get("gains")

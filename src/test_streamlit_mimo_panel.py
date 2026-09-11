@@ -375,6 +375,30 @@ class TestLlmPlantCarryoverAffordance(unittest.TestCase):
                              "affordance must not still offer to load the plant it just loaded")
 
 
+class TestCompareAllDoesNotWipeLlmEntries(unittest.TestCase):
+    """Regression: same fix as streamlit_siso_panel.py's -- see its own
+    copy of this test for the live report that motivated it."""
+
+    def test_compare_all_leaves_llm_entries_in_place(self):
+        import streamlit_gui_state as gs
+
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_compare_all").click()
+        at.run(timeout=60)
+        entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo"]
+        self.assertGreater(len(entries), 0)
+        n_you = len(entries)
+        entries[0].source = "llm"
+
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_compare_all").click()
+        at.run(timeout=60)
+        entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo"]
+        self.assertEqual(sum(1 for e in entries if e.source == "llm"), 1)
+        self.assertEqual(sum(1 for e in entries if e.source == "you"), n_you)
+
+
 class TestSessionListBulkActions(unittest.TestCase):
     def test_deselect_all_then_select_all_sync_widgets(self):
         import streamlit_gui_state as gs
