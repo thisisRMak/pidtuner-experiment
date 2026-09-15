@@ -227,10 +227,21 @@ def _render_key_entry():
     model = None
     if provider in WIRED_PROVIDERS:
         models, default_index = MODELS_BY_PROVIDER[provider]
+        # setdefault(), not index= -- same "default value but also set via
+        # Session State API" collision as streamlit_siso_panel.py's
+        # siso_plant_form (see its comment). Safe here despite
+        # _init_panel_state()'s own docstring warning against setdefault()
+        # on these same MODEL_KEY_STATE keys: that bug came from seeding
+        # every provider's key unconditionally, before any of them had ever
+        # been born as a widget. This only ever seeds the CURRENTLY
+        # selected provider's own key, immediately before that exact
+        # widget call in the same branch -- never a key whose widget
+        # doesn't also render this run.
+        st.session_state.setdefault(MODEL_KEY_STATE[provider], models[default_index][0])
         model = st.selectbox(
             "Model", [m[0] for m in models],
             format_func=lambda m: dict(models)[m],
-            index=default_index, key=MODEL_KEY_STATE[provider],
+            key=MODEL_KEY_STATE[provider],
         )
         st.warning(
             "Chatting here sends real, billed requests to the provider using "
