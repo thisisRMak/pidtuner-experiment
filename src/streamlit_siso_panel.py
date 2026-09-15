@@ -101,8 +101,15 @@ def current_manual_plant() -> str | None:
 
 def _render_plant_controls():
     st.subheader("Plant G(s)")
-    st.radio("Plant form", ["Symbolic", "MATLAB coefficients"],
-             key="siso_plant_form", horizontal=True)
+    # default= (not just a pre-set session_state key) would trip Streamlit's
+    # "widget created with a default value but also had its value set via
+    # the Session State API" warning on every Track/Mode switch, since
+    # preserve_widget_state() above already reseeds this key from its
+    # shadow before this widget renders -- setdefault() instead only seeds
+    # the very first time this key has never existed.
+    st.session_state.setdefault("siso_plant_form", "Symbolic")
+    st.segmented_control("Plant form", ["Symbolic", "MATLAB coefficients"],
+                         key="siso_plant_form", required=True)
     if st.session_state["siso_plant_form"] == "Symbolic":
         st.text_input("G(s) =", value="1000 / ((s+1)*(10s+1))", key="siso_tf_expr")
         st.caption("examples:  1000/((s+1)(10s+1))    2/(5s+1)    "
@@ -158,18 +165,24 @@ _METHOD_ARG_KEYS = [
 def _render_method_args(method):
     gs.preserve_widget_state(_METHOD_ARG_KEYS)
     if method.startswith("1."):
-        mode = st.radio("Pole selection", ["auto", "manual"], key="pc_mode",
-                        horizontal=True)
+        # setdefault(), not default= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("pc_mode", "auto")
+        mode = st.segmented_control("Pole selection", ["auto", "manual"], key="pc_mode",
+                                    required=True)
         st.caption("Cancel poles at s = −p₁, s = −p₂")
-        st.number_input("p₁ (positive)", value=0.1, key="pc_p1", disabled=mode == "auto")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("pc_p1", 0.1)
+        st.number_input("p₁ (positive)", key="pc_p1", disabled=mode == "auto")
         st.number_input("p₂ (positive)", value=1.0, key="pc_p2", disabled=mode == "auto")
         st.text_input("Kd (blank/1.0 = auto-scaled)", value="1.0", key="pc_kd")
     elif method.startswith("2."):
         st.number_input("step amplitude", value=1.0, key="zn1_step")
         st.number_input("noise sigma", value=0.0, key="zn1_noise")
     elif method.startswith("3."):
-        st.radio("Ultimate gain source", ["bode", "relay"], key="zn2_source",
-                 horizontal=True)
+        # setdefault(), not default= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("zn2_source", "bode")
+        st.segmented_control("Ultimate gain source", ["bode", "relay"], key="zn2_source",
+                             required=True)
         st.number_input("relay h", value=1.0, key="zn2_relay_h")
         st.number_input("relay T (s)", value=50.0, key="zn2_relay_T")
     elif method.startswith("4."):
@@ -184,12 +197,17 @@ def _render_method_args(method):
         st.number_input("step amplitude", value=1.0, key="cc_step")
         st.number_input("noise sigma", value=0.0, key="cc_noise")
     elif method.startswith("8."):
-        st.radio("Response", ["setpoint", "load"], key="chr_response",
-                 horizontal=True)
-        st.radio("Overshoot", [0, 20], key="chr_overshoot", horizontal=True)
+        # setdefault(), not default= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("chr_response", "setpoint")
+        st.segmented_control("Response", ["setpoint", "load"], key="chr_response",
+                             required=True)
+        st.session_state.setdefault("chr_overshoot", 0)
+        st.segmented_control("Overshoot", [0, 20], key="chr_overshoot", required=True)
     elif method.startswith("9."):
-        st.radio("Ultimate gain source", ["bode", "relay"], key="tl_source",
-                 horizontal=True)
+        # setdefault(), not default= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("tl_source", "bode")
+        st.segmented_control("Ultimate gain source", ["bode", "relay"], key="tl_source",
+                             required=True)
         st.number_input("relay h", value=1.0, key="tl_relay_h")
         st.number_input("relay T (s)", value=50.0, key="tl_relay_T")
         st.checkbox("PI only (no derivative)", value=False, key="tl_pi")
@@ -283,15 +301,20 @@ def _tune_dispatch(method, plant):
 # ── simulation ───────────────────────────────────────────────────────────
 def _render_sim_settings():
     st.subheader("Closed-loop simulation")
-    st.radio("Setpoint", ["step", "ramp", "pulse"], key="sp_kind", horizontal=True)
+    # setdefault(), not default= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("sp_kind", "step")
+    st.segmented_control("Setpoint", ["pulse", "step", "ramp"], key="sp_kind",
+                         required=True)
     st.number_input("amplitude", value=1.0, key="sp_amp")
     st.text_input("duration (blank=auto)", value="", key="sp_t_end")
     st.number_input("u min", value=-100.0, key="u_min")
     st.number_input("u max", value=100.0, key="u_max")
     st.number_input("Derivative filter N (0=disable)", value=80.0, min_value=0.0, key="N")
     st.caption("ramp: linear 0→amp over duration. pulse: amp during [25%, 50%] of duration.")
-    st.radio("Anti-windup", ["conditional", "back_calc"], key="antiwindup",
-             horizontal=True)
+    # setdefault(), not default= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("antiwindup", "conditional")
+    st.segmented_control("Anti-windup", ["conditional", "back_calc"], key="antiwindup",
+                         required=True)
     st.text_input("Ka override (blank=auto)", value="", key="ka_override")
     st.caption("conditional: freeze integral while saturated. back_calc: "
                "Astrom & Hagglund back-calculation. Neither has any effect "

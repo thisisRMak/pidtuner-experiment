@@ -80,9 +80,10 @@ def _n_entries(at):
 
 def _set_widget(tab, key, value):
     """Find whichever widget kind owns this key and set its value —
-    the panel mixes number_input/text_input/radio/checkbox for the
-    method-arg widgets, keyed identically to streamlit_siso_panel.py."""
-    for kind in ("number_input", "text_input", "radio", "checkbox"):
+    the panel mixes number_input/text_input/radio/segmented_control/
+    checkbox for the method-arg widgets, keyed identically to
+    streamlit_siso_panel.py."""
+    for kind in ("number_input", "text_input", "radio", "segmented_control", "checkbox"):
         try:
             getattr(tab, kind)(key=key).set_value(value)
             return
@@ -122,7 +123,7 @@ class TestMatlabPlantForm(unittest.TestCase):
     def test_matlab_coefficients_tune(self):
         at = _fresh_app()
         tab = _siso_tab(at)
-        tab.radio(key="siso_plant_form").set_value("MATLAB coefficients")
+        tab.segmented_control(key="siso_plant_form").set_value("MATLAB coefficients")
         at.run(timeout=30)
         tab = _siso_tab(at)
         tab.text_input(key="siso_gain").set_value("500")
@@ -143,7 +144,7 @@ class TestBackCalcAntiWindup(unittest.TestCase):
     def test_back_calc_with_actual_saturation(self):
         at = _fresh_app()
         tab = _siso_tab(at)
-        tab.radio(key="antiwindup").set_value("back_calc")
+        tab.segmented_control(key="antiwindup").set_value("back_calc")
         tab.number_input(key="u_min").set_value(-0.001)
         tab.number_input(key="u_max").set_value(0.001)
         at.run(timeout=30)
@@ -193,7 +194,7 @@ class TestErrorPaths(unittest.TestCase):
     def test_malformed_matlab_coefficients_disables_tune(self):
         at = _fresh_app()
         tab = _siso_tab(at)
-        tab.radio(key="siso_plant_form").set_value("MATLAB coefficients")
+        tab.segmented_control(key="siso_plant_form").set_value("MATLAB coefficients")
         at.run(timeout=30)
         tab = _siso_tab(at)
         tab.text_input(key="siso_num").set_value("not-a-list")
@@ -208,7 +209,7 @@ class TestErrorPaths(unittest.TestCase):
         tab.selectbox(key="siso_method").set_value("1. Stable pole cancellation")
         at.run(timeout=30)
         tab = _siso_tab(at)
-        tab.radio(key="pc_mode").set_value("manual")
+        tab.segmented_control(key="pc_mode").set_value("manual")
         at.run(timeout=30)
         tab = _siso_tab(at)
         tab.text_input(key="pc_kd").set_value("garbage")

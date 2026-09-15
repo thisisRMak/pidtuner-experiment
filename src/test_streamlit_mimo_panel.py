@@ -357,13 +357,13 @@ class TestLlmPlantCarryoverAffordance(unittest.TestCase):
             at.segmented_control(key="unified_mode").set_value("Manual").run(timeout=30)
             self.assertEqual(at.exception[:], [])
 
-            self.assertEqual(at.radio(key="mimo_plant_source").value, "Preset")
+            self.assertEqual(at.segmented_control(key="mimo_plant_source").value, "Preset")
             captions = [c.value for c in at.caption]
             self.assertTrue(any("LLM Supervisor last analyzed" in c for c in captions))
 
             at.button(key="mimo_load_llm_plant").click().run(timeout=30)
             self.assertEqual(at.exception[:], [])
-            self.assertEqual(at.radio(key="mimo_plant_source").value,
+            self.assertEqual(at.segmented_control(key="mimo_plant_source").value,
                              "Custom (MATLAB matrix entry)")
             self.assertEqual(at.text_area(key="mimo_custom_A").value, "[0 1; -2 -3]")
             self.assertEqual(at.text_area(key="mimo_custom_B").value, "[0; 1]")

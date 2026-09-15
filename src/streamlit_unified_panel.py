@@ -44,10 +44,13 @@ def render():
         # unlike st.radio, which always has exactly one option selected --
         # required=True keeps that same "always exactly one" guarantee the
         # dispatch below assumes.
-        track = st.segmented_control("Track", TRACKS, key="unified_track",
-                                     default=TRACKS[0], required=True)
-        mode = st.segmented_control("Mode", MODES, key="unified_mode",
-                                    default=MODES[0], required=True)
+        track_col, mode_col = st.columns(2)
+        with track_col:
+            track = st.segmented_control("Track", TRACKS, key="unified_track",
+                                         default=TRACKS[0], required=True)
+        with mode_col:
+            mode = st.segmented_control("Mode", MODES, key="unified_mode",
+                                        default=MODES[0], required=True)
         st.divider()
 
         if mode == "Manual":

@@ -166,8 +166,15 @@ def _render_llm_plant_carryover():
 
 def _render_plant_controls():
     st.subheader("Plant")
-    st.radio("Source", ["Preset", "Custom (MATLAB matrix entry)"],
-             key="mimo_plant_source", horizontal=True)
+    # setdefault(), not default= -- default= would trip Streamlit's "widget
+    # created with a default value but also had its value set via the
+    # Session State API" warning, since preserve_widget_state() (and the
+    # "Load this plant" button above) already reseed this key directly
+    # before this widget renders; setdefault() only seeds the very first
+    # time this key has never existed.
+    st.session_state.setdefault("mimo_plant_source", "Preset")
+    st.segmented_control("Source", ["Preset", "Custom (MATLAB matrix entry)"],
+                         key="mimo_plant_source", required=True)
     if st.session_state["mimo_plant_source"] == "Custom (MATLAB matrix entry)":
         return _render_custom_plant_controls()
 
@@ -262,7 +269,9 @@ def _design_dispatch(method, ex):
 def _render_sim_settings():
     st.subheader("Simulation")
     st.text_input("t_end (blank = auto)", value="", key="mimo_t_end")
-    st.number_input("dt", value=0.01, key="mimo_dt", format="%.4f")
+    # setdefault(), not value= -- see mimo_plant_source's comment above.
+    st.session_state.setdefault("mimo_dt", 0.01)
+    st.number_input("dt", key="mimo_dt", format="%.4f")
     st.checkbox("Reference tracking", value=False, key="mimo_ref_tracking")
     st.text_input("reference (blank = all-ones, ny values or 1 to broadcast)",
                   value="", key="mimo_reference")
