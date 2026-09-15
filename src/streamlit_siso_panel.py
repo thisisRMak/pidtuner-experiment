@@ -111,16 +111,24 @@ def _render_plant_controls():
     st.segmented_control("Plant form", ["Symbolic", "MATLAB coefficients"],
                          key="siso_plant_form", required=True)
     if st.session_state["siso_plant_form"] == "Symbolic":
-        st.text_input("G(s) =", value="1000 / ((s+1)*(10s+1))", key="siso_tf_expr")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("siso_tf_expr", "1000 / ((s+1)*(10s+1))")
+        st.text_input("G(s) =", key="siso_tf_expr")
         st.caption("examples:  1000/((s+1)(10s+1))    2/(5s+1)    "
                    "(s+2)/(s^2+3s+1)    1/(s(s+1))")
     else:
-        st.text_input("gain K", value="1000", key="siso_gain")
-        st.text_input("num", value="[1]", key="siso_num")
-        st.text_input("den", value="[10, 11, 1]", key="siso_den")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("siso_gain", "1000")
+        st.text_input("gain K", key="siso_gain")
+        st.session_state.setdefault("siso_num", "[1]")
+        st.text_input("num", key="siso_num")
+        st.session_state.setdefault("siso_den", "[10, 11, 1]")
+        st.text_input("den", key="siso_den")
         st.caption("MATLAB tf(num, den) form, descending powers of s.  "
                    "num=[1, 2] → s + 2   den=[10, 11, 1] → 10s² + 11s + 1")
-    st.number_input("L (dead time, s)", value=0.0, key="siso_L")
+    # setdefault(), not value= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("siso_L", 0.0)
+    st.number_input("L (dead time, s)", key="siso_L")
 
     try:
         plant = _build_plant()
@@ -173,29 +181,50 @@ def _render_method_args(method):
         # setdefault(), not value= -- see siso_plant_form's comment above.
         st.session_state.setdefault("pc_p1", 0.1)
         st.number_input("p₁ (positive)", key="pc_p1", disabled=mode == "auto")
-        st.number_input("p₂ (positive)", value=1.0, key="pc_p2", disabled=mode == "auto")
-        st.text_input("Kd (blank/1.0 = auto-scaled)", value="1.0", key="pc_kd")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("pc_p2", 1.0)
+        st.number_input("p₂ (positive)", key="pc_p2", disabled=mode == "auto")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("pc_kd", "1.0")
+        st.text_input("Kd (blank/1.0 = auto-scaled)", key="pc_kd")
     elif method.startswith("2."):
-        st.number_input("step amplitude", value=1.0, key="zn1_step")
-        st.number_input("noise sigma", value=0.0, key="zn1_noise")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("zn1_step", 1.0)
+        st.number_input("step amplitude", key="zn1_step")
+        st.session_state.setdefault("zn1_noise", 0.0)
+        st.number_input("noise sigma", key="zn1_noise")
     elif method.startswith("3."):
         # setdefault(), not default= -- see siso_plant_form's comment above.
         st.session_state.setdefault("zn2_source", "bode")
         st.segmented_control("Ultimate gain source", ["bode", "relay"], key="zn2_source",
                              required=True)
-        st.number_input("relay h", value=1.0, key="zn2_relay_h")
-        st.number_input("relay T (s)", value=50.0, key="zn2_relay_T")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("zn2_relay_h", 1.0)
+        st.number_input("relay h", key="zn2_relay_h")
+        st.session_state.setdefault("zn2_relay_T", 50.0)
+        st.number_input("relay T (s)", key="zn2_relay_T")
     elif method.startswith("4."):
-        st.checkbox("Integrating process", value=False, key="amigo_integrating")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("amigo_integrating", False)
+        st.checkbox("Integrating process", key="amigo_integrating")
     elif method.startswith("5."):
-        st.text_input("tau_c (blank=auto)", value="", key="simc_tau_c")
-        st.text_input("tau2 (blank=auto)", value="", key="simc_tau2")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("simc_tau_c", "")
+        st.text_input("tau_c (blank=auto)", key="simc_tau_c")
+        st.session_state.setdefault("simc_tau2", "")
+        st.text_input("tau2 (blank=auto)", key="simc_tau2")
     elif method.startswith("6."):
-        st.number_input("Ms", value=1.4, key="boyd_Ms")
-        st.number_input("Mt", value=1.4, key="boyd_Mt")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("boyd_Ms", 1.4)
+        st.number_input("Ms", key="boyd_Ms")
+        st.session_state.setdefault("boyd_Mt", 1.4)
+        st.number_input("Mt", key="boyd_Mt")
     elif method.startswith("7."):
-        st.number_input("step amplitude", value=1.0, key="cc_step")
-        st.number_input("noise sigma", value=0.0, key="cc_noise")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("cc_step", 1.0)
+        st.number_input("step amplitude", key="cc_step")
+        st.session_state.setdefault("cc_noise", 0.0)
+        st.number_input("noise sigma", key="cc_noise")
     elif method.startswith("8."):
         # setdefault(), not default= -- see siso_plant_form's comment above.
         st.session_state.setdefault("chr_response", "setpoint")
@@ -208,9 +237,13 @@ def _render_method_args(method):
         st.session_state.setdefault("tl_source", "bode")
         st.segmented_control("Ultimate gain source", ["bode", "relay"], key="tl_source",
                              required=True)
-        st.number_input("relay h", value=1.0, key="tl_relay_h")
-        st.number_input("relay T (s)", value=50.0, key="tl_relay_T")
-        st.checkbox("PI only (no derivative)", value=False, key="tl_pi")
+        # setdefault(), not value= -- see siso_plant_form's comment above.
+        st.session_state.setdefault("tl_relay_h", 1.0)
+        st.number_input("relay h", key="tl_relay_h")
+        st.session_state.setdefault("tl_relay_T", 50.0)
+        st.number_input("relay T (s)", key="tl_relay_T")
+        st.session_state.setdefault("tl_pi", False)
+        st.checkbox("PI only (no derivative)", key="tl_pi")
     gs.snapshot_widget_state(_METHOD_ARG_KEYS)
 
 
@@ -305,17 +338,25 @@ def _render_sim_settings():
     st.session_state.setdefault("sp_kind", "step")
     st.segmented_control("Setpoint", ["pulse", "step", "ramp"], key="sp_kind",
                          required=True)
-    st.number_input("amplitude", value=1.0, key="sp_amp")
-    st.text_input("duration (blank=auto)", value="", key="sp_t_end")
-    st.number_input("u min", value=-100.0, key="u_min")
-    st.number_input("u max", value=100.0, key="u_max")
-    st.number_input("Derivative filter N (0=disable)", value=80.0, min_value=0.0, key="N")
+    # setdefault(), not value= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("sp_amp", 1.0)
+    st.number_input("amplitude", key="sp_amp")
+    st.session_state.setdefault("sp_t_end", "")
+    st.text_input("duration (blank=auto)", key="sp_t_end")
+    st.session_state.setdefault("u_min", -100.0)
+    st.number_input("u min", key="u_min")
+    st.session_state.setdefault("u_max", 100.0)
+    st.number_input("u max", key="u_max")
+    st.session_state.setdefault("N", 80.0)
+    st.number_input("Derivative filter N (0=disable)", min_value=0.0, key="N")
     st.caption("ramp: linear 0→amp over duration. pulse: amp during [25%, 50%] of duration.")
     # setdefault(), not default= -- see siso_plant_form's comment above.
     st.session_state.setdefault("antiwindup", "conditional")
     st.segmented_control("Anti-windup", ["conditional", "back_calc"], key="antiwindup",
                          required=True)
-    st.text_input("Ka override (blank=auto)", value="", key="ka_override")
+    # setdefault(), not value= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("ka_override", "")
+    st.text_input("Ka override (blank=auto)", key="ka_override")
     st.caption("conditional: freeze integral while saturated. back_calc: "
                "Astrom & Hagglund back-calculation. Neither has any effect "
                "unless u min/u max actually saturate the actuator.")
@@ -803,8 +844,9 @@ def render_controls():
     st.subheader("Tune one method at a time")
     method = st.selectbox("Method", METHODS, key="siso_method")
     _render_method_args(method)
-    st.checkbox("Halve gains (divide Kp, Ki, Kd by 2)", value=False,
-               key="halve_gains")
+    # setdefault(), not value= -- see siso_plant_form's comment above.
+    st.session_state.setdefault("halve_gains", False)
+    st.checkbox("Halve gains (divide Kp, Ki, Kd by 2)", key="halve_gains")
     st.caption("Recommended for ZN-I/II when tracking setpoints.")
     if st.button("Tune & simulate", key="siso_tune", disabled=plant is None):
         _do_tune(plant, method)

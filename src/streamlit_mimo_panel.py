@@ -77,11 +77,17 @@ def _broadcast(text, n):
 def _render_custom_plant_controls():
     st.caption("Enter each matrix in MATLAB literal syntax: rows separated by "
               "';', entries by spaces or commas, e.g. `[0 1; -2 -3]`.")
-    st.text_input("Plant name (optional)", value="", key="mimo_custom_name")
-    st.text_area("A (nx × nx)", value="[0 1; -2 -3]", key="mimo_custom_A")
-    st.text_area("B (nx × nu)", value="[0; 1]", key="mimo_custom_B")
-    st.text_area("C (ny × nx)", value="[1 0]", key="mimo_custom_C")
-    st.text_area("D (ny × nu)", value="[0]", key="mimo_custom_D")
+    # setdefault(), not value= -- see mimo_plant_source's comment above.
+    st.session_state.setdefault("mimo_custom_name", "")
+    st.text_input("Plant name (optional)", key="mimo_custom_name")
+    st.session_state.setdefault("mimo_custom_A", "[0 1; -2 -3]")
+    st.text_area("A (nx × nx)", key="mimo_custom_A")
+    st.session_state.setdefault("mimo_custom_B", "[0; 1]")
+    st.text_area("B (nx × nu)", key="mimo_custom_B")
+    st.session_state.setdefault("mimo_custom_C", "[1 0]")
+    st.text_area("C (ny × nx)", key="mimo_custom_C")
+    st.session_state.setdefault("mimo_custom_D", "[0]")
+    st.text_area("D (ny × nu)", key="mimo_custom_D")
     try:
         A = parse_matlab_literal(st.session_state["mimo_custom_A"])
         B = parse_matlab_literal(st.session_state["mimo_custom_B"])
@@ -211,23 +217,32 @@ _METHOD_ARG_KEYS = [
 def _render_method_args(method, ex):
     gs.preserve_widget_state(_METHOD_ARG_KEYS)
     if method == "LQR (custom Q/R diagonal)":
+        # setdefault(), not value= -- see mimo_plant_source's comment above.
+        st.session_state.setdefault("mimo_Q_diag", "1.0")
         st.text_input(f"Q diagonal ({ex.plant.nx} value(s), or 1 to broadcast)",
-                      value="1.0", key="mimo_Q_diag")
+                      key="mimo_Q_diag")
+        st.session_state.setdefault("mimo_R_diag", "1.0")
         st.text_input(f"R diagonal ({ex.plant.nu} value(s), or 1 to broadcast)",
-                      value="1.0", key="mimo_R_diag")
+                      key="mimo_R_diag")
     elif method == "Output-weighted LQR":
-        st.number_input("Qy scale (Qy = scale·I)", value=1.0, key="mimo_Qy_scale")
-        st.number_input("R scale (R = scale·I)", value=1.0, key="mimo_ow_R_scale")
+        st.session_state.setdefault("mimo_Qy_scale", 1.0)
+        st.number_input("Qy scale (Qy = scale·I)", key="mimo_Qy_scale")
+        st.session_state.setdefault("mimo_ow_R_scale", 1.0)
+        st.number_input("R scale (R = scale·I)", key="mimo_ow_R_scale")
     elif method == "Bryson's rule":
+        st.session_state.setdefault("mimo_x_max", "1.0")
         st.text_input(f"x_max ({ex.plant.nx} value(s), or 1 to broadcast)",
-                      value="1.0", key="mimo_x_max")
+                      key="mimo_x_max")
+        st.session_state.setdefault("mimo_u_max", "1.0")
         st.text_input(f"u_max ({ex.plant.nu} value(s), or 1 to broadcast)",
-                      value="1.0", key="mimo_u_max")
+                      key="mimo_u_max")
     elif method == "LQG (Kalman filter)":
+        st.session_state.setdefault("mimo_Qw_scale", 0.01)
         st.number_input("Qw scale (process-noise covariance = scale·I)",
-                        value=0.01, key="mimo_Qw_scale")
+                        key="mimo_Qw_scale")
+        st.session_state.setdefault("mimo_Rv_scale", 0.1)
         st.number_input("Rv scale (measurement-noise covariance = scale·I)",
-                        value=0.1, key="mimo_Rv_scale")
+                        key="mimo_Rv_scale")
     gs.snapshot_widget_state(_METHOD_ARG_KEYS)
 
 
@@ -268,13 +283,16 @@ def _design_dispatch(method, ex):
 # ── simulation ───────────────────────────────────────────────────────────
 def _render_sim_settings():
     st.subheader("Simulation")
-    st.text_input("t_end (blank = auto)", value="", key="mimo_t_end")
     # setdefault(), not value= -- see mimo_plant_source's comment above.
+    st.session_state.setdefault("mimo_t_end", "")
+    st.text_input("t_end (blank = auto)", key="mimo_t_end")
     st.session_state.setdefault("mimo_dt", 0.01)
     st.number_input("dt", key="mimo_dt", format="%.4f")
-    st.checkbox("Reference tracking", value=False, key="mimo_ref_tracking")
+    st.session_state.setdefault("mimo_ref_tracking", False)
+    st.checkbox("Reference tracking", key="mimo_ref_tracking")
+    st.session_state.setdefault("mimo_reference", "")
     st.text_input("reference (blank = all-ones, ny values or 1 to broadcast)",
-                  value="", key="mimo_reference")
+                  key="mimo_reference")
     st.caption("Reference tracking requires a square plant (nu == ny) and adds "
                "the N̄ feedforward gain, then simulates tracking that constant "
                "reference instead of the default unit-perturbation regulator "
@@ -708,10 +726,11 @@ def render_controls():
               "step above. Requires the last design above to have been run "
               "with Reference tracking checked.")
     pcs_cols = st.columns(2)
-    pcs_cols[0].text_input("Grid t_max (blank = auto-cropped)", value="",
-                           key="mimo_pcs_t_max")
-    pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", value="",
-                           key="mimo_pcs_y_max")
+    # setdefault(), not value= -- see mimo_plant_source's comment above.
+    st.session_state.setdefault("mimo_pcs_t_max", "")
+    pcs_cols[0].text_input("Grid t_max (blank = auto-cropped)", key="mimo_pcs_t_max")
+    st.session_state.setdefault("mimo_pcs_y_max", "")
+    pcs_cols[1].text_input("Grid y_max (blank = auto per cell)", key="mimo_pcs_y_max")
     if st.button("⊞  Per-channel step response", key="mimo_per_channel_step_btn"):
         _do_per_channel_step()
 
