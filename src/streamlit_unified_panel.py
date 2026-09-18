@@ -1,10 +1,11 @@
-"""Unified Manual/LLM-Supervisor panel — one page, no tabs.
+"""Unified Manual/LLM-Supervisor/LLM-Judge panel — one page, no tabs.
 
 Supersedes streamlit_app.py's previous three-tab layout (SISO PID / MIMO
 LQR/LQG / LLM Chat) with a single left-controls/right-plots split: a
 Track selector (SISO/PID vs MIMO/LQG) and a Mode selector (Manual vs
-LLM Supervisor -- LLM-as-Judge deliberately not offered yet) pick which
-panel's controls render on the left. The right side always shows that
+LLM Supervisor vs LLM Judge -- see streamlit_judge_panel.py; PID/SISO only
+so far, MIMO/LQG not yet wired for Judge Mode) pick which panel's controls
+render on the left. The right side always shows that
 Track's own plots (Response/Heatmap/Radar for SISO, Response/4-curve/
 per-channel for MIMO) regardless of which Mode produced the entries in
 it, since Manual and LLM Supervisor now write into the same
@@ -28,9 +29,10 @@ import streamlit as st
 import streamlit_siso_panel as siso_panel
 import streamlit_mimo_panel as mimo_panel
 import streamlit_llm_panel as llm_panel
+import streamlit_judge_panel as judge_panel
 
 TRACKS = ["SISO / PID", "MIMO / LQG"]
-MODES = ["Manual", "LLM Supervisor"]
+MODES = ["Manual", "LLM Supervisor", "LLM Judge"]
 
 
 def render():
@@ -58,8 +60,10 @@ def render():
                 siso_panel.render_controls()
             else:
                 mimo_panel.render_controls()
-        else:
+        elif mode == "LLM Supervisor":
             llm_panel.render_controls(track)
+        else:
+            judge_panel.render_controls(track)
 
     with plots_col:
         if track == "SISO / PID":

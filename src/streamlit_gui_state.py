@@ -22,6 +22,14 @@ import streamlit as st
 
 CONTROLLERS_KEY = "controllers"
 CHAT_KEY = "chat_history"
+# Judge Mode's own chat history, kept separate from CHAT_KEY -- Mode=LLM
+# Supervisor and Mode=LLM Judge are both chat-shaped and would otherwise
+# share one transcript, so switching between them mid-conversation would
+# either bleed one mode's replies into the other's display, or clear a
+# still-live single-provider Session's displayed history out from under it
+# without resetting the Session object itself (its own fingerprint check
+# wouldn't fire on an unrelated mode switch). See streamlit_judge_panel.py.
+JUDGE_CHAT_KEY = "judge_chat_history"
 
 
 @dataclass
@@ -92,6 +100,8 @@ def init_state() -> None:
         st.session_state[CONTROLLERS_KEY] = []
     if CHAT_KEY not in st.session_state:
         st.session_state[CHAT_KEY] = []
+    if JUDGE_CHAT_KEY not in st.session_state:
+        st.session_state[JUDGE_CHAT_KEY] = []
 
 
 def add_controller(entry: ControllerEntry) -> None:
@@ -205,6 +215,21 @@ def append_chat_message(role: Literal["user", "assistant"], content: str) -> Non
 
 def clear_chat() -> None:
     st.session_state[CHAT_KEY] = []
+
+
+def append_judge_chat_message(role: Literal["user", "assistant"], content: str, rounds=None) -> None:
+    """`rounds`, assistant turns only: JudgeSession.last_round as of this
+    reply -- one dict per candidate ({"label", "error"} for a candidate
+    that failed to respond that round, else {"label", "calls", "finalized",
+    "reply"}), stored alongside the judge's own reply so streamlit_judge_
+    panel.py's transparency expander renders identically for a message
+    read back out of history as it did the moment it was computed, not
+    just for the turn that was live when it was created."""
+    st.session_state[JUDGE_CHAT_KEY].append({"role": role, "content": content, "rounds": rounds or []})
+
+
+def clear_judge_chat() -> None:
+    st.session_state[JUDGE_CHAT_KEY] = []
 
 
 # ── widget state across a Mode/Track switch ─────────────────────────────
