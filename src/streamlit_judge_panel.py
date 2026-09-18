@@ -17,14 +17,17 @@ key entered in Mode="LLM Supervisor" carries over to Mode="LLM Judge" (and
 back) via streamlit_gui_state.py's existing shadow-state mechanism -- it's
 one operator-configured or session-typed key per provider, not per mode.
 
-Role selection is a multiselect (candidates) + a dependent selectbox
-(judge), not N separate per-slot provider/model widgets -- avoids a
-dynamic number-of-widgets-per-run problem entirely: candidate count is
-just "however many options are selected" in one widget, no per-index
-keys to preserve across a Mode/Track switch. The same provider can appear
-twice as a candidate at two different tiers (e.g. Haiku vs Sonnet), but
-the judge's own (provider, model) pair must differ from every candidate's
--- avoids a model favoring its own family's answer. Judge output shape is
+Role selection is a selectbox (judge, chosen first, no default -- the user
+must deliberately pick one before anything else appears) + a dependent
+multiselect (candidates, rendered only once a judge exists, seeded with a
+default pair the first time but an ordinary widget after that), not N
+separate per-slot provider/model widgets -- avoids a dynamic
+number-of-widgets-per-run problem entirely: candidate count is just
+"however many options are selected" in one widget, no per-index keys to
+preserve across a Mode/Track switch. The same provider can appear twice as
+a candidate at two different tiers (e.g. Haiku vs Sonnet), but the judge's
+own (provider, model) pair must differ from every candidate's -- avoids a
+model favoring its own family's answer. Judge output shape is
 "pick + explain + flag disagreement, and optionally synthesize" -- see
 supervisor_prompts_judge_pid.JUDGE_SYSTEM_PROMPT for the actual instructions;
 this module has no opinion on what the judge says, only on getting it the
@@ -92,61 +95,69 @@ def _option_label(option):
     return f"{provider}: {short}"
 
 
-def _default_candidates(all_options):
+def _default_candidates(candidate_options, exclude):
     """The two cheapest-tier models from the first two providers
-    MODELS_BY_PROVIDER declares (Claude Haiku + GPT-5.6 Luna, as of this
-    writing) -- a reasonable out-of-the-box comparison, not a claim that
-    these two are the most interesting pair."""
-    defaults = [
-        (provider, models[default_index][0])
-        for provider, (models, default_index) in list(MODELS_BY_PROVIDER.items())[:2]
-    ]
-    return [c for c in defaults if c in all_options]
-
-
-def _default_judge_choice(candidates, all_options):
-    """The first provider's default model that ISN'T already a candidate --
-    with the two defaults above, this lands on the third provider (Gemini),
-    a genuinely distinct model family acting as judge over the other two."""
+    MODELS_BY_PROVIDER declares that aren't `exclude` (the judge just
+    chosen) -- seeded once, the first time a judge is picked this session
+    (see _render_role_selection), not re-applied on every rerun, so a user
+    who deliberately clears their candidate selection afterward stays
+    cleared. Skips `exclude`'s whole provider, not just its exact model,
+    so the seeded pair is two genuinely different vendor families rather
+    than one vendor plus a same-family second tier."""
+    defaults = []
     for provider, (models, default_index) in MODELS_BY_PROVIDER.items():
         pair = (provider, models[default_index][0])
-        if pair in all_options and pair not in candidates:
-            return pair
-    return None
+        if pair == exclude:
+            continue
+        defaults.append(pair)
+        if len(defaults) == 2:
+            break
+    return [c for c in defaults if c in candidate_options]
 
 
 def _render_role_selection():
+    """Judge first, no default -- a deliberate choice (asked, not assumed):
+    nothing runs, not even a default candidate pair, until the user picks
+    a judge. Candidates are a dependent multiselect rendered only once a
+    judge exists, seeded with a default pair the first time (see
+    _default_candidates) but otherwise an ordinary widget from then on."""
     all_options = _all_candidate_options()
+    judge_choice = st.selectbox(
+        "Judge",
+        options=all_options,
+        index=None,
+        placeholder="Choose a judge...",
+        format_func=_option_label,
+        key="judge_judge_choice",
+        help="The model that arbitrates between candidates -- picked first, "
+             "since everything else depends on it.",
+    )
+    if judge_choice is None:
+        st.caption("Choose a judge above to pick candidates.")
+        return [], None
+
+    candidate_options = [o for o in all_options if o != judge_choice]
+
+    # A stale selection (a candidate that's now become the judge) would
+    # otherwise make st.multiselect raise on the next line -- drop just
+    # that one entry so the rest of the selection survives.
+    current = st.session_state.get("judge_candidates")
+    if current is not None:
+        cleaned = [c for c in current if c in candidate_options]
+        if cleaned != current:
+            st.session_state["judge_candidates"] = cleaned
+
+    if "judge_candidates" not in st.session_state:
+        st.session_state["judge_candidates"] = _default_candidates(candidate_options, exclude=judge_choice)
+
     candidates = st.multiselect(
         "Candidates being judged",
-        options=all_options,
-        default=_default_candidates(all_options),
+        options=candidate_options,
         format_func=_option_label,
         key="judge_candidates",
         help="Pick 2 or more (provider, model) pairs -- the same provider can "
-             "appear twice at different tiers.",
-    )
-    judge_options = [o for o in all_options if o not in candidates]
-
-    # A stale selection (the current judge pick just became a candidate
-    # too) would otherwise make st.selectbox raise on the next line --
-    # drop it so the widget falls back to its own default instead.
-    if st.session_state.get("judge_judge_choice") not in judge_options:
-        st.session_state.pop("judge_judge_choice", None)
-
-    if not judge_options:
-        st.caption("No model left to act as judge -- remove a candidate above.")
-        return candidates, None
-
-    default_judge = _default_judge_choice(candidates, all_options)
-    judge_choice = st.selectbox(
-        "Judge",
-        options=judge_options,
-        format_func=_option_label,
-        index=judge_options.index(default_judge) if default_judge in judge_options else 0,
-        key="judge_judge_choice",
-        help="Must differ from every candidate above -- keeps the judge from "
-             "favoring its own family's answer.",
+             "appear twice at different tiers. Must differ from the judge above "
+             "-- keeps it from favoring its own family's answer.",
     )
     return candidates, judge_choice
 
@@ -276,11 +287,11 @@ def render_controls(track):
         _render_cost_warning(candidates, judge_choice)
     gs.snapshot_widget_state(_PROTECTED_KEYS)
 
+    if not judge_choice:
+        st.info("Choose a judge above to start Judge Mode.")
+        return
     if len(candidates) < 2:
         st.info("Pick at least 2 candidates above to start Judge Mode.")
-        return
-    if not judge_choice:
-        st.info("Pick a judge above to start Judge Mode.")
         return
     missing = [p for p in _distinct_providers(candidates, judge_choice) if p not in resolved_keys]
     if missing:

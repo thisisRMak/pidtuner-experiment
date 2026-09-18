@@ -7,13 +7,14 @@ Run with:
 or:
     python -m unittest test_streamlit_judge_panel -v
 
-Covers: default candidate/judge selection, a candidate becoming the judge
-choice (and vice versa) without crashing the stale-selection guard,
-per-provider key gating/dedup across roles, the scaling cost warning, and
-a full round-trip conversation -- via monkeypatched Session.handle_user_
-message (all candidates) and GeminiClient.chat (the default judge, being
-the 3rd provider) so no real network call happens -- confirming only the
-judge's reply lands in the visible thread.
+Covers: no default judge (the user must choose one before anything else
+appears), candidates seeded once a judge is chosen, a judge choice that
+collides with a current candidate dropping just that stale candidate
+without crashing, per-provider key gating/dedup across roles, the scaling
+cost warning, and a full round-trip conversation -- via monkeypatched
+Session.handle_user_message (all candidates) and GeminiClient.chat (the
+default test judge, being the 3rd provider) so no real network call
+happens -- confirming only the judge's reply lands in the visible thread.
 
 What this does NOT cover: an actual live conversation against any real
 provider API (same posture as test_streamlit_llm_panel.py), and the
@@ -38,23 +39,45 @@ ALL_KEYS_ENV = {
     "GOOGLE_API_KEY": "fake-gemini-test",
 }
 
+DEFAULT_JUDGE = ("Gemini (Google)", "gemini-3.5-flash-lite")
 
-def _run_app(env=None):
+
+def _select_judge(at, judge):
+    return at.selectbox(key="judge_judge_choice").set_value(judge).run(timeout=30)
+
+
+def _run_app(env=None, judge=DEFAULT_JUDGE):
+    """`judge`, when given (the default), also picks a judge -- there's no
+    default judge selection anymore (asked, not assumed: the user must
+    deliberately choose one), so most tests need one explicitly picked to
+    get anywhere near a usable chat. Pass judge=None to test the
+    before-any-judge-is-chosen state itself."""
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
         at = AppTest.from_file(APP_PATH).run(timeout=30)
         at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+        if judge is not None:
+            at = _select_judge(at, judge)
         return at
 
 
 class TestDefaultState(unittest.TestCase):
-    def test_defaults_to_claude_and_openai_candidates_gemini_judge(self):
-        at = _run_app()
+    def test_no_judge_chosen_yet_shows_no_candidates_widget(self):
+        at = _run_app(judge=None)
         self.assertEqual(at.exception[:], [])
+        self.assertIsNone(at.selectbox(key="judge_judge_choice").value)
+        self.assertEqual(len(at.multiselect), 0,
+                          "the candidates widget isn't rendered until a judge is chosen")
+        self.assertTrue(any("Choose a judge" in c.value for c in at.caption))
+        self.assertEqual(len(at.chat_input), 0)
+
+    def test_choosing_a_judge_seeds_default_candidates_from_other_providers(self):
+        at = _run_app()  # default test judge = Gemini
         candidates = at.multiselect(key="judge_candidates").value
         self.assertIn(("Claude (Anthropic)", "claude-haiku-4-5"), candidates)
         self.assertIn(("ChatGPT (OpenAI)", "gpt-5.6-luna"), candidates)
-        self.assertEqual(at.selectbox(key="judge_judge_choice").value, ("Gemini (Google)", "gemini-3.5-flash-lite"))
+        self.assertNotIn(("Gemini (Google)", "gemini-3.5-flash-lite"), candidates,
+                          "the judge's own pair must not also be a seeded candidate")
 
     def test_no_keys_shows_info_and_no_chat(self):
         at = _run_app()
@@ -64,17 +87,17 @@ class TestDefaultState(unittest.TestCase):
 
 
 class TestRoleSelection(unittest.TestCase):
-    def test_picking_a_candidate_as_judge_too_drops_the_stale_judge_choice(self):
-        at = _run_app()
-        sb = at.selectbox(key="judge_judge_choice")
-        self.assertEqual(sb.value, ("Gemini (Google)", "gemini-3.5-flash-lite"))
-        ms = at.multiselect(key="judge_candidates")
-        # Add Gemini's default model as a third candidate -- the same pair
-        # the judge selectbox currently holds.
-        at = ms.set_value(list(ms.value) + [("Gemini (Google)", "gemini-3.5-flash-lite")]).run(timeout=30)
-        self.assertEqual(at.exception[:], [], "a stale judge selection must not crash the widget")
-        self.assertNotEqual(at.selectbox(key="judge_judge_choice").value,
-                             ("Gemini (Google)", "gemini-3.5-flash-lite"))
+    def test_picking_the_judge_to_match_a_current_candidate_drops_just_that_candidate(self):
+        at = _run_app()  # judge=Gemini, candidates seeded to Claude+ChatGPT
+        self.assertIn(("Claude (Anthropic)", "claude-haiku-4-5"), at.multiselect(key="judge_candidates").value)
+
+        # Re-point the judge at Claude's default model -- the same pair
+        # currently sitting in the candidates multiselect.
+        at = _select_judge(at, ("Claude (Anthropic)", "claude-haiku-4-5"))
+        self.assertEqual(at.exception[:], [], "a stale candidate selection must not crash the widget")
+        candidates_after = at.multiselect(key="judge_candidates").value
+        self.assertNotIn(("Claude (Anthropic)", "claude-haiku-4-5"), candidates_after)
+        self.assertIn(("ChatGPT (OpenAI)", "gpt-5.6-luna"), candidates_after, "the other candidate survives")
 
     def test_fewer_than_two_candidates_blocks_start(self):
         at = _run_app()
@@ -126,6 +149,7 @@ class TestJudgeConversation(unittest.TestCase):
              patch.object(GeminiClient, "chat", return_value=judge_reply) as judge_chat:
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
             at.chat_input[0].set_value("1/(90s+1), delay 13, minimize overshoot.").run(timeout=30)
 
         self.assertEqual(at.exception[:], [], "a bad turn must not crash the app")
@@ -154,6 +178,7 @@ class TestJudgeConversation(unittest.TestCase):
              patch.object(GeminiClient, "chat", return_value=judge_reply):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
             at.chat_input[0].set_value("1/(90s+1), delay 13, minimize overshoot.").run(timeout=30)
 
         self.assertEqual(at.exception[:], [], "one candidate's provider error must not crash the app")
@@ -189,6 +214,7 @@ class TestJudgeConversation(unittest.TestCase):
              patch.object(GeminiClient, "chat", return_value=judge_reply):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
             at.chat_input[0].set_value("1/(90s+1), delay 13, minimize overshoot.").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
@@ -212,6 +238,7 @@ class TestJudgeConversation(unittest.TestCase):
              patch("streamlit_llm_panel._drain_plot_calls", side_effect=RuntimeError("boom")):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
             at.chat_input[0].set_value("hello").run(timeout=30)
 
         self.assertEqual(at.exception[:], [])
