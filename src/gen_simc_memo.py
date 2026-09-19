@@ -108,7 +108,6 @@ def build_html():
     # blackbox step-test route (as opposed to this memo's direct
     # construction) makes it worse: the step-test identifier fits a
     # finite tau to what is actually an unbounded ramp.
-    integrating_plant = TransferFunction.parse("exp(-1s)/s")
     # What Simc.tune() actually does if handed a very large tau standing
     # in for "no first-order lag" (the closest it can get to modeling an
     # integrator with the first-/second-order formula):
