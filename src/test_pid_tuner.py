@@ -302,6 +302,24 @@ class TestTuningMethods(unittest.TestCase):
         self.assertAlmostEqual(res.gains.Kp, 2.0, places=6)
         self.assertAlmostEqual(res.gains.Ki, 5.0, places=6)
 
+    def test_pole_cancel_auto_picks_slowest_despite_repeated_pole_noise(self):
+        """Regression: a repeated real pole is numerically ill-conditioned --
+        numpy.roots on (s+1)^5 returns several poles with tiny residual
+        imaginary parts instead of one clean real root at -1. Auto-select
+        must still identify the two genuinely slowest poles -- here 0.5 and
+        1.0 -- rather than mistaking two of the faster repeated-pole
+        cluster for a real complex-conjugate pair and cancelling those
+        instead, silently skipping the actual slowest pole at -0.5.
+
+        Currently FAILS: the selector returns two poles near 1.0 (a
+        spurious near-real conjugate pair from the multiplicity-5 cluster),
+        never considering the pole at -0.5 at all.
+        """
+        plant = TransferFunction.parse("1/((s+0.5)*(s+1)^5)")
+        p1, p2 = select_slowest_stable_poles(plant)
+        self.assertAlmostEqual(min(np.real(p1), np.real(p2)), 0.5, places=3)
+        self.assertAlmostEqual(max(np.real(p1), np.real(p2)), 1.0, places=3)
+
     def test_pole_cancel_refuses_rhp_complex(self):
         """A complex p1 with negative real part is an RHP pole — refuse it
         same as the real-pole case."""
