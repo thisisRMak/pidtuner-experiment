@@ -104,11 +104,11 @@ class TestAllTuningMethodsThroughUI(unittest.TestCase):
             at.run(timeout=30)
             self.assertFalse(at.exception, f"{method}: exception after selecting method")
 
-            tab = _siso_tab(at)
             for k, v in args.items():
+                tab = _siso_tab(at)
                 _set_widget(tab, k, v)
-            at.run(timeout=30)
-            self.assertFalse(at.exception, f"{method}: exception after setting args")
+                at.run(timeout=30)
+                self.assertFalse(at.exception, f"{method}: exception after setting {k}")
 
             before = _n_entries(at)
             tab = _siso_tab(at)
