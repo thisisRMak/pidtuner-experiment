@@ -6,6 +6,14 @@ discrepancy-memo.md for the motivating failure mode (a model finalizing a
 recommendation that contradicts its own tool data) and supervisor_llm_
 {anthropic,openai,gemini}.py for the client interface this reuses as-is.
 
+Written against PID/SISO's `Session`, but the orchestration itself
+(serialize_candidate_trace/summarize_candidate_round, the fan-out/dedup
+logic) is duck-typed on the shared .messages/.content/.tool_calls surface
+every track's session class exposes, not PID-specific -- see
+cli_supervisor_judge_lqg.py, which reuses this same `JudgeSession` over
+`LQGSession` candidates instead, passing its own judge_system_prompt (see
+__init__ below) rather than this module's PID-flavored default.
+
 Deliberately does NOT give the judge any tools of its own. The whole
 point is that the judge fact-checks candidates against numbers *they*
 already fetched -- every benchmark result a judge could need is already
@@ -145,11 +153,19 @@ class JudgeSession:
     time) but not for a report that should cover everything discussed.
     Starts empty on every fresh object, so a caller that rebuilds
     JudgeSession on "Reset conversation" gets a correspondingly empty
-    report for free -- no separate clearing needed."""
+    report for free -- no separate clearing needed.
 
-    def __init__(self, candidates, judge_client):
+    `judge_system_prompt` defaults to JUDGE_SYSTEM_PROMPT (this module's
+    own PID/SISO prompt), so every existing caller (the SISO CLI, the
+    webui panel) keeps working unmodified. Pass a different one -- e.g.
+    supervisor_prompts_judge_lqg.JUDGE_SYSTEM_PROMPT_LQG -- to judge a
+    different track's candidates; nothing else here is PID-specific (see
+    module docstring)."""
+
+    def __init__(self, candidates, judge_client, judge_system_prompt=JUDGE_SYSTEM_PROMPT):
         self.candidates = candidates
         self.judge_client = judge_client
+        self.judge_system_prompt = judge_system_prompt
         self.dialogue = []
         self.last_round = []
         self.rounds_history = []
@@ -202,7 +218,7 @@ class JudgeSession:
             serialize_candidate_trace(label, session, error=errors.get(label))
             for label, session in self.candidates
         )
-        judge_messages = [{"role": "system", "content": JUDGE_SYSTEM_PROMPT}]
+        judge_messages = [{"role": "system", "content": self.judge_system_prompt}]
         judge_messages += self.dialogue
         judge_messages.append({
             "role": "user",

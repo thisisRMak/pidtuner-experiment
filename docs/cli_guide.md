@@ -19,7 +19,7 @@ script is the source of truth for its exact flags.
 | Tune one plant, one method, right now | `cli_pid.py` | `cli_lqg.py` |
 | Tune from signal data only (no known TF) | `cli_pid_blackbox.py` | — (not built; see `docs/lqg_testing.md`) |
 | Talk through tradeoffs conversationally | `cli_supervisor_pid.py` | `cli_supervisor_lqg.py` |
-| Compare multiple models, one arbitrates | `cli_supervisor_judge_pid.py` | — (not built) |
+| Compare multiple models, one arbitrates | `cli_supervisor_judge_pid.py` | `cli_supervisor_judge_lqg.py` |
 | Run everything, save a report to review later | `cli_pid_astrom_batch.py` | `lqg_review.py` |
 
 ## One-off runs
@@ -147,12 +147,17 @@ supervisor — see "Design notes" below for why.
 
 ### Judge mode (multi-model arbitration)
 
-`cli_supervisor_judge_pid.py` — SISO/PID only, no LQR/LQG equivalent yet —
-runs N candidate supervisors (each the same conversation
-`cli_supervisor_pid.py --provider ...` would have) in lockstep, then asks a
-separate judge model to arbitrate between their recommendations every round.
-Thin CLI wrapper over `supervisor_session_judge_pid.JudgeSession`, the same
-orchestration `streamlit_judge_panel.py`'s GUI "LLM Judge" mode uses.
+`cli_supervisor_judge_pid.py` (SISO/PID) and `cli_supervisor_judge_lqg.py`
+(LQR/LQG) each run N candidate supervisors (the same conversation
+`cli_supervisor_pid.py --provider ...` / `cli_supervisor_lqg.py --provider
+...` would have) in lockstep, then ask a separate judge model to arbitrate
+between their recommendations every round. Both are thin CLI wrappers over
+the same `supervisor_session_judge_pid.JudgeSession` orchestration
+`streamlit_judge_panel.py`'s GUI "LLM Judge" mode uses (SISO/PID track
+only, so far) — the LQG one just swaps in `LQGSession` candidates and its
+own judge system prompt (`supervisor_prompts_judge_lqg.
+JUDGE_SYSTEM_PROMPT_LQG`), via a `judge_system_prompt` argument
+`JudgeSession` takes for exactly this reuse.
 
 ```bash
 python3 cli_supervisor_judge_pid.py \
@@ -160,7 +165,18 @@ python3 cli_supervisor_judge_pid.py \
   --candidate openai:gpt-5.6-luna \
   --judge gemini:gemini-3.5-flash-lite \
   --verbose
+
+python3 cli_supervisor_judge_lqg.py \
+  --candidate anthropic:claude-haiku-4-5 \
+  --candidate openai:gpt-5.6-luna \
+  --judge gemini:gemini-3.5-flash-lite \
+  --verbose
 ```
+
+First message to try, PID: `1/(90s+1), delay 13, minimize overshoot`
+(same syntax `cli_supervisor_pid.py` takes). LQG: `aircraft_hall, I care
+most about control effort` (same syntax `cli_supervisor_lqg.py` takes) —
+every candidate receives the identical text each round.
 
 `--candidate provider[:model]` is repeatable (give at least 2; model defaults
 to that provider's cheapest tier when omitted); `--judge provider[:model]` is
