@@ -99,9 +99,24 @@ def select_slowest_stable_poles(plant):
     # or complex-conjugate to give real gains).
     sorted_by_speed = sorted(stable, key=lambda p: abs(np.real(p)))
 
+    # A repeated real pole is numerically ill-conditioned: np.roots() on a
+    # polynomial with a multiplicity-m real root returns m poles with
+    # spurious imaginary parts (scaling with both |Re(p)| and m — observed
+    # up to ~1.2e-2 relative at multiplicity 7), not one clean real value.
+    # A fixed absolute threshold (the old 1e-9) misclassifies that noise as
+    # a genuine complex-conjugate pair, so classify a pole as real relative
+    # to its own magnitude instead. 2% comfortably covers multiplicity up
+    # to ~7 while staying well clear of genuine complex pairs, which in
+    # practice sit at 5%+ (very high multiplicities beyond ~7 can still
+    # exceed this and are not handled).
+    REL_IMAG_TOL = 2e-2
+
+    def is_real(p):
+        return abs(np.imag(p)) < REL_IMAG_TOL * abs(np.real(p))
+
     # Look for a complex conjugate pair in the slowest few
     for i, p in enumerate(sorted_by_speed):
-        if abs(np.imag(p)) > 1e-9:
+        if not is_real(p):
             # find its conjugate
             for j, q in enumerate(sorted_by_speed):
                 if j != i and abs(p - np.conj(q)) < 1e-6:
@@ -113,9 +128,23 @@ def select_slowest_stable_poles(plant):
                     return (-np.real(p) + abs(np.imag(p)) * 1j), \
                            (-np.real(p) - abs(np.imag(p)) * 1j)
 
-    # Pick two slowest *real* poles
-    real_only = [float(-np.real(p)) for p in sorted_by_speed
-                 if abs(np.imag(p)) < 1e-9]
+    # Pick two slowest *real* poles. The same ill-conditioning perturbs
+    # each copy of a repeated real root's *real* part slightly differently
+    # too (not just its imaginary part), so collapse near-duplicate values
+    # to their cluster mean before picking — otherwise we'd return one
+    # arbitrary noisy copy instead of the pole's true location.
+    real_vals = sorted(float(-np.real(p)) for p in sorted_by_speed if is_real(p))
+    real_only = []
+    i = 0
+    while i < len(real_vals):
+        j = i
+        while (j + 1 < len(real_vals)
+               and abs(real_vals[j + 1] - real_vals[j]) < REL_IMAG_TOL * abs(real_vals[j])):
+            j += 1
+        cluster = real_vals[i:j + 1]
+        real_only.extend([sum(cluster) / len(cluster)] * len(cluster))
+        i = j + 1
+
     if len(real_only) >= 2:
         # Cancel the two SLOWEST poles (smallest |real part|), per lecture
         # discussion: cancelling the slow ones gives the fastest response.
