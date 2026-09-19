@@ -1,5 +1,21 @@
 # aituner — multi-provider LLM supervisor
 
+**Status (2026-09-19): the banner below is stale on two points, corrected
+here rather than rewritten in place. (1) Gemini's live-verification step,
+called "still open" below, closed the same day (2026-09-14) — a free-tier
+Google AI Studio key was added and the live test succeeded. (2) The
+`supervisor-openai-gemini` branch, called "not merged to `main`" in
+"Next up" item 3 below, was merged the same day (`0f98a80..c282bd1`) and
+pushed — all three providers (Anthropic/OpenAI/Gemini) have been on
+`main`, live-verified, since 2026-09-14. Separately, not tracked anywhere
+in this document since it postdates it: an LLM-as-judge Mode was built on
+top of this same provider plumbing and shipped 2026-09-18/19 (arbitration
+between 2+ candidate providers and a separate judge model, full
+tool-call-trace visibility, HTML reports, PID/SISO only so far — MIMO/LQG
+and a CLI entry point remain unbuilt). Read top-down from here; the
+2026-09-11 banner and update sections below are the reasoning trail, not
+current status.**
+
 **Status (2026-09-11, Gemini pass): all three providers — Claude/
 Anthropic, ChatGPT/OpenAI, Gemini/Google — are now implemented and
 unit-tested on both the GUI and the CLI, closing out the "Next up" item 3
@@ -407,8 +423,9 @@ actually work" questions mid-session, not assumptions):
    `streamlit_unified_panel.py`. See "Update (2026-09-11)" above.
 2. ~~Anthropic over the CLI~~ — **done** (`2abf5fd`). See "Update
    (2026-09-11)" above.
-3. ~~OpenAI + Gemini, both CLI and GUI~~ — **done** (both passes, on
-   branch `supervisor-openai-gemini`, not merged to `main`). See "Update
+3. ~~OpenAI + Gemini, both CLI and GUI~~ — **done** (both passes; branch
+   `supervisor-openai-gemini` merged to `main` 2026-09-14,
+   `0f98a80..c282bd1`, pushed). See "Update
    (2026-09-11, OpenAI pass)" and "Update (2026-09-11, Gemini pass)"
    above. The two still-unwired providers, not started as of 2026-09-11
    (confirmed by grepping `src/` fresh) — as of when this item was
@@ -423,18 +440,25 @@ actually work" questions mid-session, not assumptions):
    robustness memo's findings generally (`docs/memos/2026-09-07/
    2026-09-07-supervisor-robustness-memo.md`) — read before assuming the
    current `supervisor_llm_anthropic.py` is a naive first-draft template.
-4. **Anthropic demo shell script** — `src/examples/run_supervisor_demo.sh`/
-   `run_supervisor_lqg_demo.sh` only exercise `--provider ollama` (checking
-   for a local daemon + pulled model, skipping with instructions if
-   either's missing); no `--provider anthropic` equivalent exists yet.
-   Not just a copy-paste of the Ollama script's shape, though: gating on
-   `ANTHROPIC_API_KEY` being resolvable (mirroring `_resolve_anthropic_key`
-   in `cli_supervisor_pid.py`/`cli_supervisor_lqg.py`) is the easy part —
-   unlike the free/local Ollama demos, this one would send a real, billed
-   request every time someone runs `src/examples/README.md`'s "Run them
-   all" loop, which needs a deliberate opt-in decision (separate script
-   excluded from that loop by default? explicit `--confirm-cost` flag?)
-   before it's added, not just a key check.
+4. ~~Anthropic/OpenAI/Gemini demo shell script~~ — **reconsidered
+   2026-09-14, current lean: don't build one for any provider.** The
+   open question this item originally posed (separate script excluded
+   from `src/examples/README.md`'s "Run them all" loop by default?
+   explicit `--confirm-cost` flag?) turned out to rest on a premise worth
+   checking first: what does `run_supervisor_demo.sh` actually
+   accomplish? Read fresh — it pipes one fixed scripted conversation,
+   asserts nothing, and its own README frames it as a "runnable,
+   end-to-end example," not a test (real tests are the mocked
+   `test_*.py` suite). Its only value beyond a markdown snippet is being
+   unmocked (would fail loudly if CLI wiring broke). A captured real
+   transcript serves the same "show what it looks like" purpose without
+   recurring billed cost — see `docs/memos/2026-09-14/2026-09-14-
+   recommendation-rationale-discrepancy-memo.md`'s `heat-exchanger-
+   cross-provider/` artifacts, which are exactly that. Not a final,
+   locked decision — just the current lean, flagged to the user rather
+   than built. If a paid-provider demo script is wanted later, the
+   original opt-in-flag question above is still the right shape of
+   question to answer first.
 
 ## Context
 
