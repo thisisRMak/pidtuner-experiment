@@ -162,6 +162,54 @@ class TestPlantParsing(unittest.TestCase):
         poles = sorted(tf.poles().real)
         np.testing.assert_allclose(poles, [-1.0, -0.1])
 
+    def test_poles_exact_for_repeated_real_root(self):
+        """(s+1)^3 has an exact triple real root at -1. numpy.roots on the
+        expanded polynomial is numerically ill-conditioned for repeated
+        roots and would return e.g. -0.99999671+/-5.7e-6j instead of a
+        clean -1 (see pid_pole_cancellation_repeated_pole_bug memo) --
+        factored input should preserve the exact root instead of round-
+        tripping through that."""
+        tf = TransferFunction.parse("1/(s+1)^3")
+        self.assertEqual(tf.den_factors, [(-1.0, 1), (-1.0, 1), (-1.0, 1)])
+        np.testing.assert_array_equal(tf.poles(), [-1.0, -1.0, -1.0])
+
+    def test_poles_exact_survives_addition_of_simple_fractions(self):
+        """1/(s+1) + 1/(s+2): the combined denominator is exactly
+        (s+1)(s+2) regardless of what the resulting numerator looks like,
+        so this should still resolve to exact poles even though it's built
+        via '+', not just '*'/'^'."""
+        tf = TransferFunction.parse("1/(s+1) + 1/(s+2)")
+        self.assertEqual(sorted(f[0] for f in tf.den_factors), [-2.0, -1.0])
+        np.testing.assert_allclose(sorted(tf.poles().real), [-2.0, -1.0])
+
+    def test_den_factors_none_for_matlab_style_input(self):
+        """No symbolic structure to preserve for from_coeffs() -- falls
+        back to np.roots exactly as before this feature existed."""
+        tf = TransferFunction.from_coeffs(num=[1], den=[1, 3, 3, 1])
+        self.assertIsNone(tf.den_factors)
+
+    def test_den_factors_none_for_division_by_polynomial(self):
+        """Dividing by an unfactored degree->=2 polynomial has no general
+        closed-form factorization (Abel-Ruffini past quartic; not attempted
+        here even for quadratic/cubic) -- falls back to np.roots, which is
+        still correct (just not exact) since this quadratic isn't
+        ill-conditioned."""
+        tf = TransferFunction.parse("(s+2)/(s^2 + 3s + 1)")
+        self.assertIsNone(tf.den_factors)
+        np.testing.assert_allclose(sorted(tf.poles().real),
+                                    sorted(np.roots(tf.den).real))
+
+    def test_den_factors_none_for_genuine_complex_pair(self):
+        """A genuine complex-conjugate pair still correctly falls back to
+        np.roots (the sum producing s^2+2s+5 is degree 2, past this
+        feature's degree<=1 exact-factoring boundary) -- np.roots handles
+        it exactly fine since it isn't ill-conditioned."""
+        tf = TransferFunction.parse("5/(s^2+2*s+5)")
+        self.assertIsNone(tf.den_factors)
+        poles = sorted(tf.poles(), key=lambda p: p.imag)
+        self.assertAlmostEqual(poles[0], -1 - 2j)
+        self.assertAlmostEqual(poles[1], -1 + 2j)
+
     def test_improper_rejected(self):
         # s² / (s+1) is improper — should be rejected
         with self.assertRaises(ValueError):
