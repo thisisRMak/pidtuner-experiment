@@ -14,7 +14,7 @@ on:
 
 jobs:
   pytest:
-    name: pytest (full suite, parallel)
+    name: pytest (full suite, serial)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -31,8 +31,4 @@ jobs:
           pip install -r src/requirements.txt -r src/requirements-dev.txt
 
       - name: Run test suite
-        env:
-          OMP_NUM_THREADS: "1"
-          OPENBLAS_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-        run: pytest -n 2
+        run: pytest
