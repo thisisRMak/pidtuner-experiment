@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 from supervisor_session_pid import Session
 from supervisor_session_judge_pid import JudgeSession, serialize_candidate_trace, summarize_candidate_round
+from supervisor_prompts_judge_pid import JUDGE_SYSTEM_PROMPT
 
 WHITEBOX_SCHEMA = {
     "type": "function",
@@ -198,6 +199,45 @@ class TestJudgeSessionFanOut(unittest.TestCase):
         self.assertEqual(judge.dialogue[0], {"role": "user", "content": "1/(90s+1), delay 13, minimize overshoot."})
         self.assertEqual(judge.dialogue[1]["role"], "assistant")
         self.assertNotIn("Candidate model traces", judge.dialogue[0]["content"])
+
+
+class TestJudgeSystemPrompt(unittest.TestCase):
+    """JudgeSession's judge_system_prompt parameter (added so
+    cli_supervisor_judge_lqg.py can reuse this same class over a different
+    track's candidates -- see supervisor_prompts_judge_lqg.
+    JUDGE_SYSTEM_PROMPT_LQG). Covers both directions: omitting the
+    parameter must reproduce the old PID-only behavior byte-for-byte (the
+    already-shipped SISO CLI/webui panel construct JudgeSession without
+    it and must keep working unmodified), and passing a different prompt
+    must actually change what the judge is sent, not just be accepted and
+    ignored."""
+
+    def _build(self, **kwargs):
+        candidates = [
+            ("Claude (Anthropic): Claude Haiku 4.5",
+             _make_candidate("Tyreus-Luyben", "Lowest overshoot.", "I recommend Tyreus-Luyben.")),
+            ("ChatGPT (OpenAI): GPT-5.6 Luna",
+             _make_candidate("CHR set 0%", "3.986% overshoot.", "I recommend CHR set 0%.")),
+        ]
+        judge_client = _RecordingJudgeClient(["verdict"])
+        judge = JudgeSession(candidates, judge_client, **kwargs)
+        return judge_client, judge
+
+    def test_omitting_the_parameter_defaults_to_the_pid_judge_prompt(self):
+        judge_client, judge = self._build()
+        self.assertEqual(judge.judge_system_prompt, JUDGE_SYSTEM_PROMPT)
+        judge.handle_user_message("1/(90s+1), delay 13, minimize overshoot.")
+        system_message = judge_client.calls[0]["messages"][0]
+        self.assertEqual(system_message, {"role": "system", "content": JUDGE_SYSTEM_PROMPT})
+
+    def test_a_custom_prompt_is_stored_and_actually_sent_to_the_judge(self):
+        custom_prompt = "You are a custom LQG-flavored judge prompt, distinct from the PID one."
+        judge_client, judge = self._build(judge_system_prompt=custom_prompt)
+        self.assertEqual(judge.judge_system_prompt, custom_prompt)
+        judge.handle_user_message("1/(90s+1), delay 13, minimize overshoot.")
+        system_message = judge_client.calls[0]["messages"][0]
+        self.assertEqual(system_message, {"role": "system", "content": custom_prompt})
+        self.assertNotEqual(custom_prompt, JUDGE_SYSTEM_PROMPT)
 
 
 class TestJudgeSessionRevision(unittest.TestCase):
