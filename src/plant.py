@@ -43,6 +43,27 @@ def poly_trim(p):
     return p[nz[0]:]
 
 
+def _linear_root_factors(poly):
+    """Exact (root, multiplicity) factors for a polynomial of degree <= 1
+    (descending powers), or None if degree >= 2.
+
+    A degree-1 polynomial always has exactly one root, computable by plain
+    algebra. A general polynomial of degree >= 5 has no closed-form root
+    formula at all (Abel-Ruffini), and this deliberately doesn't special-case
+    degree 2-4 either (real inputs needing that are rare enough here not to
+    be worth the extra formulas) -- callers fall back to numeric
+    root-finding (np.roots) in that case, which is always correct, just not
+    exact for numerically ill-conditioned cases like repeated roots.
+    """
+    trimmed = poly_trim(poly)
+    if len(trimmed) <= 1:
+        return []
+    if len(trimmed) == 2:
+        a, b = trimmed
+        return [(-b / a, 1)]
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Symbolic TF parser
 #   Recursive-descent parser for arithmetic on rational functions of s.
@@ -58,22 +79,42 @@ class _Rat:
     represented as a rational polynomial; it can only ever appear as a
     multiplicative factor of the whole expression (__add__/__sub__ reject
     it), matching TransferFunction's single lumped-delay representation.
+
+    num_factors/den_factors optionally carry the *exact* (root, multiplicity)
+    factorization of num/den, when it's known without numeric root-finding —
+    None means "unknown," and every operation below propagates None forward
+    rather than guessing. This is what lets TransferFunction.poles() return
+    exact values for factored input like "(s+1)^3" instead of round-tripping
+    through numpy.roots, which is numerically ill-conditioned for repeated
+    roots. Multiplication/division/exponentiation always preserve exactness
+    (a product's factors are just the union of its operands' factors);
+    addition/subtraction can't in general (the sum of two polynomials with
+    known roots doesn't have an easily-derived factorization of its own) —
+    __add__ only recovers num_factors when the resulting numerator happens to
+    be degree <= 1 (see _linear_root_factors), and always recomputes rather
+    than reusing the operands' num_factors.
     """
 
-    __slots__ = ("num", "den", "delay")
+    __slots__ = ("num", "den", "delay", "num_factors", "den_factors")
 
-    def __init__(self, num, den, delay=0.0):
+    def __init__(self, num, den, delay=0.0, num_factors=None, den_factors=None):
         self.num = np.asarray(num, dtype=float).ravel()
         self.den = np.asarray(den, dtype=float).ravel()
         self.delay = float(delay)
+        self.num_factors = num_factors
+        self.den_factors = den_factors
 
     @classmethod
-    def const(cls, c): return cls([float(c)], [1.0])
+    def const(cls, c):
+        return cls([float(c)], [1.0], num_factors=[], den_factors=[])
 
     @classmethod
-    def s(cls): return cls([1.0, 0.0], [1.0])
+    def s(cls):
+        return cls([1.0, 0.0], [1.0], num_factors=[(0.0, 1)], den_factors=[])
 
-    def __neg__(self): return _Rat(-self.num, self.den, self.delay)
+    def __neg__(self):
+        return _Rat(-self.num, self.den, self.delay,
+                    num_factors=self.num_factors, den_factors=self.den_factors)
 
     def __add__(self, o):
         if self.delay != 0.0 or o.delay != 0.0:
@@ -82,22 +123,50 @@ class _Rat:
                 "multiplicative factor of the whole expression, not added "
                 "or subtracted"
             )
-        return _Rat(
-            poly_add(poly_mul(self.num, o.den), poly_mul(o.num, self.den)),
-            poly_mul(self.den, o.den),
+        new_num = poly_add(poly_mul(self.num, o.den), poly_mul(o.num, self.den))
+        new_den = poly_mul(self.den, o.den)
+        new_den_factors = (
+            self.den_factors + o.den_factors
+            if self.den_factors is not None and o.den_factors is not None
+            else None
         )
+        return _Rat(new_num, new_den,
+                    num_factors=_linear_root_factors(new_num),
+                    den_factors=new_den_factors)
 
     def __sub__(self, o): return self + (-o)
 
     def __mul__(self, o):
+        new_num_factors = (
+            self.num_factors + o.num_factors
+            if self.num_factors is not None and o.num_factors is not None
+            else None
+        )
+        new_den_factors = (
+            self.den_factors + o.den_factors
+            if self.den_factors is not None and o.den_factors is not None
+            else None
+        )
         return _Rat(poly_mul(self.num, o.num), poly_mul(self.den, o.den),
-                     self.delay + o.delay)
+                     self.delay + o.delay,
+                     num_factors=new_num_factors, den_factors=new_den_factors)
 
     def __truediv__(self, o):
         if not np.any(np.abs(o.num) > 1e-12):
             raise ValueError("division by zero in transfer-function expression")
+        new_num_factors = (
+            self.num_factors + o.den_factors
+            if self.num_factors is not None and o.den_factors is not None
+            else None
+        )
+        new_den_factors = (
+            self.den_factors + o.num_factors
+            if self.den_factors is not None and o.num_factors is not None
+            else None
+        )
         return _Rat(poly_mul(self.num, o.den), poly_mul(self.den, o.num),
-                     self.delay - o.delay)
+                     self.delay - o.delay,
+                     num_factors=new_num_factors, den_factors=new_den_factors)
 
     def __pow__(self, n):
         if not isinstance(n, int) or n < 0:
@@ -305,7 +374,7 @@ class _Parser:
             if tag3 != "RP":
                 raise ValueError("missing ')'")
             L = _exp_arg_to_delay(inner)
-            return _Rat([1.0], [1.0], delay=L)
+            return _Rat([1.0], [1.0], delay=L, num_factors=[], den_factors=[])
         raise ValueError(f"unexpected token {tag!r}")
 
 
@@ -330,6 +399,12 @@ class TransferFunction:
     num: np.ndarray
     den: np.ndarray
     L: float = 0.0
+    # Exact (root, multiplicity) factors of `den`, when known without numeric
+    # root-finding (set by .parse() for factored input like "(s+1)^3"; None
+    # for from_coeffs()/fopdt(), or for parsed expressions where exactness
+    # couldn't be preserved through a division — see _Rat.__truediv__).
+    # poles() prefers this over np.roots(den) when set.
+    den_factors: list | None = None
 
     def __post_init__(self):
         self.num = poly_trim(np.asarray(self.num, dtype=float))
@@ -380,7 +455,7 @@ class TransferFunction:
                 f"separately — specify the delay in only one place"
             )
         total_L = expr_L if expr_L > 1e-9 else L
-        return cls(num=rat.num, den=rat.den, L=total_L)
+        return cls(num=rat.num, den=rat.den, L=total_L, den_factors=rat.den_factors)
 
     @classmethod
     def from_coeffs(cls, num, den, L=0.0, gain=1.0):
@@ -398,6 +473,9 @@ class TransferFunction:
         return len(self.den) - 1
 
     def poles(self):
+        if self.den_factors is not None:
+            expanded = [root for root, mult in self.den_factors for _ in range(mult)]
+            return np.array(expanded, dtype=complex) if expanded else np.array([])
         return np.roots(self.den) if len(self.den) > 1 else np.array([])
 
     def zeros(self):
