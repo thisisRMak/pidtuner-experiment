@@ -110,6 +110,17 @@ internally by default, so unpinned xdist workers fight each other for
 cores — pinning each worker to one BLAS thread recovered ~23% more).
 Same pass/fail/skip counts as serial in every measurement.
 
+**CI (`.github/workflows/tests.yml`) deliberately does NOT use `-n auto`
+— it's pinned to `-n 2`.** GitHub's standard hosted runner has exactly 4
+vCPUs; `-n auto` resolves to 4 workers there with zero headroom, and
+several `AppTest`-heavy tests (real Streamlit script executions) hit
+their internal 60s timeout under that contention — failures that never
+reproduce locally (16 cores, plenty of slack at 4 workers) or in a
+`-n 2` run (proven identical pass/fail outcome to fully serial, just
+~3.4x faster). `-n auto` is still the right choice for local dev — only
+CI's specific runner needs the lower, fixed count. Don't "fix" CI back
+to `-n auto` without re-reading this.
+
 ## What's included
 
 Plant input — two tabs:
