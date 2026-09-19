@@ -46,15 +46,23 @@ def _select_judge(at, judge):
     return at.selectbox(key="judge_judge_choice").set_value(judge).run(timeout=30)
 
 
-def _run_app(env=None, judge=DEFAULT_JUDGE):
+def _run_app(env=None, judge=DEFAULT_JUDGE, track="SISO / PID"):
     """`judge`, when given (the default), also picks a judge -- there's no
     default judge selection anymore (asked, not assumed: the user must
     deliberately choose one), so most tests need one explicitly picked to
     get anywhere near a usable chat. Pass judge=None to test the
-    before-any-judge-is-chosen state itself."""
+    before-any-judge-is-chosen state itself.
+
+    `track`, when not the default "SISO / PID", is set on the unified
+    Track selector *before* switching Mode to "LLM Judge" -- same order
+    test_streamlit_llm_panel.py's own MIMO-track tests use, matching
+    streamlit_unified_panel.render()'s own left-to-right (track_col before
+    mode_col) layout, though nothing here actually depends on that order."""
     with patch.dict(os.environ, env or {}, clear=True), \
          patch("streamlit_llm_panel.load_dotenv"):
         at = AppTest.from_file(APP_PATH).run(timeout=30)
+        if track != "SISO / PID":
+            at.segmented_control(key="unified_track").set_value(track).run(timeout=30)
         at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
         if judge is not None:
             at = _select_judge(at, judge)
@@ -375,6 +383,197 @@ class TestClearEntriesAndReset(unittest.TestCase):
             self.assertEqual(at.exception[:], [])
             self.assertEqual(
                 [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso" and e.source == "llm"], [])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MIMO/LQG track -- Judge Mode's own webui wiring for this Track. Confirms
+# _build_judge_session() actually passes JUDGE_SYSTEM_PROMPT_LQG (not the
+# SISO/PID default) once Track="MIMO / LQG", that LQGSession candidates
+# fan out/get judged correctly end-to-end through the GUI (this exact
+# combination had never been run before this Track was wired), and that
+# the plot-dedup/report/reset paths -- already track-aware per
+# _ENTRIES_SECTIONS_BY_TRACK/reset_clears_track_state -- actually behave
+# right for this combination too, confirmed rather than assumed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestJudgeSystemPromptByTrack(unittest.TestCase):
+    def test_mimo_track_uses_the_lqg_judge_prompt(self):
+        from supervisor_prompts_judge_lqg import JUDGE_SYSTEM_PROMPT_LQG
+        at = _run_app(ALL_KEYS_ENV, track="MIMO / LQG")
+        judge_session = at.session_state["judge_session_obj"]
+        self.assertEqual(judge_session.judge_system_prompt, JUDGE_SYSTEM_PROMPT_LQG)
+
+    def test_siso_track_still_uses_the_pid_judge_prompt(self):
+        """Regression: the default must stay untouched for the
+        already-shipped SISO/PID track."""
+        from supervisor_prompts_judge_pid import JUDGE_SYSTEM_PROMPT
+        at = _run_app(ALL_KEYS_ENV, track="SISO / PID")
+        judge_session = at.session_state["judge_session_obj"]
+        self.assertEqual(judge_session.judge_system_prompt, JUDGE_SYSTEM_PROMPT)
+
+
+class TestMimoJudgeConversation(unittest.TestCase):
+    """This exact combination -- LQGSession candidates fanned out and
+    judged through the GUI -- had never been run end-to-end before this
+    Track was wired. Mirrors TestJudgeConversation's SISO tests, adapted:
+    LQGSession instead of Session, a preset-plant message instead of a
+    transfer function."""
+
+    def test_only_the_judges_reply_appears_in_the_thread(self):
+        from supervisor_session_lqg import LQGSession
+        from supervisor_llm_gemini import GeminiClient
+
+        judge_reply = SimpleNamespace(message=SimpleNamespace(
+            content="Bryson's rule is the better pick for control effort.", tool_calls=None))
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(LQGSession, "handle_user_message",
+                          return_value="a candidate's raw reply, never shown directly"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply) as judge_chat:
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            at.chat_input[0].set_value("aircraft_hall, I care most about control effort").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [], "a bad turn must not crash the app")
+        judge_session = at.session_state["judge_session_obj"]
+        for _, candidate_session in judge_session.candidates:
+            self.assertIsInstance(candidate_session, LQGSession)
+        markdown_values = [m.markdown[0].value for m in at.chat_message if m.markdown]
+        self.assertIn("Bryson's rule is the better pick for control effort.", markdown_values)
+        self.assertNotIn("a candidate's raw reply, never shown directly", markdown_values)
+        judge_chat.assert_called_once()
+        self.assertIsNone(judge_chat.call_args.kwargs.get("tools"))
+
+    def test_n_candidates_calling_the_identical_benchmark_plot_only_once(self):
+        """MIMO twin of the SISO dedup regression above -- confirms
+        _drain_judge_plot_calls()'s dedup key (kind/plant/plant_preset/
+        custom_plant_literals) actually collapses N identical LQG
+        candidate calls into one session-list entry per method, not just
+        that it includes the right fields by inspection."""
+        import streamlit_gui_state as gs
+        from supervisor_session_lqg import LQGSession
+        from supervisor_llm_gemini import GeminiClient
+        from supervisor_tools_lqg import run_lqg_benchmark
+
+        real_result = run_lqg_benchmark(plant_preset="aircraft_hall", return_sim=True)
+        self.assertTrue(real_result["ok"], real_result.get("error"))
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Verdict.", tool_calls=None))
+
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(LQGSession, "handle_user_message", return_value="stub"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+
+            judge_session = at.session_state["judge_session_obj"]
+            self.assertEqual(len(judge_session.candidates), 2, "test assumes the seeded default pair")
+            for _, session in judge_session.candidates:
+                session.plot_calls.append({
+                    "kind": "mimo", "plant": real_result["plant_name"],
+                    "plant_preset": real_result["plant_preset"],
+                    "custom_plant_literals": real_result.get("_custom_plant_literals"),
+                    "rows": real_result["_sim_rows"],
+                })
+            at.chat_input[0].set_value("aircraft_hall, minimize control effort").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo" and e.source == "llm"]
+        self.assertEqual(len(entries), len(real_result["_sim_rows"]),
+                         f"expected exactly {len(real_result['_sim_rows'])} entries (one per method), "
+                         f"got {len(entries)} -- duplicated across candidates")
+
+    def test_round_history_report_renders_lqg_tool_calls_and_finalize(self):
+        """Confirms the report actually carries LQG tool-call content
+        through -- same schema as PID (see JudgeSession.summarize_
+        candidate_round, track-agnostic), confirmed rather than assumed,
+        per this Track's own "never run end-to-end" caveat."""
+        from supervisor_session_lqg import LQGSession
+        from supervisor_llm_gemini import GeminiClient
+
+        judge_reply = SimpleNamespace(message=SimpleNamespace(
+            content="Bryson is the better pick for this plant.", tool_calls=None))
+
+        def fake_handle_user_message(self, text):
+            from types import SimpleNamespace as NS
+            call = NS(function=NS(name="finalize_recommendation",
+                                   arguments={"method_name": "Bryson's rule",
+                                              "rationale": "lowest integrated control effort"}))
+            self.messages.append(NS(content="", tool_calls=[call]))
+            reply_text = "I recommend Bryson's rule."
+            self.messages.append(NS(content=reply_text, tool_calls=None))
+            return reply_text
+
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(LQGSession, "handle_user_message", fake_handle_user_message), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            at.chat_input[0].set_value("aircraft_hall, minimize control effort").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            with patch("streamlit_judge_panel.st.download_button") as dl:
+                at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "judge_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("aircraft_hall, minimize control effort", html_out)
+        self.assertIn("Bryson is the better pick for this plant.", html_out, "must include the judge's verdict")
+        self.assertIn("recommends", html_out)
+        self.assertIn("finalize_recommendation", html_out, "must include the candidate's tool call")
+
+
+class TestMimoResetAndClear(unittest.TestCase):
+    """Confirms reset_clears_track_state("MIMO / LQG") actually fires
+    right for Judge Mode specifically -- it's already track-aware and
+    wired into this same button for LLM Supervisor mode (see
+    test_streamlit_llm_panel.TestResetConversationAlsoClearsEntries), but
+    this exact call path (from streamlit_judge_panel.render_controls's
+    own "Reset conversation" button) was never exercised for MIMO before."""
+
+    def test_reset_conversation_clears_mimo_llm_entries(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_lqg import LQGSession
+        from supervisor_llm_gemini import GeminiClient
+        from supervisor_tools_lqg import run_lqg_benchmark
+
+        real_result = run_lqg_benchmark(plant_preset="aircraft_hall", return_sim=True)
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Verdict.", tool_calls=None))
+
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(LQGSession, "handle_user_message", return_value="stub"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+
+            judge_session = at.session_state["judge_session_obj"]
+            _, first_candidate_session = judge_session.candidates[0]
+            first_candidate_session.plot_calls.append({
+                "kind": "mimo", "plant": real_result["plant_name"],
+                "plant_preset": real_result["plant_preset"],
+                "custom_plant_literals": real_result.get("_custom_plant_literals"),
+                "rows": real_result["_sim_rows"],
+            })
+            at.chat_input[0].set_value("aircraft_hall, minimize control effort").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertGreater(
+                len([e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo" and e.source == "llm"]), 0)
+
+            at.button(key="judge_reset").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertEqual(
+                [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "mimo" and e.source == "llm"], [])
 
 
 class TestDownloadReportButton(unittest.TestCase):

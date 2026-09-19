@@ -54,9 +54,19 @@ one entry per method, not N -- see that function's own docstring for the
 exact key and its one known gap (two candidates phrasing a
 mathematically-equivalent plant as different strings still duplicates).
 
-Deliberately NOT built in this pass (see docs/aituner_plan.md's own
-scoping notes for the equivalent single-provider gaps): a CLI equivalent
-and MIMO/LQG support.
+Both Tracks are wired: `_new_session` (imported from streamlit_llm_panel,
+reused as-is) already dispatches on `track` to build either
+supervisor_session_pid.Session or supervisor_session_lqg.LQGSession
+candidates, and `_build_judge_session` below passes the matching judge
+system prompt (`supervisor_prompts_judge_pid.JUDGE_SYSTEM_PROMPT` or
+supervisor_prompts_judge_lqg.JUDGE_SYSTEM_PROMPT_LQG, see
+_JUDGE_SYSTEM_PROMPT_BY_TRACK) via `JudgeSession`'s `judge_system_prompt=`
+kwarg -- everything else about JudgeSession's orchestration is already
+track-agnostic (see that module's docstring). A CLI equivalent for both
+Tracks also now exists (`cli_supervisor_judge_pid.py`/
+`cli_supervisor_judge_lqg.py`) -- this GUI panel and those CLIs share the
+same JudgeSession/prompt pieces, built for the CLI first and reused here
+unmodified.
 """
 
 from __future__ import annotations
@@ -83,10 +93,21 @@ from supervisor_llm_anthropic import AnthropicClient
 from supervisor_llm_openai import OpenAIClient
 from supervisor_llm_gemini import GeminiClient
 from supervisor_session_judge_pid import JudgeSession
+from supervisor_prompts_judge_pid import JUDGE_SYSTEM_PROMPT
+from supervisor_prompts_judge_lqg import JUDGE_SYSTEM_PROMPT_LQG
 
 import streamlit_gui_state as gs
 
 _PROTECTED_KEYS = ["judge_candidates", "judge_judge_choice", *KEY_STATE.values()]
+
+# Mirrors _ENTRIES_SECTIONS_BY_TRACK's own track-keyed-dict pattern in
+# streamlit_llm_panel.py -- JudgeSession's judge_system_prompt= defaults to
+# the SISO/PID prompt (see supervisor_session_judge_pid.py), so this is the
+# one place that has to know to pass the LQG one instead for that track.
+_JUDGE_SYSTEM_PROMPT_BY_TRACK = {
+    "SISO / PID": JUDGE_SYSTEM_PROMPT,
+    "MIMO / LQG": JUDGE_SYSTEM_PROMPT_LQG,
+}
 
 
 def _all_candidate_options():
@@ -238,7 +259,8 @@ def _build_judge_session(candidates, judge_choice, track, resolved_keys):
     ]
     judge_provider, judge_model = judge_choice
     judge_client = _build_judge_client(judge_provider, resolved_keys[judge_provider], judge_model)
-    return JudgeSession(candidate_sessions, judge_client)
+    return JudgeSession(candidate_sessions, judge_client,
+                         judge_system_prompt=_JUDGE_SYSTEM_PROMPT_BY_TRACK[track])
 
 
 def _fingerprint(candidates, judge_choice, track, resolved_keys):

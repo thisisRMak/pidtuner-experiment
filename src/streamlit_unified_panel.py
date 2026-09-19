@@ -3,9 +3,9 @@
 Supersedes streamlit_app.py's previous three-tab layout (SISO PID / MIMO
 LQR/LQG / LLM Chat) with a single left-controls/right-plots split: a
 Track selector (SISO/PID vs MIMO/LQG) and a Mode selector (Manual vs
-LLM Supervisor vs LLM Judge -- see streamlit_judge_panel.py; PID/SISO only
-so far, MIMO/LQG not yet wired for Judge Mode) pick which panel's controls
-render on the left. The right side always shows that
+LLM Supervisor vs LLM Judge -- see streamlit_judge_panel.py; wired for
+both Tracks) pick which panel's controls render on the left. The right
+side always shows that
 Track's own plots (Response/Heatmap/Radar for SISO, Response/4-curve/
 per-channel for MIMO) regardless of which Mode produced the entries in
 it, since Manual and LLM Supervisor now write into the same

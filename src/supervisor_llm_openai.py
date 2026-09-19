@@ -43,6 +43,27 @@ not assumed safe by analogy to the Anthropic client:
 - **`max_completion_tokens`, not `max_tokens`.** The latter is documented
   as deprecated on the Chat Completions endpoint and incompatible with
   reasoning-tier models -- confirmed against `completion_create_params.py`.
+- **A response truncated mid-tool-call is detected and raised explicitly,
+  not left to fail inside `json.loads()`.** Live-discovered running the
+  MIMO/LQG Judge CLI against `gpt-5.6-luna` on `aircraft_hall`: a
+  tool-calling turn hit the `max_completion_tokens` ceiling before
+  finishing the arguments JSON for a call, and the truncated string
+  reached `_AssistantMessage`'s `json.loads()` as invalid JSON --
+  `json.decoder.JSONDecodeError: Expecting value: line 1 column 16018
+  (char 16017)`, landing right at the old 16000-token cap. Per-candidate
+  isolation (`JudgeSession._fan_out`) caught it and the round still
+  produced a judge reply, so this was never fatal -- but the raw
+  `JSONDecodeError` gave no hint what actually happened. `chat()` now
+  checks `finish_reason == "length"` on a tool-calling response *before*
+  arguments ever reach `json.loads()`, and raises a `RuntimeError` naming
+  the real cause -- still just `Exception`, still caught the same way by
+  every existing caller (`JudgeSession._fan_out`, each CLI's REPL loop),
+  just with an actionable message instead of a JSON parse error. Doubled
+  `DEFAULT_MAX_COMPLETION_TOKENS` (16000 -> 32000) alongside this as
+  defense-in-depth -- the LQG track's tool schema/typical payloads run
+  heavier than PID's, so 16000 was tighter than it needed to be; this
+  doesn't replace the explicit check above, since no fixed cap rules out
+  hitting it again on a large enough sweep.
 - **The id-collision risk this project already hit once (see
   docs/memos/2026-09-07/2026-09-07-supervisor-robustness-memo.md section 3)
   applies here too, for the same reason** -- it's Session's own
@@ -66,7 +87,7 @@ import json
 import openai
 
 DEFAULT_MODEL = "gpt-5.6-luna"
-DEFAULT_MAX_COMPLETION_TOKENS = 16000
+DEFAULT_MAX_COMPLETION_TOKENS = 32000
 
 
 class _Function:
@@ -174,9 +195,18 @@ class OpenAIClient:
             **kwargs,
         )
 
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         if getattr(message, "refusal", None):
             return _Response(_AssistantMessage(message.refusal, []))
+
+        if message.tool_calls and choice.finish_reason == "length":
+            raise RuntimeError(
+                f"{self.model} hit the {self.max_completion_tokens}-token completion "
+                "limit while still generating a tool call's arguments -- the response "
+                "was cut off mid-JSON, not a real tool call. Retry, or raise "
+                "max_completion_tokens if this keeps happening."
+            )
 
         raw_tool_calls = [
             {"id": tc.id, "type": tc.type, "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
