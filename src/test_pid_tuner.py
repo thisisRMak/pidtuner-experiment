@@ -320,6 +320,30 @@ class TestTuningMethods(unittest.TestCase):
         self.assertAlmostEqual(min(np.real(p1), np.real(p2)), 0.5, places=3)
         self.assertAlmostEqual(max(np.real(p1), np.real(p2)), 1.0, places=3)
 
+    def test_pole_cancel_auto_prefers_actually_slowest_pair_over_complex(self):
+        """Regression: complex-conjugate pairs must not be unconditionally
+        preferred over real poles regardless of actual speed.
+
+        G = 1/((s+0.1)(s+0.2)(s^2+2s+5)) has two real poles at -0.1, -0.2
+        (both genuinely slower, |Re|<=0.2) and a complex pair at -1+-2j
+        (faster, |Re|=1). Per the function's own docstring ("pick the two
+        slowest stable poles"), the two real poles form the correct,
+        unambiguous answer here -- unlike a single-real-pole plant, where
+        the complex pair could be the only valid 2-pole set available and
+        preferring it wouldn't be a bug. With two real poles on hand, no
+        such excuse applies.
+
+        Currently FAILS: the selector returns the complex pair (1+2j,
+        1-2j), never considering the two slower real poles at all -- the
+        search for a complex pair short-circuits and returns as soon as it
+        finds one, without comparing it against the best real-pole
+        pairing.
+        """
+        plant = TransferFunction.parse("1/((s+0.1)*(s+0.2)*(s^2+2*s+5))")
+        p1, p2 = select_slowest_stable_poles(plant)
+        self.assertAlmostEqual(min(np.real(p1), np.real(p2)), 0.1, places=6)
+        self.assertAlmostEqual(max(np.real(p1), np.real(p2)), 0.2, places=6)
+
     def test_pole_cancel_refuses_rhp_complex(self):
         """A complex p1 with negative real part is an RHP pole — refuse it
         same as the real-pole case."""
