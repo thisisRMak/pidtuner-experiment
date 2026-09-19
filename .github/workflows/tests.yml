@@ -14,7 +14,7 @@ on:
 
 jobs:
   pytest:
-    name: pytest (full suite, serial)
+    name: pytest (full suite, -n 2)
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -31,4 +31,4 @@ jobs:
           pip install -r src/requirements.txt -r src/requirements-dev.txt
 
       - name: Run test suite
-        run: pytest
+        run: pytest -n 2
