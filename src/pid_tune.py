@@ -77,12 +77,24 @@ def tune_pole_cancellation(plant, p1, p2, Kd=1.0):
 
 
 def select_slowest_stable_poles(plant):
-    """Pick the two slowest stable real-part poles for default cancellation.
+    """Pick the two slowest stable poles for default cancellation.
 
     Returns (p1, p2) such that the pole(s) are at s = -p1, s = -p2. For two
     real poles these are positive floats; for a complex-conjugate pair
     they're complex (conjugates of each other) — StablePoleCancellation
-    handles both. We look for real-pole pairs first.
+    handles both.
+
+    A cancellation candidate is either two real poles or one complete
+    complex-conjugate pair (never a mix — that would give complex Kp/Ki).
+    Among all real poles, only the two slowest ones are ever worth using
+    (a faster real pole never beats a slower one available in their place);
+    likewise only the slowest available complex-conjugate pair is worth
+    using. So there are at most two candidates to actually decide between,
+    compared by the speed of each one's *faster* pole (its "worst member")
+    — the smaller that is, the more of the response the cancellation
+    actually removes. Whichever real poles or complex pair aren't chosen
+    are simply not the fastest route to that; there's no need to keep
+    searching once the best of each kind is known.
     """
     poles = plant.poles()
     if len(poles) == 0:
@@ -114,25 +126,31 @@ def select_slowest_stable_poles(plant):
     def is_real(p):
         return abs(np.imag(p)) < REL_IMAG_TOL * abs(np.real(p))
 
-    # Look for a complex conjugate pair in the slowest few
+    # Best available complex-conjugate-pair candidate, if any: poles are
+    # already in ascending-speed order, so the first complete pair found is
+    # automatically the slowest one available.
+    complex_candidate = None
     for i, p in enumerate(sorted_by_speed):
         if not is_real(p):
-            # find its conjugate
             for j, q in enumerate(sorted_by_speed):
                 if j != i and abs(p - np.conj(q)) < 1e-6:
-                    # cancel this pair
                     # (s + p1)(s + p2) where p1 = -p, p2 = -conj(p)
                     # -> s^2 - 2*Re(p)*s + |p|^2
                     # p1, p2 are complex conjugates of each other, so Kp/Ki
                     # (computed from their sum/product) come out real.
-                    return (-np.real(p) + abs(np.imag(p)) * 1j), \
+                    pair = (-np.real(p) + abs(np.imag(p)) * 1j), \
                            (-np.real(p) - abs(np.imag(p)) * 1j)
+                    complex_candidate = (abs(np.real(p)), pair)
+                    break
+        if complex_candidate is not None:
+            break
 
-    # Pick two slowest *real* poles. The same ill-conditioning perturbs
-    # each copy of a repeated real root's *real* part slightly differently
-    # too (not just its imaginary part), so collapse near-duplicate values
-    # to their cluster mean before picking — otherwise we'd return one
-    # arbitrary noisy copy instead of the pole's true location.
+    # Best available real-pole candidate, if any: the two slowest real
+    # poles. The same ill-conditioning perturbs each copy of a repeated
+    # real root's *real* part slightly differently too (not just its
+    # imaginary part), so collapse near-duplicate values to their cluster
+    # mean before picking — otherwise we'd return one arbitrary noisy copy
+    # instead of the pole's true location.
     real_vals = sorted(float(-np.real(p)) for p in sorted_by_speed if is_real(p))
     real_only = []
     i = 0
@@ -145,12 +163,22 @@ def select_slowest_stable_poles(plant):
         real_only.extend([sum(cluster) / len(cluster)] * len(cluster))
         i = j + 1
 
-    if len(real_only) >= 2:
-        # Cancel the two SLOWEST poles (smallest |real part|), per lecture
-        # discussion: cancelling the slow ones gives the fastest response.
-        return real_only[0], real_only[1]
-    # Fallback: cancel two slowest poles, even if complex
-    return float(-np.real(sorted_by_speed[0])), float(-np.real(sorted_by_speed[1]))
+    real_candidate = (real_only[1], (real_only[0], real_only[1])) if len(real_only) >= 2 else None
+
+    if real_candidate is None and complex_candidate is None:
+        raise ValueError(
+            "Plant doesn't have two real stable poles or a complete "
+            "complex-conjugate pair to cancel. Try a different method."
+        )
+    if real_candidate is None:
+        return complex_candidate[1]
+    if complex_candidate is None:
+        return real_candidate[1]
+    # Both exist: cancel whichever pair's worst (fastest) member is
+    # slower, per lecture discussion — cancelling the slow ones gives the
+    # fastest response. Ties go to the real pair (no need for complex
+    # values when a real pair is equally valid).
+    return complex_candidate[1] if complex_candidate[0] < real_candidate[0] else real_candidate[1]
 
 
 def tune_zn_method_1(fopdt):
