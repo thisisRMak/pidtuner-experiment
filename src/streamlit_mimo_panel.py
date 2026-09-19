@@ -46,7 +46,7 @@ from lqg_simulate import (
 )
 from lqg_compare import compare_regulator_methods, compare_bryson_output_modelfollowing
 from lqg_checks import checks_for_result
-from matrix_io import parse_matlab_literal
+from matrix_io import parse_matlab_literal, format_matlab_literal
 from plant import StateSpacePlant
 
 import report_html
@@ -121,13 +121,34 @@ def current_manual_plant_name() -> str | None:
     against existing LLM entries directly. Returns None if Manual/MIMO
     hasn't rendered at least once this session (no shadow state yet) or
     its preset key no longer resolves."""
+    plant = _current_manual_plant_object()
+    return plant.name if plant is not None else None
+
+
+def _current_manual_plant_object() -> StateSpacePlant | None:
+    """The actual StateSpacePlant (real A/B/C/D matrices) currently
+    sitting in this panel's own plant widgets, read via shadow state
+    (gs.peek()) -- same resolution current_manual_plant_name() uses,
+    split out so a caller needing the matrices themselves, not just the
+    display name, can get them too -- see build_entries_report_
+    sections()'s own "Plant" section, which needs this even for a preset
+    (ControllerEntry.plant_A..D are only ever populated for a *custom*
+    LLM-sourced plant, never a preset -- see that field's own docstring
+    in streamlit_gui_state.py -- so there's nothing reliable to read off
+    an entry for this; resolving fresh from the live widgets works
+    regardless of preset vs. custom, and regardless of source)."""
     source = gs.peek("mimo_plant_source")
     if source is None:
         return None
-    if source == "Custom (MATLAB matrix entry)":
-        return gs.peek("mimo_custom_name") or "Custom plant"
     try:
-        return load_example(gs.peek("mimo_preset")).name
+        if source == "Custom (MATLAB matrix entry)":
+            A = parse_matlab_literal(gs.peek("mimo_custom_A", ""))
+            B = parse_matlab_literal(gs.peek("mimo_custom_B", ""))
+            C = parse_matlab_literal(gs.peek("mimo_custom_C", ""))
+            D = parse_matlab_literal(gs.peek("mimo_custom_D", ""))
+            name = gs.peek("mimo_custom_name") or "Custom plant"
+            return StateSpacePlant(A=A, B=B, C=C, D=D, name=name)
+        return load_example(gs.peek("mimo_preset")).plant
     except Exception:
         return None
 
@@ -569,7 +590,7 @@ def _render_session_list():
         st.caption("Design a method (or Compare all methods) to populate this list.")
         return
 
-    cols = st.columns(4)
+    cols = st.columns(5)
     if cols[0].button("Select all", key="mimo_select_all"):
         gs.set_all_enabled_by_kind("mimo", True)
         for e in mimo_entries:
@@ -582,6 +603,11 @@ def _render_session_list():
         gs.clear_by_kind("mimo")
     if cols[3].button("Remove unchecked", key="mimo_remove_unchecked"):
         gs.remove_unchecked_by_kind("mimo")
+    if cols[4].button("Clear LLM plots", key="mimo_clear_llm_plots"):
+        # See streamlit_siso_panel.py's identical button/comment -- only
+        # source="llm" entries, lives here (not in a chat Mode's own
+        # controls) so it works the same regardless of which Mode is active.
+        gs.clear_by_kind_and_source("mimo", "llm")
     mimo_entries = gs.get_by_kind("mimo")
 
     gs.assign_colors(mimo_entries)
@@ -699,6 +725,10 @@ def build_entries_report_sections():
     per-channel step response. The latter two are NOT session-list
     entries (see the comment below), so they're included independently,
     each conditional on its own cache being populated, not on `active`.
+    Also a "Plant" section listing the currently-selected plant's real
+    A/B/C/D matrices in MATLAB literal form -- including for a preset,
+    which carries no matrices of its own to display otherwise (see where
+    it's built for why this needs a fresh resolve, not an entry field).
 
     Public and parameter-free for the same reason as streamlit_siso_
     panel.py's own version -- streamlit_llm_panel.py/streamlit_judge_
@@ -715,6 +745,27 @@ def build_entries_report_sections():
     plants = sorted({e.plant for e in active if e.plant})
     subtitle = "MIMO / LQR-LQG — " + ("; ".join(plants) if plants else "no plant selected")
 
+    # The currently-selected plant's real matrices, preset or custom alike
+    # -- see _current_manual_plant_object()'s own docstring for why this
+    # has to resolve fresh from the live widgets rather than reading
+    # anything off an entry (a preset's matrices are never stored on
+    # ControllerEntry, by any creation path). Matches the common case (one
+    # plant per report), same caveat as streamlit_siso_panel.py's twin
+    # section: won't match every entry if more than one plant was compared
+    # this session. None if Manual/MIMO's widgets have never rendered this
+    # session, or the plant currently sitting in them doesn't resolve.
+    sections = []
+    current_plant = _current_manual_plant_object()
+    if current_plant is not None:
+        matrix_lines = "\n".join(
+            f"{name} =\n{format_matlab_literal(getattr(current_plant, name))}"
+            for name in ("A", "B", "C", "D")
+        )
+        sections.append(
+            f"<h2>Plant</h2><p>{report_html.e(current_plant.name)}</p>"
+            f"<pre><code>{report_html.e(matrix_lines)}</code></pre>"
+        )
+
     headers = ["Method", "Checks", "Metrics"]
     rows = []
     for e in active:
@@ -722,7 +773,7 @@ def build_entries_report_sections():
         checks_str = "PASS" if all_checks and all(c.passed for c in all_checks) else "FAIL" if all_checks else "—"
         metrics_str = format_regulator_metrics(e.sim.metrics) if e.sim is not None else "—"
         rows.append([e.label, checks_str, metrics_str])
-    sections = [f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}"]
+    sections.append(f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}")
 
     sim_active = [e for e in active if e.sim is not None]
     if sim_active:

@@ -334,7 +334,8 @@ class TestLlmEntriesJoinTheSharedSessionList(unittest.TestCase):
 
 
 class TestClearLlmEntriesButton(unittest.TestCase):
-    """"Clear LLM entries" (streamlit_llm_panel.render_controls()) must
+    """"Clear LLM plots" (streamlit_siso_panel._render_session_list(),
+    reachable from any Mode since the session list itself is) must
     remove only source="llm" entries for the *current Track's* kind --
     leaving source="you" entries, and the other Track's kind entirely,
     untouched. See streamlit_gui_state.clear_by_kind_and_source()."""
@@ -382,7 +383,7 @@ class TestClearLlmEntriesButton(unittest.TestCase):
             self.assertGreater(len(siso_llm_before), 0)
             self.assertGreater(len(mimo_before), 0)
 
-            at.button(key="llm_clear_entries").click()
+            at.button(key="siso_clear_llm_plots").click()
             at.run(timeout=30)
             self.assertEqual(at.exception[:], [])
 
@@ -458,6 +459,74 @@ class TestResetConversationAlsoClearsEntries(unittest.TestCase):
             self.assertEqual(
                 len([e for e in entries if e.kind == "mimo"]),
                 len(mimo_before), "the other Track's entries must be untouched")
+
+    def test_reset_on_mimo_track_also_clears_four_curve_and_per_channel_step_caches(self):
+        """4-curve comparison and per-channel step response aren't
+        session-list entries (see streamlit_mimo_panel.build_entries_
+        report_sections()'s own comment) -- gs.clear_by_kind_and_source()
+        alone never touches them, so reset_clears_track_state() pops both
+        caches directly, MIMO-track only. "Clear LLM plots" must leave
+        them alone -- these are comparisons the user explicitly ran, not
+        something the LLM "added" to the graph. Populated via the real
+        buttons (mirrors test_streamlit_mimo_panel.py's own test for these
+        two) rather than hand-built stub data, since Track=MIMO/LQG's
+        render_plots() unpacks whatever's cached on every run regardless
+        of Mode -- a shape-mismatched stub would crash it."""
+        from lqg_examples import list_examples, load_example
+        square_key = None
+        for key in list_examples():
+            ex = load_example(key)
+            if ex.plant.nu == ex.plant.ny:
+                square_key = key
+                break
+        if square_key is None:
+            self.skipTest("no square-plant preset available (nu == ny)")
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.selectbox(key="mimo_preset").set_value(square_key)
+            at.run(timeout=30)
+            at.button(key="mimo_four_curve_btn").click()
+            at.run(timeout=60)
+            at.checkbox(key="mimo_ref_tracking").set_value(True)
+            at.run(timeout=30)
+            at.button(key="mimo_design").click()
+            at.run(timeout=60)
+            at.button(key="mimo_per_channel_step_btn").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+            self.assertIn("mimo_four_curve", at.session_state)
+            self.assertIn("mimo_per_channel_step", at.session_state)
+
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+
+            at.button(key="mimo_clear_llm_plots").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertIn("mimo_four_curve", at.session_state, "Clear LLM plots must not touch this")
+            self.assertIn("mimo_per_channel_step", at.session_state, "Clear LLM plots must not touch this")
+
+            at.button(key="llm_reset").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertNotIn("mimo_four_curve", at.session_state)
+            self.assertNotIn("mimo_per_channel_step", at.session_state)
+
+    def test_reset_on_siso_track_leaves_mimo_caches_alone(self):
+        """A SISO-track reset must not reach into MIMO-only state -- see
+        reset_clears_track_state()'s own `if track == "MIMO / LQG"` guard."""
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            at.session_state["mimo_four_curve"] = ("stub",)
+
+            at.button(key="llm_reset").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertIn("mimo_four_curve", at.session_state)
 
 
 class TestDownloadReportButton(unittest.TestCase):

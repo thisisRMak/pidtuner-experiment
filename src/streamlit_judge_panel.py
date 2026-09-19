@@ -11,7 +11,7 @@ directly, only the judge's.
 
 Provider/model/key plumbing is deliberately NOT reinvented here --
 PROVIDERS/KEY_STATE/ENV_VAR/MODELS_BY_PROVIDER/_configured_key/_new_session/
-_drain_plot_calls/_log_exception are all imported from streamlit_llm_panel
+absorb_calls/_log_exception are all imported from streamlit_llm_panel
 and reused as-is. Reusing the exact same KEY_STATE widget keys means an API
 key entered in Mode="LLM Supervisor" carries over to Mode="LLM Judge" (and
 back) via streamlit_gui_state.py's existing shadow-state mechanism -- it's
@@ -43,11 +43,20 @@ error (rate limit, a real capacity 503, ...) is caught per-candidate
 inside JudgeSession, not here -- it shows up in this same expander rather
 than aborting the round; see that module's docstring.
 
+N candidates given the identical prompt routinely call the identical
+benchmark tool on the identical plant -- since that benchmark is a
+deterministic function of its arguments, draining every candidate's copy
+independently would plot the same methods N times over. _drain_judge_
+plot_calls() dedupes by (kind, plant, delay/preset/literals) across all
+candidates before anything reaches the session list, so the Response
+plot's legend, the Heatmap's columns, and the Radar's spokes each show
+one entry per method, not N -- see that function's own docstring for the
+exact key and its one known gap (two candidates phrasing a
+mathematically-equivalent plant as different strings still duplicates).
+
 Deliberately NOT built in this pass (see docs/aituner_plan.md's own
-scoping notes for the equivalent single-provider gaps): a CLI equivalent,
-MIMO/LQG support, and any de-duplication of identical benchmark rows
-plotted once per candidate on the same plant (drained as-is, same reuse
-as the single-provider path -- see the plot-drain loop in render_controls()).
+scoping notes for the equivalent single-provider gaps): a CLI equivalent
+and MIMO/LQG support.
 """
 
 from __future__ import annotations
@@ -69,7 +78,6 @@ from streamlit_llm_panel import (
     _init_panel_state,
     _log_exception,
     _new_session,
-    _TRACK_KIND,
 )
 from supervisor_llm_anthropic import AnthropicClient
 from supervisor_llm_openai import OpenAIClient
@@ -296,13 +304,15 @@ def _rounds_history_html(rounds_history) -> str:
 
 
 def _build_report_html(track, judge_session):
-    """The full-history report for Mode="LLM Judge": every round
-    (_rounds_history_html(), not just the latest) plus whichever
+    """The full-history report for Mode="LLM Judge": whichever
     session-list entries are currently plotted for this Track -- the exact
     same section Manual mode's/Supervisor mode's own reports show, not a
-    re-implementation."""
+    re-implementation -- followed by every round (_rounds_history_html(),
+    not just the latest). Tables/plots first, conversation last -- see
+    streamlit_llm_panel._build_report_html()'s identical reasoning, the
+    round history is usually the longest section by far."""
     entries_subtitle, entries_sections = _ENTRIES_SECTIONS_BY_TRACK[track]()
-    sections = [f"<h2>Conversation</h2>{_rounds_history_html(judge_session.rounds_history)}"] + entries_sections
+    sections = entries_sections + [f"<h2>Conversation</h2>{_rounds_history_html(judge_session.rounds_history)}"]
     return report_html.build_report(f"PIDTuner LLM Judge Report ({track})", entries_subtitle, sections)
 
 
@@ -314,6 +324,46 @@ def _render_download_report_button(track, judge_session):
         file_name=f"pidtuner-judge-report-{datetime.date.today().isoformat()}.html",
         mime="text/html", key="judge_download_report",
     )
+
+
+def _drain_judge_plot_calls(judge_session) -> None:
+    """Drains every candidate's plot_calls, but only the first time a
+    given (kind, plant, delay/preset/literals) combination is seen this
+    call -- N candidates given the identical prompt routinely call the
+    identical benchmark tool on the identical plant, and since that
+    benchmark is a deterministic function of its arguments, every
+    candidate's copy of the result is numerically identical. Draining all
+    of them (the naive "for each candidate, drain it" loop this replaces)
+    would add the same methods to the session list N times over --
+    tripling the Response plot's legend, the Heatmap's columns, and the
+    Radar's spokes with entries that are exact duplicates, not distinct
+    findings.
+
+    "First" means first in judge_session.candidates' own list order (the
+    order the user picked them in the multiselect) -- not thread-
+    completion order, which is non-deterministic (_fan_out runs candidates
+    concurrently) and would make which candidate's copy "wins" vary
+    run to run. Which one wins doesn't change the plotted result (the
+    rows are identical either way), only which entry happens to hold it.
+
+    A known gap, not attempted here: two candidates phrasing a
+    mathematically-equivalent plant as different strings (e.g.
+    "1/(90s+1)" vs "1 / (90*s + 1)") won't be recognized as the same key
+    and will still duplicate -- this fixes the reported case (identical
+    arguments, the common case since every candidate is given the exact
+    same prompt), not full semantic equivalence."""
+    seen = set()
+    for _, session in judge_session.candidates:
+        calls, session.plot_calls = session.plot_calls, []
+        deduped = []
+        for call in calls:
+            key = (call["kind"], call["plant"], call.get("delay", 0.0),
+                   call.get("plant_preset", ""), str(call.get("custom_plant_literals")))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(call)
+        llm_panel.absorb_calls(deduped)
 
 
 def render_controls(track):
@@ -360,18 +410,18 @@ def render_controls(track):
         gs.clear_judge_chat()
 
     if st.button("Reset conversation", key="judge_reset"):
-        # Also clears this Track's plotted LLM entries -- mirrors
-        # streamlit_llm_panel.py's identical change to its own "Reset
-        # conversation", same reasoning: a fresh conversation's eventual
-        # "Download report" must never embed a stale pre-reset plot.
+        # Also clears this Track's plotted LLM entries (and, for MIMO,
+        # the 4-curve/per-channel-step caches) -- mirrors streamlit_llm_
+        # panel.py's identical change to its own "Reset conversation";
+        # see llm_panel.reset_clears_track_state()'s own docstring for
+        # the full reasoning, reused here rather than duplicated.
         st.session_state["judge_session_obj"] = _build_judge_session(candidates, judge_choice, track, resolved_keys)
         gs.clear_judge_chat()
-        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+        llm_panel.reset_clears_track_state(track)
 
-    if st.button("Clear LLM entries", key="judge_clear_entries"):
-        # Only this Track's LLM-tagged entries -- mirrors streamlit_llm_
-        # panel.py's identical button exactly (see its own comment).
-        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+    # "Clear LLM plots" moved to the session list itself -- see streamlit_
+    # llm_panel.py's identical comment on its own former copy of this
+    # button for why.
 
     _render_download_report_button(track, st.session_state["judge_session_obj"])
 
@@ -421,8 +471,7 @@ def render_controls(track):
                         # plotting bug here must not crash the app or throw
                         # away the reply that already computed successfully.
                         try:
-                            for _, session in judge_session.candidates:
-                                llm_panel._drain_plot_calls(session)
+                            _drain_judge_plot_calls(judge_session)
                         except Exception as exc:  # noqa: BLE001
                             _log_exception(exc)
                 st.markdown(reply)

@@ -159,6 +159,56 @@ class TestJudgeConversation(unittest.TestCase):
         judge_chat.assert_called_once()
         self.assertIsNone(judge_chat.call_args.kwargs.get("tools"))
 
+    def test_n_candidates_calling_the_identical_benchmark_plot_only_once(self):
+        """The reported bug: 1 judge + 3 candidates evaluating the same
+        plant used to add the same methods to the session list 3 times
+        over (tripling the Response legend/Heatmap columns/Radar spokes),
+        since each candidate's Session drains independently. Now deduped
+        across candidates -- see streamlit_judge_panel._drain_judge_plot_
+        calls()'s own docstring."""
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_llm_gemini import GeminiClient
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1/(90s+1)", delay=13, return_sim=True)
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Verdict.", tool_calls=None))
+
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(Session, "handle_user_message", return_value="stub"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            ms = at.multiselect(key="judge_candidates")
+            at = ms.set_value(list(ms.value) + [("Claude (Anthropic)", "claude-sonnet-5")]).run(timeout=30)
+
+            judge_session = at.session_state["judge_session_obj"]
+            self.assertEqual(len(judge_session.candidates), 3, "test assumes 3 candidates")
+            for _, session in judge_session.candidates:
+                # All 3 candidates independently "called" the identical
+                # benchmark tool on the identical plant -- exactly what
+                # happens in practice when every candidate gets the same
+                # prompt and does the obvious thing with it.
+                session.plot_calls.append({
+                    "kind": "siso", "plant": "1/(90s+1)", "delay": 13.0,
+                    "rows": real_result["_sim_rows"],
+                })
+            at.chat_input[0].set_value("1/(90s+1), delay 13, minimize overshoot.").run(timeout=30)
+
+        self.assertEqual(at.exception[:], [])
+        entries = [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso" and e.source == "llm"]
+        # Pole cancellation has no gains for this single-pole plant (needs
+        # >= 2 stable poles) and is skipped by absorb_llm_rows() the same
+        # way a manual "Compare all methods" click would skip it -- not a
+        # dedup artifact, so the expected count is rows-with-gains, not
+        # every row _sim_rows returned.
+        n_expected = len([r for r in real_result["_sim_rows"] if r.get("gains")])
+        self.assertEqual(len(entries), n_expected,
+                         f"expected exactly {n_expected} entries (one per method with gains), "
+                         f"got {len(entries)} -- duplicated across candidates")
+
     def test_one_failing_candidate_does_not_abort_the_round(self):
         """A real provider error (e.g. Gemini's actual capacity 503) hits
         exactly one of the two default candidates (Claude). The round must
@@ -235,7 +285,7 @@ class TestJudgeConversation(unittest.TestCase):
              patch("streamlit_llm_panel.load_dotenv"), \
              patch.object(Session, "handle_user_message", return_value="stub"), \
              patch.object(GeminiClient, "chat", return_value=judge_reply), \
-             patch("streamlit_llm_panel._drain_plot_calls", side_effect=RuntimeError("boom")):
+             patch("streamlit_judge_panel._drain_judge_plot_calls", side_effect=RuntimeError("boom")):
             at = AppTest.from_file(APP_PATH).run(timeout=30)
             at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
             at = _select_judge(at, DEFAULT_JUDGE)
@@ -247,10 +297,13 @@ class TestJudgeConversation(unittest.TestCase):
 
 
 class TestClearEntriesAndReset(unittest.TestCase):
-    """Judge mode gains a "Clear LLM entries" button mirroring Supervisor
-    mode's exactly, and "Reset conversation" now also clears this Track's
-    LLM-tagged entries -- see streamlit_judge_panel.render_controls()'s
-    own comments on both buttons."""
+    """"Clear LLM plots" lives in the session list itself (streamlit_siso_
+    panel.py/streamlit_mimo_panel.py's _render_session_list(), see
+    test_streamlit_llm_panel.TestClearLlmEntriesButton for its own direct
+    coverage) -- reachable from Judge mode the same as any other, not a
+    Judge-specific button. "Reset conversation" now also clears this
+    Track's LLM-tagged entries -- see streamlit_judge_panel.render_
+    controls()'s own comment on that button specifically."""
 
     def _seed_llm_entry(self, at):
         import streamlit_gui_state as gs
@@ -291,7 +344,7 @@ class TestClearEntriesAndReset(unittest.TestCase):
             self.assertGreater(len([e for e in entries if e.kind == "siso" and e.source == "llm"]), 0)
             self.assertGreater(len(siso_you_before), 0)
 
-            at.button(key="judge_clear_entries").click()
+            at.button(key="siso_clear_llm_plots").click()
             at.run(timeout=30)
             self.assertEqual(at.exception[:], [])
 

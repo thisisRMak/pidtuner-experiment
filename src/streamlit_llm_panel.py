@@ -324,14 +324,17 @@ _ENTRIES_SECTIONS_BY_TRACK = {"SISO / PID": siso_panel.build_entries_report_sect
 
 
 def _build_report_html(track, session):
-    """The full-history report for Mode="LLM Supervisor": the entire
-    conversation transcript (_transcript_html(), every round, not just the
-    latest) plus whichever session-list entries are currently plotted for
-    this Track (build_entries_report_sections() -- the exact same section
-    Manual mode's own report shows, not a re-implementation; see that
-    function's docstring for why it's "any source," not just source="llm")."""
+    """The full-history report for Mode="LLM Supervisor": whichever
+    session-list entries are currently plotted for this Track
+    (build_entries_report_sections() -- the exact same section Manual
+    mode's own report shows, not a re-implementation; see that function's
+    docstring for why it's "any source," not just source="llm"), followed
+    by the entire conversation transcript (_transcript_html(), every
+    round, not just the latest). Tables/plots first, transcript last --
+    the transcript is usually the longest section by far, and a reader
+    opening the report wants the results before a long scroll of prose."""
     entries_subtitle, entries_sections = _ENTRIES_SECTIONS_BY_TRACK[track]()
-    sections = [f"<h2>Conversation</h2>{_transcript_html(session)}"] + entries_sections
+    sections = entries_sections + [f"<h2>Conversation</h2>{_transcript_html(session)}"]
     return report_html.build_report(f"PIDTuner LLM Supervisor Report ({track})", entries_subtitle, sections)
 
 
@@ -343,6 +346,31 @@ def _render_download_report_button(track, session):
         file_name=f"pidtuner-supervisor-report-{datetime.date.today().isoformat()}.html",
         mime="text/html", key="llm_download_report",
     )
+
+
+def reset_clears_track_state(track) -> None:
+    """Everything "Reset conversation" clears beyond the conversation
+    object itself, for this Track: the plotted source="llm" graph entries
+    (see the button's own comment for why), and -- MIMO only -- the
+    4-curve/per-channel-step comparison caches (st.session_state["mimo_
+    four_curve"]/["mimo_per_channel_step"]), which aren't session-list
+    entries at all (see streamlit_mimo_panel.build_entries_report_
+    sections()'s own comment) so gs.clear_by_kind_and_source() alone
+    never touches them -- a stale one would otherwise still show up in
+    the *next* conversation's report. Deliberately NOT called by "Clear
+    LLM plots" (streamlit_siso_panel.py/streamlit_mimo_panel.py's session-
+    list button), which only ever touches the graph -- these two caches
+    are comparisons the user explicitly ran, not something the LLM
+    "added" to the graph the way a benchmark-tool call did, so clearing
+    them isn't part of what that specific button promises.
+
+    Public (no leading underscore) -- called by both streamlit_llm_
+    panel.py's own "Reset conversation" and streamlit_judge_panel.py's,
+    so the two rules above stay in exactly one place."""
+    gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+    if track == "MIMO / LQG":
+        st.session_state.pop("mimo_four_curve", None)
+        st.session_state.pop("mimo_per_channel_step", None)
 
 
 def render_controls(track):
@@ -386,21 +414,24 @@ def render_controls(track):
         gs.clear_chat()
 
     if st.button("Reset conversation", key="llm_reset"):
-        # Also clears this Track's plotted LLM entries, not just the
-        # conversation -- a fresh conversation's eventual "Download
-        # report" must never embed a stale plot from before the reset
-        # (plots can only ever come from these entries, see report_html.py
-        # and this module's own docstring on why -- there's no separate
-        # plot data living inside Session itself to fall back on).
+        # Also clears this Track's plotted LLM entries (and, for MIMO,
+        # the 4-curve/per-channel-step caches) -- see reset_clears_track_
+        # state()'s own docstring for why: a fresh conversation's eventual
+        # "Download report" must never embed a stale plot from before the
+        # reset.
         st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
         gs.clear_chat()
-        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+        reset_clears_track_state(track)
 
-    if st.button("Clear LLM entries", key="llm_clear_entries"):
-        # Only this Track's LLM-tagged entries -- source="you" entries and
-        # the other Track's kind are left alone. See gs.clear_by_kind_
-        # and_source().
-        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+    # "Clear LLM plots" lives in the session list itself now (Select all/
+    # Deselect all/Clear all/Remove unchecked's own row, in streamlit_
+    # siso_panel.py/streamlit_mimo_panel.py's _render_session_list()) --
+    # not here. It only ever acts on the graph, not the conversation, so
+    # it belongs with its session-list siblings (the same kind of
+    # source-scoped bulk action, right next to the ones that aren't
+    # source-scoped) rather than buried among chat-management buttons in
+    # a different column the graph itself isn't even in. Moving it there
+    # also makes it available in every Mode, not just this one.
 
     _render_manual_plant_hint(track)
     _render_download_report_button(track, st.session_state["llm_session_obj"])
@@ -472,23 +503,14 @@ def render_controls(track):
             gs.append_chat_message("assistant", reply)
 
 
-def _drain_plot_calls(session):
-    """Turn every benchmark call captured since the last drain
-    (session.plot_calls -- populated by Session/LQGSession's
-    _wrap_benchmark, one entry per successful sim-capable tool call)
-    into session entries via each track panel's own absorb_llm_rows() --
-    see the module docstring. Called once per turn, right after
-    handle_user_message() returns without raising, so this only ever
-    runs after its JSON reply has already been built -- nothing here
-    reaches the model.
-
-    Swaps session.plot_calls out for a fresh list *before* processing,
-    rather than clearing it after the loop: if absorb_llm_rows raises
-    partway through (the caller wraps this whole function in its own
-    try/except), the calls already popped here are gone either way --
-    they don't linger to be silently re-added, duplicated, on some later
-    turn's successful drain."""
-    calls, session.plot_calls = session.plot_calls, []
+def absorb_calls(calls):
+    """The per-call dispatch half of _drain_plot_calls() -- split out so a
+    caller draining more than one session's plot_calls at once
+    (streamlit_judge_panel.py's own drain, which needs to dedupe *across*
+    candidates before any of this runs) can reuse the exact same
+    kind-dispatch logic rather than re-implementing it. Public (no leading
+    underscore) for that reuse. Takes an already-decided list of calls --
+    no opinion on where they came from or whether any were filtered out."""
     for call in calls:
         if call["kind"] == "siso":
             # Only Session (SISO/PID) tags calls with "delay" -- see its
@@ -505,3 +527,23 @@ def _drain_plot_calls(session):
                 plant_preset=call.get("plant_preset", ""),
                 custom_plant_literals=call.get("custom_plant_literals"),
                 four_curve=call.get("four_curve"))
+
+
+def _drain_plot_calls(session):
+    """Turn every benchmark call captured since the last drain
+    (session.plot_calls -- populated by Session/LQGSession's
+    _wrap_benchmark, one entry per successful sim-capable tool call)
+    into session entries via absorb_calls() -- see its own docstring and
+    the module docstring above. Called once per turn, right after
+    handle_user_message() returns without raising, so this only ever
+    runs after its JSON reply has already been built -- nothing here
+    reaches the model.
+
+    Swaps session.plot_calls out for a fresh list *before* processing,
+    rather than clearing it after the loop: if absorb_calls() raises
+    partway through (the caller wraps this whole function in its own
+    try/except), the calls already popped here are gone either way --
+    they don't linger to be silently re-added, duplicated, on some later
+    turn's successful drain."""
+    calls, session.plot_calls = session.plot_calls, []
+    absorb_calls(calls)

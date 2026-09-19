@@ -72,33 +72,78 @@ def _build_plant():
     return TransferFunction.from_coeffs(num=num, den=den, L=L, gain=gain)
 
 
-def current_manual_plant() -> str | None:
-    """The pretty()-formatted plant currently sitting in this panel's own
-    plant widgets, read via their shadow state (gs.peek()) rather than
-    requiring the widgets to have rendered this run -- so Mode=LLM
-    Supervisor can show a "you were just looking at this plant" hint
-    (streamlit_llm_panel._render_manual_plant_hint) without instantiating
-    Manual mode's own controls. Same pretty()-formatted string
-    ControllerEntry.plant already carries, so the hint's caller can
-    compare it against existing LLM entries directly. Returns None if
-    Manual/SISO hasn't rendered at least once this session (no shadow
-    state yet) or its plant doesn't currently parse -- mirrors
-    _build_plant()'s own try/except in _render_plant_controls()."""
+def _current_manual_plant_object() -> TransferFunction | None:
+    """The actual TransferFunction currently sitting in this panel's own
+    plant widgets, read via shadow state (gs.peek()) -- same resolution
+    current_manual_plant() uses (split out so a caller needing the real
+    object, not just its .pretty() string, can get it too -- see
+    build_entries_report_sections()'s own "Plant" section). Returns None
+    under the same conditions current_manual_plant() does."""
     form = gs.peek("siso_plant_form")
     if form is None:
         return None
     L = gs.peek("siso_L", 0.0)
     try:
         if form == "Symbolic":
-            plant = TransferFunction.parse(gs.peek("siso_tf_expr", ""), L=L)
-        else:
-            gain = float(gs.peek("siso_gain"))
-            num = parse_coeff_list(gs.peek("siso_num"))
-            den = parse_coeff_list(gs.peek("siso_den"))
-            plant = TransferFunction.from_coeffs(num=num, den=den, L=L, gain=gain)
-        return plant.pretty()
+            return TransferFunction.parse(gs.peek("siso_tf_expr", ""), L=L)
+        gain = float(gs.peek("siso_gain"))
+        num = parse_coeff_list(gs.peek("siso_num"))
+        den = parse_coeff_list(gs.peek("siso_den"))
+        return TransferFunction.from_coeffs(num=num, den=den, L=L, gain=gain)
     except Exception:
         return None
+
+
+def current_manual_plant() -> str | None:
+    """The pretty()-formatted plant currently sitting in this panel's own
+    plant widgets -- see _current_manual_plant_object()'s docstring for
+    the resolution and why it's shadow-state-based. Same pretty()-
+    formatted string ControllerEntry.plant already carries, so a caller
+    like streamlit_llm_panel._render_manual_plant_hint can compare it
+    against existing LLM entries directly."""
+    plant = _current_manual_plant_object()
+    return plant.pretty() if plant is not None else None
+
+
+def _symbolic_poly(coeffs) -> str:
+    """Descending-power coefficients (plant.py's own convention, same as
+    np.polyval) -> an 'as^n + bs^(n-1) + ...' HTML string, e.g.
+    [10, 11, 1] -> '10s<sup>2</sup> + 11s + 1'. Not a general-purpose
+    polynomial formatter -- just enough to make a report's plant
+    human-readable, no attempt at e.g. suppressing a redundant '+' sign
+    beyond the leading term."""
+    n = len(coeffs) - 1
+    parts = []
+    for i, c in enumerate(coeffs):
+        power = n - i
+        if c == 0:
+            continue
+        sign = "-" if c < 0 else "+"
+        mag = abs(c)
+        if power == 0:
+            term = f"{mag:g}"
+        elif power == 1:
+            term = "s" if mag == 1 else f"{mag:g}s"
+        else:
+            term = f"s<sup>{power}</sup>" if mag == 1 else f"{mag:g}s<sup>{power}</sup>"
+        parts.append((sign, term))
+    if not parts:
+        return "0"
+    out = parts[0][1] if parts[0][0] == "+" else f"-{parts[0][1]}"
+    for sign, term in parts[1:]:
+        out += f" {sign} {term}"
+    return out
+
+
+def _symbolic_tf(plant: TransferFunction) -> str:
+    """plant -> '(num) / (den)', optionally '· e^-Ls' -- the symbolic
+    counterpart to plant.pretty()'s MATLAB num=[]/den=[] form, for a
+    report reader who thinks in transfer-function fractions, not
+    coefficient vectors."""
+    expr = f"({_symbolic_poly(plant.num)}) / ({_symbolic_poly(plant.den)})"
+    if plant.L > 0:
+        expr += f" &middot; e<sup>-{plant.L:g}s</sup>"
+    return expr
 
 
 def _render_plant_controls():
@@ -592,7 +637,7 @@ def _render_session_list():
     # its own stale True/False and immediately overwrite entry.enabled
     # right back to what it was before the click (via the "enabled !=
     # entry.enabled" sync a few lines down).
-    cols = st.columns(4)
+    cols = st.columns(5)
     if cols[0].button("Select all", key="siso_select_all"):
         gs.set_all_enabled_by_kind("siso", True)
         for e in siso_entries:
@@ -605,6 +650,15 @@ def _render_session_list():
         gs.clear_by_kind("siso")
     if cols[3].button("Remove unchecked", key="siso_remove_unchecked"):
         gs.remove_unchecked_by_kind("siso")
+    if cols[4].button("Clear LLM plots", key="siso_clear_llm_plots"):
+        # Only source="llm" entries -- the one bulk action here that's
+        # scoped by provenance, not just by kind. Lives here (not in
+        # streamlit_llm_panel.py/streamlit_judge_panel.py's own controls)
+        # because it only ever acts on this list, and works the same
+        # regardless of which Mode is currently active -- a Manual-mode
+        # user with LLM clutter left over from an earlier chat can use it
+        # too, not just while actually in a chat Mode.
+        gs.clear_by_kind_and_source("siso", "llm")
     siso_entries = gs.get_by_kind("siso")
 
     gs.assign_colors(siso_entries)
@@ -774,7 +828,10 @@ def build_entries_report_sections():
     heatmap, and the radar -- the same four things render_plots() always
     shows stacked together, via the same builder functions
     (_build_response_fig(), scv.build_heatmap_html(), scv.build_radar_fig()),
-    not a re-implementation of any of them.
+    not a re-implementation of any of them. Also a "Plant" section stating
+    the currently-selected plant in both MATLAB (num/den) and symbolic
+    (fraction) form -- see the comment where it's built for why this is
+    the *currently selected* plant, not necessarily every active entry's.
 
     Public (no leading underscore) and parameter-free -- called both by
     this module's own _build_report_html() below and directly by
@@ -793,6 +850,24 @@ def build_entries_report_sections():
     plants = sorted({e.plant for e in active if e.plant})
     subtitle = "SISO / PID — " + ("; ".join(plants) if plants else "no plant selected")
 
+    # The currently-selected plant, not each entry's own -- entries don't
+    # retain their originating TransferFunction object (ControllerEntry.
+    # plant is only ever a pre-formatted .pretty() string, see gs.py), so
+    # there's nothing reliable to derive a symbolic form FROM per entry.
+    # This matches the common case (one plant per report) and needs no
+    # change to any entry-creation path; it just won't match every entry
+    # if the session compared more than one plant. current_plant is None
+    # if Manual/SISO's widgets have never rendered this session, or the
+    # plant currently sitting in them doesn't parse.
+    sections = []
+    current_plant = _current_manual_plant_object()
+    if current_plant is not None:
+        sections.append(
+            "<h2>Plant</h2>"
+            f"<p>MATLAB form: <code>{report_html.e(current_plant.pretty())}</code></p>"
+            f"<p>Symbolic form: {_symbolic_tf(current_plant)}</p>"
+        )
+
     headers = ["Method", "Stable"] + TABLE_METRICS
     rows = []
     for e in active:
@@ -801,7 +876,7 @@ def build_entries_report_sections():
         cells = [e.label, "yes" if stable else "no"]
         cells += ["—" if not stable else _fmt_metric(row.get(m)) for m in TABLE_METRICS]
         rows.append(cells)
-    sections = [f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}"]
+    sections.append(f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}")
 
     sim_active = [e for e in active if e.sim is not None]
     if sim_active:
