@@ -19,6 +19,7 @@ script is the source of truth for its exact flags.
 | Tune one plant, one method, right now | `cli_pid.py` | `cli_lqg.py` |
 | Tune from signal data only (no known TF) | `cli_pid_blackbox.py` | — (not built; see `docs/lqg_testing.md`) |
 | Talk through tradeoffs conversationally | `cli_supervisor_pid.py` | `cli_supervisor_lqg.py` |
+| Compare multiple models, one arbitrates | `cli_supervisor_judge_pid.py` | — (not built) |
 | Run everything, save a report to review later | `cli_pid_astrom_batch.py` | `lqg_review.py` |
 
 ## One-off runs
@@ -143,6 +144,52 @@ CLIs run — see `src/examples/run_supervisor_demo.sh` /
 sessions piped via stdin (Ollama only; there's no Anthropic equivalent
 demo script). The two are separate scripts/sessions, not one merged
 supervisor — see "Design notes" below for why.
+
+### Judge mode (multi-model arbitration)
+
+`cli_supervisor_judge_pid.py` — SISO/PID only, no LQR/LQG equivalent yet —
+runs N candidate supervisors (each the same conversation
+`cli_supervisor_pid.py --provider ...` would have) in lockstep, then asks a
+separate judge model to arbitrate between their recommendations every round.
+Thin CLI wrapper over `supervisor_session_judge_pid.JudgeSession`, the same
+orchestration `streamlit_judge_panel.py`'s GUI "LLM Judge" mode uses.
+
+```bash
+python3 cli_supervisor_judge_pid.py \
+  --candidate anthropic:claude-haiku-4-5 \
+  --candidate openai:gpt-5.6-luna \
+  --judge gemini:gemini-3.5-flash-lite \
+  --verbose
+```
+
+`--candidate provider[:model]` is repeatable (give at least 2; model defaults
+to that provider's cheapest tier when omitted); `--judge provider[:model]` is
+required — there's no default, and its exact (provider, model) pair must
+differ from every candidate's (avoids a model favoring its own family's
+answer). Provider is one of `anthropic`/`openai`/`gemini` — no Ollama option
+here, since Judge mode is inherently a paid, multi-provider comparison. API
+keys resolve the same three-source way as `--provider anthropic` above, just
+one flag per provider: `--api-key-anthropic`/`--api-key-openai`/
+`--api-key-gemini`.
+
+`gemini-3.8-flash` (the pricier Gemini tier) has shown frequent `503
+UNAVAILABLE` ("currently experiencing high demand") errors in live testing —
+prefer `gemini-3.5-flash-lite` (the default, cheaper tier, used above) unless
+you specifically need the bigger model. A candidate's own transient error (a
+503, a rate limit) is caught per-candidate and doesn't sink the round; an
+error from the judge call itself isn't (there's nothing left to arbitrate
+without it) and surfaces as a REPL error message — just retry the same
+message, which is safe since nothing about that failed round was recorded.
+
+Only the judge's reply prints by default; `--verbose` (or `/candidates`
+inside the REPL) also shows what each candidate actually did that round —
+the same data `streamlit_judge_panel.py`'s transparency expander shows, as
+plain text. Same `/reset`/`/quit` commands as the other supervisor CLIs. No
+plot/report/log saving here (or in `cli_supervisor_pid.py`/
+`cli_supervisor_lqg.py`) — that's currently GUI-only
+(`streamlit_judge_panel.py`'s "Download report" button); redirect stdout
+yourself (e.g. `python3 cli_supervisor_judge_pid.py ... | tee
+"judge-$(date +%Y%m%d-%H%M%S).log"`) if you want a saved transcript.
 
 ## Batch runs (produce a log file to review)
 
