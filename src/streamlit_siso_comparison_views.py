@@ -2,7 +2,7 @@
 
 pid_comparison_views.py's *drawing* code is Tk-widget-specific (tk.Label
 grids, FigureCanvasTkAgg) and isn't reusable here, but the data it draws
-already comes from plain pid_compare.py functions (METRIC_TIERS,
+already comes from plain pid_compare.py functions (TABLE_METRICS,
 RADAR_METRICS, METRIC_DIRECTION, normalize_column) — this module reuses
 those and re-implements only the rendering, once per view:
   - heatmap: an HTML table (st.markdown unsafe_allow_html) rather than a
@@ -22,7 +22,7 @@ import streamlit as st
 import matplotlib
 from matplotlib.figure import Figure
 
-from pid_compare import METRIC_TIERS, RADAR_METRICS, METRIC_DIRECTION, normalize_column
+from pid_compare import TABLE_METRICS, RADAR_METRICS, METRIC_DIRECTION, normalize_column
 
 _METRIC_LABELS = {
     "OS%": "OS %", "ts": "ts", "Rise": "Rise (10-90%)",
@@ -61,19 +61,15 @@ def _heatmap_norms(rows):
     """Per-metric normalized-goodness columns (0..1, 1=best) — shared by
     the HTML table and the PNG/CSV exports so all three agree."""
     norm = {}
-    for _, metrics in METRIC_TIERS:
-        for m in metrics:
-            col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
-                   for r in rows]
-            norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
+    for m in TABLE_METRICS:
+        col = [r.get(m, float("inf")) if r.get("stable") else float("inf")
+               for r in rows]
+        norm[m] = normalize_column(col, direction=METRIC_DIRECTION[m])
     return norm
 
 
 def _heatmap_png_bytes(rows, norm):
-    """Static colored-cell table mirroring render_heatmap's HTML output —
-    matplotlib's ax.table() has no column-span support, so tier-name rows
-    are faked as a full-width gray band with the label in the first
-    column, same visual effect as the HTML table's colspan row."""
+    """Static colored-cell table mirroring render_heatmap's HTML output."""
     n_cols = len(rows) + 1
     header = ["Metric"]
     for r in rows:
@@ -88,22 +84,19 @@ def _heatmap_png_bytes(rows, norm):
 
     cell_text = [header]
     cell_colors = [["#f0f0f0"] + ["#ffffff" if r.get("stable") else "#dddddd" for r in rows]]
-    for tier_name, metrics in METRIC_TIERS:
-        cell_text.append([tier_name] + [""] * len(rows))
-        cell_colors.append(["#e5e5e5"] * n_cols)
-        for m in metrics:
-            row_vals = [_METRIC_LABELS.get(m, m)]
-            row_colors = ["#f7f7f7"]
-            for c, r in enumerate(rows):
-                if not r.get("stable"):
-                    row_vals.append("—")
-                    row_colors.append("#dddddd")
-                    continue
-                val = r.get(m, float("nan"))
-                row_vals.append(f"{val:.3g}" if np.isfinite(val) else "—")
-                row_colors.append(_heat_color(norm[m][c]))
-            cell_text.append(row_vals)
-            cell_colors.append(row_colors)
+    for m in TABLE_METRICS:
+        row_vals = [_METRIC_LABELS.get(m, m)]
+        row_colors = ["#f7f7f7"]
+        for c, r in enumerate(rows):
+            if not r.get("stable"):
+                row_vals.append("—")
+                row_colors.append("#dddddd")
+                continue
+            val = r.get(m, float("nan"))
+            row_vals.append(f"{val:.3g}" if np.isfinite(val) else "—")
+            row_colors.append(_heat_color(norm[m][c]))
+        cell_text.append(row_vals)
+        cell_colors.append(row_colors)
 
     n_rows = len(cell_text)
     fig = Figure(figsize=(max(6.0, 1.3 * n_cols), 0.32 * n_rows + 0.6), dpi=150)
@@ -127,17 +120,16 @@ def _heatmap_png_bytes(rows, norm):
 
 def _heatmap_csv_bytes(rows):
     """Raw metric values behind the heatmap, full precision rather than
-    the display-rounded 3-sig-fig strings — one row per metric (grouped
-    by tier), one column per method."""
+    the display-rounded 3-sig-fig strings — one row per metric, one
+    column per method."""
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Metric"] + [r["name"] for r in rows])
     w.writerow(["stable"] + [r.get("stable", False) for r in rows])
-    for tier_name, metrics in METRIC_TIERS:
-        for m in metrics:
-            label = _METRIC_LABELS.get(m, m)
-            vals = [r.get(m, "") if r.get("stable") else "" for r in rows]
-            w.writerow([f"{tier_name}: {label}"] + vals)
+    for m in TABLE_METRICS:
+        label = _METRIC_LABELS.get(m, m)
+        vals = [r.get(m, "") if r.get("stable") else "" for r in rows]
+        w.writerow([label] + vals)
     return buf.getvalue().encode("utf-8")
 
 
@@ -187,21 +179,17 @@ def build_heatmap_html(rows):
     norm = _heatmap_norms(rows)
 
     body_rows = []
-    for tier_name, metrics in METRIC_TIERS:
-        body_rows.append(
-            f'<tr><td colspan="{len(rows) + 1}" style="background:#e5e5e5;'
-            f'color:#111;padding:4px 10px;font-weight:bold;">{tier_name}</td></tr>')
-        for m in metrics:
-            cells = [th(_METRIC_LABELS.get(m, m), bg="#f7f7f7")]
-            for c, r in enumerate(rows):
-                if not r.get("stable"):
-                    cells.append(td("—", bg="#dddddd"))
-                    continue
-                val = r.get(m, float("nan"))
-                color = _heat_color(norm[m][c])
-                txt = f"{val:.3g}" if np.isfinite(val) else "—"
-                cells.append(td(txt, bg=color))
-            body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    for m in TABLE_METRICS:
+        cells = [th(_METRIC_LABELS.get(m, m), bg="#f7f7f7")]
+        for c, r in enumerate(rows):
+            if not r.get("stable"):
+                cells.append(td("—", bg="#dddddd"))
+                continue
+            val = r.get(m, float("nan"))
+            color = _heat_color(norm[m][c])
+            txt = f"{val:.3g}" if np.isfinite(val) else "—"
+            cells.append(td(txt, bg=color))
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
         '<table style="border-collapse:collapse;width:100%;font-size:0.85em;">'
@@ -211,8 +199,8 @@ def build_heatmap_html(rows):
 
 
 def render_heatmap(rows):
-    """Methods across columns, metrics down rows grouped by tier — same
-    orientation as pid_comparison_views.draw_heatmap_tab."""
+    """Methods across columns, metrics down rows — same orientation as
+    pid_comparison_views.draw_heatmap_tab."""
     table_html = build_heatmap_html(rows)
     if table_html is None:
         st.caption("Tune methods to compare them here.")
@@ -240,16 +228,30 @@ def render_heatmap(rows):
                          key="siso_heatmap_dl_csv")
 
 
+_RADAR_METRICS_KEY = "siso_radar_metrics"
+
+
 def build_radar_fig(rows):
     """The pure Figure-building half of render_radar() -- split out so a
     caller that isn't rendering to the screen (report_html-based report
     generation) can embed the exact same figure without going through
     st.pyplot(). Returns None if there's nothing to show (mirrors
-    render_radar()'s own early returns)."""
+    render_radar()'s own early returns).
+
+    Reads the user's metric selection from st.session_state[_RADAR_METRICS_
+    KEY] rather than taking it as an argument, so a report-generation call
+    site (streamlit_siso_panel.py's build_entries_report_sections(), which
+    never renders render_radar()'s multiselect widget) still mirrors
+    whatever's on screen. Falls back to RADAR_METRICS (P0+P1) when the key
+    hasn't been set yet -- e.g. this run's report section is built before
+    render_radar() has had a chance to seed it, see render_radar()."""
     if not rows or not any(r.get("stable") for r in rows):
         return None
 
-    metrics = RADAR_METRICS
+    metrics = st.session_state.get(_RADAR_METRICS_KEY, RADAR_METRICS)
+    if not metrics:
+        return None
+
     labels = [r["name"] + (" [BB]" if r.get("black_box") else "")
               + (" [L]" if r.get("has_time_delay") else "") for r in rows]
 
@@ -285,7 +287,7 @@ def build_radar_fig(rows):
         ax.fill(angles, vals, color=color, alpha=0.06)
 
     ax.set_title("Each metric normalized so outer = better across methods\n"
-                 "(P0 + P1 metrics; unstable methods read 0 on every axis)",
+                 "(unstable methods read 0 on every axis)",
                  fontsize=10, pad=18)
     ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.10),
               fontsize=8, framealpha=0.9)
@@ -294,14 +296,28 @@ def build_radar_fig(rows):
 
 
 def render_radar(rows):
-    """Methods are the spokes, one polygon per P0/P1 metric — same as
-    pid_comparison_views.draw_radar_tab."""
+    """Methods are the spokes, one polygon per selected metric — same
+    orientation as pid_comparison_views.draw_radar_tab, but which metrics
+    get a polygon is user-selectable here (defaulting to P0+P1, that tab's
+    fixed set) via a multiselect rather than being fixed to RADAR_METRICS."""
+    if not rows:
+        st.caption("Tune methods to compare them here.")
+        return
+
+    # setdefault(), not the multiselect's own default= -- see siso_
+    # plant_form's comment in streamlit_siso_panel.py for why: default=
+    # only applies on first render and fights session_state on reruns.
+    st.session_state.setdefault(_RADAR_METRICS_KEY, list(RADAR_METRICS))
+    st.multiselect("Metrics shown on radar", options=TABLE_METRICS,
+                   format_func=lambda m: _METRIC_LABELS.get(m, m),
+                   key=_RADAR_METRICS_KEY)
+
     fig = build_radar_fig(rows)
     if fig is None:
-        if not rows:
-            st.caption("Tune methods to compare them here.")
-        else:
+        if not any(r.get("stable") for r in rows):
             st.caption("Tune at least one stable method to see the radar.")
+        else:
+            st.caption("Select at least one metric to see the radar.")
         return
     st.pyplot(fig)
 
