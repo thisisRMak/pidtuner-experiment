@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 from supervisor_llm_openai import (
     OpenAIClient,
     DEFAULT_MODEL,
+    DEFAULT_MAX_COMPLETION_TOKENS,
     _AssistantMessage,
     _translate_messages,
 )
@@ -230,6 +231,12 @@ class TestOpenAIClientConstruction(unittest.TestCase):
         docstring for why gpt-5.6-luna, not gpt-5.6-sol/gpt-6-astra."""
         self.assertEqual(DEFAULT_MODEL, "gpt-5.6-luna")
 
+    def test_default_max_completion_tokens(self):
+        """Regression guard for the live-discovered truncation issue (see
+        module docstring) -- bumped 16000 -> 32000 as defense-in-depth
+        alongside the explicit finish_reason=="length" check below."""
+        self.assertEqual(DEFAULT_MAX_COMPLETION_TOKENS, 32000)
+
     def test_stores_model_and_max_completion_tokens(self):
         client = OpenAIClient(api_key="sk-fake", model="gpt-5.6-terra", max_completion_tokens=1234)
         self.assertEqual(client.model, "gpt-5.6-terra")
@@ -245,9 +252,9 @@ class TestOpenAIClientConstruction(unittest.TestCase):
 # against the real API before this fix existed, confirmed fixed after.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fake_completion(content="", tool_calls=None, refusal=None):
+def _fake_completion(content="", tool_calls=None, refusal=None, finish_reason="stop"):
     message = SimpleNamespace(content=content, tool_calls=tool_calls, refusal=refusal)
-    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason=finish_reason)])
 
 
 class TestChatReasoningEffort(unittest.TestCase):
@@ -274,6 +281,52 @@ class TestChatReasoningEffort(unittest.TestCase):
         kwargs = client._client.chat.completions.create.call_args.kwargs
         self.assertNotIn("reasoning_effort", kwargs)
         self.assertNotIn("tools", kwargs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# .chat() truncated-tool-call detection -- regression coverage for the
+# live-discovered issue documented in supervisor_llm_openai.py's module
+# docstring: a tool-calling response cut off at max_completion_tokens used to
+# reach _AssistantMessage's json.loads() as invalid JSON, raising an opaque
+# JSONDecodeError. Reproduced against the real API (aircraft_hall, MIMO/LQG
+# Judge CLI) before this fix existed; confirmed fixed after via the mocked
+# finish_reason=="length" case below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestChatTruncatedToolCallDetection(unittest.TestCase):
+    def _client_with_mocked_create(self, response):
+        client = OpenAIClient(api_key="sk-fake")
+        client._client = MagicMock()
+        client._client.chat.completions.create.return_value = response
+        return client
+
+    def test_truncated_tool_call_raises_a_clear_error_not_a_json_decode_error(self):
+        tool_calls = [_tool_call("call_1", "run_lqg_benchmark", '{"plant_preset": "aircraft_h')]
+        response = _fake_completion(content="", tool_calls=tool_calls, finish_reason="length")
+        client = self._client_with_mocked_create(response)
+        with self.assertRaises(RuntimeError) as cm:
+            client.chat([{"role": "user", "content": "aircraft hall, minimize overshoot"}],
+                        tools=[{"type": "function", "function": {"name": "run_lqg_benchmark", "parameters": {}}}])
+        self.assertIn("max_completion_tokens", str(cm.exception))
+        self.assertIn("gpt-5.6-luna", str(cm.exception))
+
+    def test_truncated_reply_with_no_tool_calls_does_not_raise(self):
+        """A plain (tool-free) reply truncated at the token limit is still
+        usable partial text -- only a truncated *tool call* is fundamentally
+        broken (invalid JSON), so only that case raises."""
+        response = _fake_completion(content="Here's a long answer that got cut", tool_calls=None,
+                                     finish_reason="length")
+        client = self._client_with_mocked_create(response)
+        resp = client.chat([{"role": "user", "content": "explain everything"}], tools=None)
+        self.assertEqual(resp.message.content, "Here's a long answer that got cut")
+
+    def test_tool_call_with_normal_finish_reason_does_not_raise(self):
+        tool_calls = [_tool_call("call_1", "set_priorities", '{"top_priority": "overshoot"}')]
+        response = _fake_completion(content="", tool_calls=tool_calls, finish_reason="stop")
+        client = self._client_with_mocked_create(response)
+        resp = client.chat([{"role": "user", "content": "minimize overshoot"}],
+                            tools=[{"type": "function", "function": {"name": "set_priorities", "parameters": {}}}])
+        self.assertEqual(resp.message.tool_calls[0].function.arguments, {"top_priority": "overshoot"})
 
 
 if __name__ == "__main__":
