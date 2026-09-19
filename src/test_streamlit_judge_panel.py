@@ -246,5 +246,130 @@ class TestJudgeConversation(unittest.TestCase):
         self.assertIn("Final answer.", markdown_values)
 
 
+class TestClearEntriesAndReset(unittest.TestCase):
+    """Judge mode gains a "Clear LLM entries" button mirroring Supervisor
+    mode's exactly, and "Reset conversation" now also clears this Track's
+    LLM-tagged entries -- see streamlit_judge_panel.render_controls()'s
+    own comments on both buttons."""
+
+    def _seed_llm_entry(self, at):
+        import streamlit_gui_state as gs
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+        judge_session = at.session_state["judge_session_obj"]
+        _, first_candidate_session = judge_session.candidates[0]
+        first_candidate_session.plot_calls.append({
+            "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+            "rows": real_result["_sim_rows"],
+        })
+        return gs
+
+    def test_clear_llm_entries_removes_only_this_tracks_llm_entries(self):
+        from supervisor_session_pid import Session
+        from supervisor_llm_gemini import GeminiClient
+
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Verdict.", tool_calls=None))
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(Session, "handle_user_message", return_value="stub"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+
+            at.button(key="siso_compare_all").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            gs = self._seed_llm_entry(at)
+            at.chat_input[0].set_value("tune it").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            siso_you_before = [e for e in entries if e.kind == "siso" and e.source == "you"]
+            self.assertGreater(len([e for e in entries if e.kind == "siso" and e.source == "llm"]), 0)
+            self.assertGreater(len(siso_you_before), 0)
+
+            at.button(key="judge_clear_entries").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            self.assertEqual([e for e in entries if e.kind == "siso" and e.source == "llm"], [])
+            self.assertEqual(len([e for e in entries if e.kind == "siso" and e.source == "you"]), len(siso_you_before))
+
+    def test_reset_conversation_also_clears_llm_entries(self):
+        from supervisor_session_pid import Session
+        from supervisor_llm_gemini import GeminiClient
+
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Verdict.", tool_calls=None))
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(Session, "handle_user_message", return_value="stub"), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            gs = self._seed_llm_entry(at)
+            at.chat_input[0].set_value("tune it").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertGreater(
+                len([e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso" and e.source == "llm"]), 0)
+
+            at.button(key="judge_reset").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            self.assertEqual(
+                [e for e in at.session_state[gs.CONTROLLERS_KEY] if e.kind == "siso" and e.source == "llm"], [])
+
+
+class TestDownloadReportButton(unittest.TestCase):
+    """Mirrors test_streamlit_llm_panel.TestDownloadReportButton -- see its
+    own docstring for why st.download_button's data is read via a
+    module-wide patch."""
+
+    def test_no_button_before_any_round(self):
+        at = _run_app()
+        self.assertFalse(any(b.key == "judge_download_report" for b in at.download_button))
+
+    def test_button_appears_and_html_reflects_the_full_round_history(self):
+        from supervisor_session_pid import Session
+        from supervisor_llm_gemini import GeminiClient
+
+        judge_reply = SimpleNamespace(message=SimpleNamespace(content="Tyreus-Luyben is the better pick.", tool_calls=None))
+
+        def fake_handle_user_message(self, text):
+            from types import SimpleNamespace as NS
+            call = NS(function=NS(name="finalize_recommendation",
+                                   arguments={"method_name": "Tyreus-Luyben", "rationale": "lowest overshoot"}))
+            self.messages.append(NS(content="", tool_calls=[call]))
+            reply_text = "I recommend Tyreus-Luyben."
+            self.messages.append(NS(content=reply_text, tool_calls=None))
+            return reply_text
+
+        with patch.dict(os.environ, ALL_KEYS_ENV, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"), \
+             patch.object(Session, "handle_user_message", fake_handle_user_message), \
+             patch.object(GeminiClient, "chat", return_value=judge_reply):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Judge").run(timeout=30)
+            at = _select_judge(at, DEFAULT_JUDGE)
+            at.chat_input[0].set_value("1/(90s+1), delay 13, minimize overshoot.").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            with patch("streamlit_judge_panel.st.download_button") as dl:
+                at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "judge_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("<html>", html_out)
+        self.assertIn("--accent", html_out)
+        self.assertIn("1/(90s+1), delay 13, minimize overshoot.", html_out, "must include the user's own message")
+        self.assertIn("Tyreus-Luyben is the better pick.", html_out, "must include the judge's verdict")
+        self.assertIn("recommends", html_out)
+        self.assertIn("finalize_recommendation", html_out, "must include the candidate's tool call")
+
+
 if __name__ == "__main__":
     unittest.main()

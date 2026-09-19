@@ -141,12 +141,16 @@ def _heatmap_csv_bytes(rows):
     return buf.getvalue().encode("utf-8")
 
 
-def render_heatmap(rows):
-    """Methods across columns, metrics down rows grouped by tier — same
-    orientation as pid_comparison_views.draw_heatmap_tab."""
+def build_heatmap_html(rows):
+    """The pure HTML-table half of render_heatmap() -- split out so a
+    caller that isn't rendering to the screen (report_html-based report
+    generation) can embed the exact same colored table without going
+    through st.markdown(). Returns None if there's nothing to show (mirrors
+    render_heatmap()'s own early return). Public (no leading underscore),
+    matching the streamlit_siso_panel.py/streamlit_mimo_panel.py precedent
+    for a report-reusable builder split out of its on-screen renderer."""
     if not rows:
-        st.caption("Tune methods to compare them here.")
-        return
+        return None
 
     # All cell backgrounds are light pastel colors regardless of the app's
     # theme, so text color is fixed dark here rather than left to inherit —
@@ -199,11 +203,20 @@ def render_heatmap(rows):
                 cells.append(td(txt, bg=color))
             body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
-    table_html = (
+    return (
         '<table style="border-collapse:collapse;width:100%;font-size:0.85em;">'
         f'<thead><tr>{"".join(header_cells)}</tr></thead>'
         f'<tbody>{"".join(body_rows)}</tbody></table>'
     )
+
+
+def render_heatmap(rows):
+    """Methods across columns, metrics down rows grouped by tier — same
+    orientation as pid_comparison_views.draw_heatmap_tab."""
+    table_html = build_heatmap_html(rows)
+    if table_html is None:
+        st.caption("Tune methods to compare them here.")
+        return
     st.markdown(table_html, unsafe_allow_html=True)
     st.caption(_FOOTNOTE)
 
@@ -219,7 +232,7 @@ def render_heatmap(rows):
     col1, col2, col3 = st.columns(3)
     col1.download_button("Download HTML", data=standalone, file_name="siso_heatmap.html",
                          mime="text/html", key="siso_heatmap_dl_html")
-    col2.download_button("Download PNG", data=_heatmap_png_bytes(rows, norm),
+    col2.download_button("Download PNG", data=_heatmap_png_bytes(rows, _heatmap_norms(rows)),
                          file_name="siso_heatmap.png", mime="image/png",
                          key="siso_heatmap_dl_png")
     col3.download_button("Download CSV", data=_heatmap_csv_bytes(rows),
@@ -227,15 +240,14 @@ def render_heatmap(rows):
                          key="siso_heatmap_dl_csv")
 
 
-def render_radar(rows):
-    """Methods are the spokes, one polygon per P0/P1 metric — same as
-    pid_comparison_views.draw_radar_tab."""
-    if not rows:
-        st.caption("Tune methods to compare them here.")
-        return
-    if not any(r.get("stable") for r in rows):
-        st.caption("Tune at least one stable method to see the radar.")
-        return
+def build_radar_fig(rows):
+    """The pure Figure-building half of render_radar() -- split out so a
+    caller that isn't rendering to the screen (report_html-based report
+    generation) can embed the exact same figure without going through
+    st.pyplot(). Returns None if there's nothing to show (mirrors
+    render_radar()'s own early returns)."""
+    if not rows or not any(r.get("stable") for r in rows):
+        return None
 
     metrics = RADAR_METRICS
     labels = [r["name"] + (" [BB]" if r.get("black_box") else "")
@@ -278,6 +290,19 @@ def render_radar(rows):
     ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.10),
               fontsize=8, framealpha=0.9)
     fig.tight_layout()
+    return fig
+
+
+def render_radar(rows):
+    """Methods are the spokes, one polygon per P0/P1 metric — same as
+    pid_comparison_views.draw_radar_tab."""
+    fig = build_radar_fig(rows)
+    if fig is None:
+        if not rows:
+            st.caption("Tune methods to compare them here.")
+        else:
+            st.caption("Tune at least one stable method to see the radar.")
+        return
     st.pyplot(fig)
 
     buf = io.BytesIO()

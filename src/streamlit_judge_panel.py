@@ -52,19 +52,24 @@ as the single-provider path -- see the plot-drain loop in render_controls()).
 
 from __future__ import annotations
 
+import datetime
+
 import anthropic
 import openai
 import streamlit as st
 from google.genai import errors as genai_errors
 
+import report_html
 import streamlit_llm_panel as llm_panel
 from streamlit_llm_panel import (
     KEY_STATE,
     MODELS_BY_PROVIDER,
     _configured_key,
+    _ENTRIES_SECTIONS_BY_TRACK,
     _init_panel_state,
     _log_exception,
     _new_session,
+    _TRACK_KIND,
 )
 from supervisor_llm_anthropic import AnthropicClient
 from supervisor_llm_openai import OpenAIClient
@@ -261,6 +266,56 @@ def _render_candidate_rounds(rounds):
                 st.caption(item["reply"])
 
 
+def _rounds_history_html(rounds_history) -> str:
+    """JudgeSession.rounds_history -> HTML paragraphs, one block per round:
+    the user's message, each candidate's own outcome that round (calls,
+    finalized pick, reply, or a failure note), and the judge's verdict.
+    Same content _render_candidate_rounds() shows in the live transparency
+    expander, just every round instead of only the latest, and rendered as
+    static HTML instead of Streamlit elements."""
+    parts = []
+    for i, round_ in enumerate(rounds_history, start=1):
+        parts.append(f"<h3>Round {i}</h3>")
+        parts.append(f"<p><strong>User:</strong> {report_html.e(round_['user_text'])}</p>")
+        for item in round_["candidates"]:
+            label = report_html.e(item["label"])
+            if item.get("error"):
+                parts.append(f'<p class="section-note">{label} — failed to respond: {report_html.e(item["error"])}</p>')
+                continue
+            header = f"<strong>{label}</strong>"
+            if item.get("finalized"):
+                header += f" → recommends <strong>{report_html.e(item['finalized'])}</strong>"
+            parts.append(f"<p>{header}</p>")
+            for name, args in item.get("calls", []):
+                arg_text = ", ".join(f"{k}={v!r}" for k, v in args.items())
+                parts.append(f'<p class="section-note">Called <code>{report_html.e(name)}({report_html.e(arg_text)})</code></p>')
+            if item.get("reply"):
+                parts.append(f"<p>{report_html.e(item['reply'])}</p>")
+        parts.append(f'<p class="callout"><strong>Judge:</strong> {report_html.e(round_["judge_reply"])}</p>')
+    return "\n".join(parts)
+
+
+def _build_report_html(track, judge_session):
+    """The full-history report for Mode="LLM Judge": every round
+    (_rounds_history_html(), not just the latest) plus whichever
+    session-list entries are currently plotted for this Track -- the exact
+    same section Manual mode's/Supervisor mode's own reports show, not a
+    re-implementation."""
+    entries_subtitle, entries_sections = _ENTRIES_SECTIONS_BY_TRACK[track]()
+    sections = [f"<h2>Conversation</h2>{_rounds_history_html(judge_session.rounds_history)}"] + entries_sections
+    return report_html.build_report(f"PIDTuner LLM Judge Report ({track})", entries_subtitle, sections)
+
+
+def _render_download_report_button(track, judge_session):
+    if not judge_session.rounds_history:
+        return
+    st.download_button(
+        "Download report", data=_build_report_html(track, judge_session),
+        file_name=f"pidtuner-judge-report-{datetime.date.today().isoformat()}.html",
+        mime="text/html", key="judge_download_report",
+    )
+
+
 def render_controls(track):
     """The left-hand controls half for Mode="LLM Judge" -- called by
     streamlit_unified_panel.py with whichever Track it currently has
@@ -305,8 +360,20 @@ def render_controls(track):
         gs.clear_judge_chat()
 
     if st.button("Reset conversation", key="judge_reset"):
+        # Also clears this Track's plotted LLM entries -- mirrors
+        # streamlit_llm_panel.py's identical change to its own "Reset
+        # conversation", same reasoning: a fresh conversation's eventual
+        # "Download report" must never embed a stale pre-reset plot.
         st.session_state["judge_session_obj"] = _build_judge_session(candidates, judge_choice, track, resolved_keys)
         gs.clear_judge_chat()
+        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+
+    if st.button("Clear LLM entries", key="judge_clear_entries"):
+        # Only this Track's LLM-tagged entries -- mirrors streamlit_llm_
+        # panel.py's identical button exactly (see its own comment).
+        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
+
+    _render_download_report_button(track, st.session_state["judge_session_obj"])
 
     history_box = st.container()
     user_text = st.chat_input("Tell me about your plant and what matters most to you.")

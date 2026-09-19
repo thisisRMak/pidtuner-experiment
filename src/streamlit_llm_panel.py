@@ -41,6 +41,7 @@ OpenAIClient, supervisor_llm_gemini.GeminiClient) — see docs/aituner_plan.md.
 
 from __future__ import annotations
 
+import datetime
 import os
 import sys
 import traceback
@@ -60,6 +61,7 @@ from supervisor_tools_blackbox_pid import RUN_BLACKBOX_BENCHMARK_SCHEMA, run_bla
 from supervisor_tools_whitebox_pid import RUN_WHITEBOX_BENCHMARK_SCHEMA, run_whitebox_benchmark
 from supervisor_tools_lqg import RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark
 
+import report_html
 import streamlit_gui_state as gs
 import streamlit_siso_panel as siso_panel
 import streamlit_mimo_panel as mimo_panel
@@ -287,6 +289,62 @@ def _render_manual_plant_hint(track):
                "supervisor to pick up where you left off.")
 
 
+def _transcript_html(session) -> str:
+    """Every turn in `session.messages` as HTML paragraphs, in order --
+    user text, each assistant tool call, each tool result, each assistant
+    reply -- the full conversation, not just the current state. Duck-typed
+    on the same .content/.tool_calls surface supervisor_session_judge_pid.
+    serialize_candidate_trace() uses (see that module's own docstring for
+    why that's safe across every client), not a Session-specific type
+    check -- this function works unmodified for Ollama/Anthropic/OpenAI/
+    Gemini sessions alike."""
+    parts = []
+    for entry in session.messages:
+        if isinstance(entry, dict):
+            role = entry.get("role")
+            if role == "system":
+                continue
+            if role == "tool":
+                parts.append(f'<p class="section-note">Tool result ({report_html.e(entry["tool_name"])}): '
+                              f'<code>{report_html.e(entry["content"])}</code></p>')
+            else:
+                parts.append(f"<p><strong>{report_html.e(role.capitalize())}:</strong> {report_html.e(entry['content'])}</p>")
+            continue
+        for tc in getattr(entry, "tool_calls", None) or []:
+            args = ", ".join(f"{k}={v!r}" for k, v in (tc.function.arguments or {}).items())
+            parts.append(f'<p class="section-note">Called <code>{report_html.e(tc.function.name)}({report_html.e(args)})</code></p>')
+        text = getattr(entry, "content", "") or ""
+        if text:
+            parts.append(f"<p><strong>Assistant:</strong> {report_html.e(text)}</p>")
+    return "\n".join(parts)
+
+
+_ENTRIES_SECTIONS_BY_TRACK = {"SISO / PID": siso_panel.build_entries_report_sections,
+                              "MIMO / LQG": mimo_panel.build_entries_report_sections}
+
+
+def _build_report_html(track, session):
+    """The full-history report for Mode="LLM Supervisor": the entire
+    conversation transcript (_transcript_html(), every round, not just the
+    latest) plus whichever session-list entries are currently plotted for
+    this Track (build_entries_report_sections() -- the exact same section
+    Manual mode's own report shows, not a re-implementation; see that
+    function's docstring for why it's "any source," not just source="llm")."""
+    entries_subtitle, entries_sections = _ENTRIES_SECTIONS_BY_TRACK[track]()
+    sections = [f"<h2>Conversation</h2>{_transcript_html(session)}"] + entries_sections
+    return report_html.build_report(f"PIDTuner LLM Supervisor Report ({track})", entries_subtitle, sections)
+
+
+def _render_download_report_button(track, session):
+    if not session.messages[1:]:  # index 0 is always the system prompt
+        return
+    st.download_button(
+        "Download report", data=_build_report_html(track, session),
+        file_name=f"pidtuner-supervisor-report-{datetime.date.today().isoformat()}.html",
+        mime="text/html", key="llm_download_report",
+    )
+
+
 def render_controls(track):
     """The left-hand controls half for Mode=LLM Supervisor — called by
     streamlit_unified_panel.py with whichever Track it currently has
@@ -328,8 +386,15 @@ def render_controls(track):
         gs.clear_chat()
 
     if st.button("Reset conversation", key="llm_reset"):
+        # Also clears this Track's plotted LLM entries, not just the
+        # conversation -- a fresh conversation's eventual "Download
+        # report" must never embed a stale plot from before the reset
+        # (plots can only ever come from these entries, see report_html.py
+        # and this module's own docstring on why -- there's no separate
+        # plot data living inside Session itself to fall back on).
         st.session_state["llm_session_obj"] = _new_session(provider, api_key, track, model)
         gs.clear_chat()
+        gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
 
     if st.button("Clear LLM entries", key="llm_clear_entries"):
         # Only this Track's LLM-tagged entries -- source="you" entries and
@@ -338,6 +403,7 @@ def render_controls(track):
         gs.clear_by_kind_and_source(_TRACK_KIND[track], "llm")
 
     _render_manual_plant_hint(track)
+    _render_download_report_button(track, st.session_state["llm_session_obj"])
 
     # Reserving this container before chat_input (below) puts it above
     # chat_input in the DOM regardless of Streamlit's own auto-bottom-pin

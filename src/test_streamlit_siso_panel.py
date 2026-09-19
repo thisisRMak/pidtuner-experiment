@@ -565,5 +565,45 @@ class TestSessionListVisibleWhileChatting(unittest.TestCase):
             self.assertGreater(len(rows), 0)
 
 
+class TestDownloadReportButton(unittest.TestCase):
+    """report_html.py's actual content is unit-tested directly in
+    test_report_html.py -- this only covers the button's own gating
+    (absent with nothing enabled, present with a real entry) and that the
+    HTML it builds through the real panel actually reflects what's on
+    screen. st.download_button's `data` isn't inspectable through AppTest's
+    element tree (it goes through a mocked media-file URL, not an
+    inline value) -- patching streamlit_siso_panel.st.download_button
+    directly and reading its call kwargs is the only way to see the real
+    string, same as any other module-wide `import streamlit as st` patch
+    would require."""
+
+    def test_no_button_with_nothing_enabled(self):
+        at = _fresh_app()
+        self.assertFalse(any(b.key == "siso_download_report" for b in at.download_button))
+
+    def test_button_appears_and_html_reflects_the_session_list(self):
+        at = _fresh_app()
+        tab = _siso_tab(at)
+        tab.button(key="siso_compare_all").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception)
+
+        with patch("streamlit_siso_panel.st.download_button") as dl:
+            at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "siso_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("<html>", html_out)
+        self.assertIn("--accent", html_out, "must embed the shared report CSS")
+        self.assertIn("AMIGO", html_out, "must list a method actually in the session list")
+        self.assertIn("<h2>Step response</h2>", html_out)
+        self.assertIn("<h2>Heatmap</h2>", html_out)
+        self.assertIn("<h2>Radar</h2>", html_out)
+        # One embedded image for the step response, one for the radar --
+        # the heatmap is its own colored <table>, not an image.
+        self.assertEqual(html_out.count("data:image/png;base64,"), 2,
+                         "must embed both the response plot and the radar")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ pid_compare.py data functions.
 
 from __future__ import annotations
 
+import datetime
 import io
 
 import numpy as np
@@ -28,10 +29,11 @@ from pid_tuning_methods import (
     StablePoleCancellation, ZieglerNicholsI, ZieglerNicholsII,
     Amigo, Simc, Boyd, CohenCoon, ChienHronesReswick, TyreusLuyben,
 )
-from pid_compare import compare_all_methods, metric_row
+from pid_compare import compare_all_methods, metric_row, TABLE_METRICS
 from pid_simulate import simulate_closed_loop, format_metrics, saturation_mask
 from lqg_simulate import auto_plot_window
 
+import report_html
 import streamlit_gui_state as gs
 import streamlit_siso_comparison_views as scv
 
@@ -678,8 +680,12 @@ def _session_rows():
 
 
 # ── response plot ────────────────────────────────────────────────────────
-def _render_response_plot():
-    active = [e for e in gs.get_by_kind("siso") if e.enabled and e.sim is not None]
+def _build_response_fig(active):
+    """The Figure-building half of _render_response_plot(), split out so
+    a caller that isn't rendering to the screen (report_html-based report
+    generation) can build the exact same figure without going through
+    st.pyplot(). `active` is already the enabled/sim-present filter the
+    caller wants plotted -- this function has no opinion on session state."""
     fig = Figure(figsize=(9, 8), dpi=100)
     ax_y = fig.add_subplot(311)
     ax_u = fig.add_subplot(312, sharex=ax_y)
@@ -694,9 +700,7 @@ def _render_response_plot():
     if not active:
         ax_y.set_title("No tuned controllers shown — tune a method or "
                        "tick one in the session list.")
-        st.pyplot(fig)
-        _download_fig_button(fig, "siso_response.png", key="siso_response_dl")
-        return
+        return fig
 
     seen_kinds = set()
     for entry in active:
@@ -742,8 +746,103 @@ def _render_response_plot():
     xmax = max(auto_plot_window(e.sim.t, e.sim.y, e.sim.u, e.sim.e) for e in active)
     ax_y.set_xlim(0.0, xmax)
     fig.tight_layout()
+    return fig
+
+
+def _render_response_plot():
+    active = [e for e in gs.get_by_kind("siso") if e.enabled and e.sim is not None]
+    fig = _build_response_fig(active)
     st.pyplot(fig)
     _download_fig_button(fig, "siso_response.png", key="siso_response_dl")
+
+
+def _fmt_metric(val):
+    """Same convention streamlit_siso_comparison_views.py's heatmap cells
+    already use (f"{val:.3g}" if finite else an em dash) -- kept
+    consistent so a number in the report matches the number on screen."""
+    if val is None or not np.isfinite(val):
+        return "—"
+    return f"{val:.3g}"
+
+
+def build_entries_report_sections():
+    """(subtitle, [section_html, ...]) for every currently-enabled
+    session-list entry in this Track (any source -- the graph already
+    mixes Manual and LLM-triggered entries by design, see streamlit_
+    unified_panel.py's own docstring, and this reflects exactly what's on
+    screen, nothing more): a metrics table, the response plot, the
+    heatmap, and the radar -- the same four things render_plots() always
+    shows stacked together, via the same builder functions
+    (_build_response_fig(), scv.build_heatmap_html(), scv.build_radar_fig()),
+    not a re-implementation of any of them.
+
+    Public (no leading underscore) and parameter-free -- called both by
+    this module's own _build_report_html() below and directly by
+    streamlit_llm_panel.py/streamlit_judge_panel.py, which embed this same
+    "what's currently plotted" section inside their own, bigger
+    conversation reports rather than duplicating this table/plot logic."""
+    # entry.color isn't a stored field -- render_plots() assigns it by
+    # list position every run (gs.assign_colors()) right before drawing.
+    # render_controls() (where this is called from) runs *before*
+    # render_plots() in streamlit_unified_panel.render()'s own column
+    # order, so nothing has assigned it yet this run without this call --
+    # same full-kind-list call render_plots() itself makes, so the report
+    # gets the identical colors the on-screen plot has.
+    gs.assign_colors(gs.get_by_kind("siso"))
+    active = [e for e in gs.get_by_kind("siso") if e.enabled]
+    plants = sorted({e.plant for e in active if e.plant})
+    subtitle = "SISO / PID — " + ("; ".join(plants) if plants else "no plant selected")
+
+    headers = ["Method", "Stable"] + TABLE_METRICS
+    rows = []
+    for e in active:
+        row = e.mrow or {}
+        stable = row.get("stable")
+        cells = [e.label, "yes" if stable else "no"]
+        cells += ["—" if not stable else _fmt_metric(row.get(m)) for m in TABLE_METRICS]
+        rows.append(cells)
+    sections = [f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}"]
+
+    sim_active = [e for e in active if e.sim is not None]
+    if sim_active:
+        fig = _build_response_fig(sim_active)
+        img = report_html.fig_to_data_uri(fig)
+        sections.append(f'<h2>Step response</h2><img src="{img}" style="max-width:100%">')
+
+    # Same rows() as the on-screen Heatmap/Radar views (_session_rows()),
+    # reused rather than re-derived, so the report mirrors exactly what's
+    # plotted there -- render_plots() already shows all three (Response/
+    # Heatmap/Radar) stacked for every Mode, so a report that only had the
+    # first of the three would be missing what's actually on screen.
+    scv_rows = _session_rows()
+    heatmap_html = scv.build_heatmap_html(scv_rows)
+    if heatmap_html:
+        sections.append(f"<h2>Heatmap</h2>{heatmap_html}")
+
+    radar_fig = scv.build_radar_fig(scv_rows)
+    if radar_fig is not None:
+        radar_img = report_html.fig_to_data_uri(radar_fig)
+        sections.append(f'<h2>Radar</h2><img src="{radar_img}" style="max-width:100%">')
+
+    return subtitle, sections
+
+
+def _build_report_html():
+    """Manual mode's own SISO/PID report -- just build_entries_report_
+    sections()'s sections, wrapped as a standalone document. See that
+    function's docstring for what it actually contains."""
+    subtitle, sections = build_entries_report_sections()
+    return report_html.build_report("PIDTuner SISO/PID Report", subtitle, sections)
+
+
+def _render_download_report_button():
+    if not any(e.enabled for e in gs.get_by_kind("siso")):
+        return
+    st.download_button(
+        "Download report", data=_build_report_html(),
+        file_name=f"pidtuner-siso-report-{datetime.date.today().isoformat()}.html",
+        mime="text/html", key="siso_download_report",
+    )
 
 
 def _render_last_result():
@@ -854,6 +953,7 @@ def render_controls():
     _render_sim_settings()
     gs.snapshot_widget_state(_PROTECTED_KEYS)
     _render_last_result()
+    _render_download_report_button()
 
 
 def render_plots():

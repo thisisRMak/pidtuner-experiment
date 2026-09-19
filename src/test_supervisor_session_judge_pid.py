@@ -274,6 +274,50 @@ class TestSummarizeCandidateRound(unittest.TestCase):
         self.assertEqual(out["reply"], "round 2 reply")
 
 
+class TestRoundsHistory(unittest.TestCase):
+    def test_accumulates_one_entry_per_round(self):
+        candidates = [
+            ("Claude (Anthropic): Claude Haiku 4.5",
+             _make_candidate("Tyreus-Luyben", "Lowest overshoot.", "I recommend Tyreus-Luyben.")),
+            ("ChatGPT (OpenAI): GPT-5.6 Luna",
+             _make_candidate("CHR set 0%", "3.986% overshoot.", "I recommend CHR set 0%.")),
+        ]
+        judge_client = _RecordingJudgeClient(["Round 1 verdict.", "Round 2 verdict."])
+        judge = JudgeSession(candidates, judge_client)
+
+        judge.handle_user_message("round 1 text")
+        for _, session in candidates:
+            session.client.script.extend([
+                _Msg("", tool_calls=[_TC("finalize_recommendation", {"method_name": "Tyreus-Luyben", "rationale": "revised"})]),
+                _Msg("revised reply", tool_calls=None),
+            ])
+        judge.handle_user_message("round 2 text")
+
+        self.assertEqual(len(judge.rounds_history), 2)
+        self.assertEqual(judge.rounds_history[0]["user_text"], "round 1 text")
+        self.assertEqual(judge.rounds_history[0]["judge_reply"], "Round 1 verdict.")
+        self.assertEqual(judge.rounds_history[1]["user_text"], "round 2 text")
+        self.assertEqual(judge.rounds_history[1]["judge_reply"], "Round 2 verdict.")
+        # Each round's own candidate snapshot, not a shared/aliased list
+        # that later mutates underneath an earlier entry.
+        self.assertEqual(judge.rounds_history[0]["candidates"][0]["finalized"], "Tyreus-Luyben")
+        self.assertEqual(judge.rounds_history[1]["candidates"][1]["finalized"], "Tyreus-Luyben")
+
+    def test_starts_empty_on_a_fresh_object(self):
+        judge = JudgeSession([], _NeverCalledJudgeClient())
+        self.assertEqual(judge.rounds_history, [])
+
+    def test_all_candidates_failing_still_records_a_round(self):
+        candidates = [
+            ("Claude (Anthropic): Claude Haiku 4.5",
+             Session(_AlwaysFailingClient("down"), whitebox_tool=(WHITEBOX_SCHEMA, _fake_whitebox), blackbox_tool=(BLACKBOX_SCHEMA, _fake_blackbox))),
+        ]
+        judge = JudgeSession(candidates, _NeverCalledJudgeClient())
+        judge.handle_user_message("hello")
+        self.assertEqual(len(judge.rounds_history), 1)
+        self.assertIn("All 1 candidates failed", judge.rounds_history[0]["judge_reply"])
+
+
 class TestPerCandidateResilience(unittest.TestCase):
     def test_one_candidates_provider_error_does_not_sink_the_round(self):
         good = _make_candidate("Tyreus-Luyben", "Lowest overshoot.", "I recommend Tyreus-Luyben.")

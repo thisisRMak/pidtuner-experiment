@@ -398,6 +398,122 @@ class TestClearLlmEntriesButton(unittest.TestCase):
                 len(mimo_before), "the other Track's entries must be untouched")
 
 
+class TestResetConversationAlsoClearsEntries(unittest.TestCase):
+    """"Reset conversation" now also clears this Track's LLM-tagged
+    entries, not just the chat/Session -- so a freshly-reset conversation's
+    eventual report can never embed a stale pre-reset plot (see
+    streamlit_llm_panel.render_controls()'s own comment on the button).
+    Manual ("you") entries and the other Track's entries must still
+    survive, mirroring TestClearLlmEntriesButton above exactly."""
+
+    def test_reset_clears_llm_entries_but_not_manual_or_other_track(self):
+        import streamlit_gui_state as gs
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+
+            at.button(key="siso_compare_all").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+
+            at.segmented_control(key="unified_track").set_value("MIMO / LQG").run(timeout=30)
+            at.button(key="mimo_compare_all").click()
+            at.run(timeout=60)
+            self.assertEqual(at.exception[:], [])
+            at.segmented_control(key="unified_track").set_value("SISO / PID").run(timeout=30)
+
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="Ran it."):
+                at.chat_input[0].set_value("tune it").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            siso_you_before = [e for e in entries if e.kind == "siso" and e.source == "you"]
+            mimo_before = [e for e in entries if e.kind == "mimo"]
+            self.assertGreater(len([e for e in entries if e.kind == "siso" and e.source == "llm"]), 0)
+            self.assertGreater(len(siso_you_before), 0)
+            self.assertGreater(len(mimo_before), 0)
+
+            at.button(key="llm_reset").click()
+            at.run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+
+            entries = at.session_state[gs.CONTROLLERS_KEY]
+            self.assertEqual(
+                [e for e in entries if e.kind == "siso" and e.source == "llm"], [],
+                "LLM-tagged SISO entries must be cleared by Reset conversation")
+            self.assertEqual(
+                len([e for e in entries if e.kind == "siso" and e.source == "you"]),
+                len(siso_you_before), "manual SISO entries must survive")
+            self.assertEqual(
+                len([e for e in entries if e.kind == "mimo"]),
+                len(mimo_before), "the other Track's entries must be untouched")
+
+
+class TestDownloadReportButton(unittest.TestCase):
+    """report_html.py's own content is unit-tested directly in
+    test_report_html.py -- this covers the button's gating (absent with an
+    empty conversation, present once the model has replied) and that the
+    real panel's report actually contains the conversation and the
+    session-list entries. See test_streamlit_siso_panel.py's identical
+    class for why st.download_button's data is read via a module-wide
+    patch rather than through AppTest's element tree."""
+
+    def test_no_button_before_any_reply(self):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+        self.assertFalse(any(b.key == "llm_download_report" for b in at.download_button))
+
+    def test_button_appears_and_html_reflects_the_conversation_and_entries(self):
+        from types import SimpleNamespace
+        from supervisor_session_pid import Session
+        from supervisor_tools_whitebox_pid import run_whitebox_benchmark
+
+        real_result = run_whitebox_benchmark("1000 / ((s+1)*(10s+1))", return_sim=True)
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}, clear=True), \
+             patch("streamlit_llm_panel.load_dotenv"):
+            at = AppTest.from_file(APP_PATH).run(timeout=30)
+            at.segmented_control(key="unified_mode").set_value("LLM Supervisor").run(timeout=30)
+            session = at.session_state["llm_session_obj"]
+            session.plot_calls.append({
+                "kind": "siso", "plant": "1000/((s+1)(10s+1))",
+                "rows": real_result["_sim_rows"],
+            })
+            with patch.object(Session, "handle_user_message", return_value="I recommend AMIGO."):
+                at.chat_input[0].set_value("tune it, minimize overshoot").run(timeout=30)
+            self.assertEqual(at.exception[:], [])
+            # handle_user_message is mocked away entirely above (no real
+            # network call) -- unlike a real turn, it never appends
+            # anything to session.messages itself, so append what a real
+            # turn would leave behind for the report to actually reflect.
+            session.messages.append({"role": "user", "content": "tune it, minimize overshoot"})
+            session.messages.append(SimpleNamespace(content="I recommend AMIGO.", tool_calls=None))
+
+            with patch("streamlit_llm_panel.st.download_button") as dl:
+                at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "llm_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("<html>", html_out)
+        self.assertIn("--accent", html_out)
+        self.assertIn("tune it, minimize overshoot", html_out, "must include the user's own message")
+        self.assertIn("I recommend AMIGO.", html_out, "must include the assistant's reply")
+        self.assertIn("data:image/png;base64,", html_out, "must embed the currently-plotted entries' plot")
+
+
 class TestPlotDrainCrashSafety(unittest.TestCase):
     """A bug in absorb_llm_rows (a malformed row, a future regression)
     must not crash the app or swallow the turn's already-computed reply

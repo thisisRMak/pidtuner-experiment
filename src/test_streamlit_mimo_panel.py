@@ -587,5 +587,82 @@ class TestLlmAmDiagAutoPopulatesFourCurvePlot(unittest.TestCase):
             self.assertTrue(any("4-curve comparison" in h for h in headers))
 
 
+class TestDownloadReportButton(unittest.TestCase):
+    """Mirrors test_streamlit_siso_panel.TestDownloadReportButton -- see
+    its own docstring for why st.download_button's data is read via a
+    module-wide patch rather than through AppTest's element tree."""
+
+    def test_no_button_with_nothing_enabled(self):
+        at = _fresh_app()
+        self.assertFalse(any(b.key == "mimo_download_report" for b in at.download_button))
+
+    def test_button_appears_and_html_reflects_the_session_list(self):
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_compare_all").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception)
+
+        with patch("streamlit_mimo_panel.st.download_button") as dl:
+            at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "mimo_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("<html>", html_out)
+        self.assertIn("--accent", html_out, "must embed the shared report CSS")
+        self.assertIn("LQR", html_out, "must list a method actually in the session list")
+        self.assertIn("data:image/png;base64,", html_out, "must embed the response plot")
+
+    def test_four_curve_and_per_channel_step_included_when_run(self):
+        """4-curve comparison and per-channel step response are NOT
+        session-list entries (see streamlit_mimo_panel.build_entries_
+        report_sections()'s own comment) -- this is the regression test
+        for the report silently missing them."""
+        from lqg_examples import list_examples, load_example
+        square_key = None
+        for key in list_examples():
+            ex = load_example(key)
+            if ex.plant.nu == ex.plant.ny:
+                square_key = key
+                break
+        if square_key is None:
+            self.skipTest("no square-plant preset available (nu == ny)")
+
+        at = _fresh_app()
+        tab = _mimo_tab(at)
+        tab.selectbox(key="mimo_preset").set_value(square_key)
+        at.run(timeout=30)
+
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_four_curve_btn").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception, "4-curve comparison should not raise")
+        self.assertIn("mimo_four_curve", at.session_state)
+
+        tab = _mimo_tab(at)
+        tab.checkbox(key="mimo_ref_tracking").set_value(True)
+        at.run(timeout=30)
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_design").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception)
+        tab = _mimo_tab(at)
+        tab.button(key="mimo_per_channel_step_btn").click()
+        at.run(timeout=60)
+        self.assertFalse(at.exception, "per-channel step response should not raise")
+        self.assertIn("mimo_per_channel_step", at.session_state)
+
+        with patch("streamlit_mimo_panel.st.download_button") as dl:
+            at.run(timeout=30)
+        calls = [c for c in dl.call_args_list if c.kwargs.get("key") == "mimo_download_report"]
+        self.assertEqual(len(calls), 1)
+        html_out = calls[0].kwargs["data"]
+        self.assertIn("<h2>4-curve comparison: Bryson / Output-weighted / Implicit / Explicit</h2>", html_out)
+        self.assertIn("<h2>Per-channel step response</h2>", html_out)
+        # Response + 4-curve + per-channel-step, at minimum, each embedded
+        # as their own image.
+        self.assertGreaterEqual(html_out.count("data:image/png;base64,"), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

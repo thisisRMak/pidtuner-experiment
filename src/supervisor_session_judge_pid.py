@@ -135,13 +135,24 @@ class JudgeSession:
     than "sum over every round so far" (unbounded). `.last_round`, set at
     the end of every handle_user_message() call, is a list of per-candidate
     dicts ({"label", "error"} or {"label", "calls", "finalized", "reply"})
-    -- the caller's own record of "what actually happened," for display."""
+    -- the caller's own record of "what actually happened," for display.
+
+    `.rounds_history` accumulates one entry per round ({"user_text",
+    "candidates" (a copy of that round's last_round), "judge_reply"}) for
+    the full-conversation report streamlit_judge_panel.py's "Download
+    report" button builds -- last_round alone only ever holds the latest
+    round, which is right for the transparency expander (one round at a
+    time) but not for a report that should cover everything discussed.
+    Starts empty on every fresh object, so a caller that rebuilds
+    JudgeSession on "Reset conversation" gets a correspondingly empty
+    report for free -- no separate clearing needed."""
 
     def __init__(self, candidates, judge_client):
         self.candidates = candidates
         self.judge_client = judge_client
         self.dialogue = []
         self.last_round = []
+        self.rounds_history = []
 
     def _fan_out(self, text: str) -> dict:
         """Returns {label: error_message} for whichever candidates failed
@@ -184,6 +195,7 @@ class JudgeSession:
             )
             self.dialogue.append({"role": "user", "content": text})
             self.dialogue.append({"role": "assistant", "content": reply})
+            self.rounds_history.append({"user_text": text, "candidates": self.last_round, "judge_reply": reply})
             return reply
 
         trace_block = "\n\n".join(
@@ -205,4 +217,5 @@ class JudgeSession:
 
         self.dialogue.append({"role": "user", "content": text})
         self.dialogue.append({"role": "assistant", "content": judge_reply})
+        self.rounds_history.append({"user_text": text, "candidates": self.last_round, "judge_reply": judge_reply})
         return judge_reply

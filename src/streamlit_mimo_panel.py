@@ -31,6 +31,8 @@ through that bundled comparison, not as a standalone method in the
 
 from __future__ import annotations
 
+import datetime
+
 import numpy as np
 import streamlit as st
 from matplotlib.figure import Figure
@@ -47,6 +49,7 @@ from lqg_checks import checks_for_result
 from matrix_io import parse_matlab_literal
 from plant import StateSpacePlant
 
+import report_html
 import streamlit_gui_state as gs
 
 METHODS = [
@@ -396,13 +399,15 @@ def _do_per_channel_step():
     st.success("Per-channel step response ready — see grid plot below.")
 
 
-def _render_per_channel_step_plot():
-    cached = st.session_state.get("mimo_per_channel_step")
-    if cached is None:
-        return
+def _build_per_channel_step_fig(cached):
+    """The pure Figure-building half of _render_per_channel_step_plot() --
+    split out so a caller that isn't rendering to the screen (report_html-
+    based report generation) can embed the exact same figure without going
+    through st.pyplot(). `cached` is st.session_state["mimo_per_channel_
+    step"]'s own tuple shape -- this function has no opinion on session
+    state, same split as _build_response_fig() above."""
     per_channel_sims, method_name, t_max, y_max = cached
     ny = len(per_channel_sims)
-    st.subheader("Per-channel step response (MATLAB step() grid)")
     fig = Figure(figsize=(3.2 * ny, 2.6 * ny), dpi=100)
     axes = fig.subplots(ny, ny, sharex=True)
     axes = np.atleast_2d(axes)
@@ -422,6 +427,15 @@ def _render_per_channel_step_plot():
                 ax.set_ylabel(f"y{i}(t)")
     fig.suptitle(f"{method_name} — per-channel step response")
     fig.tight_layout()
+    return fig
+
+
+def _render_per_channel_step_plot():
+    cached = st.session_state.get("mimo_per_channel_step")
+    if cached is None:
+        return
+    st.subheader("Per-channel step response (MATLAB step() grid)")
+    fig = _build_per_channel_step_fig(cached)
     st.pyplot(fig)
 
 
@@ -445,14 +459,13 @@ def _do_four_curve(ex):
               "default is the right behavior.")
 
 
-def _render_four_curve_plot():
-    cached = st.session_state.get("mimo_four_curve")
-    if cached is None:
-        return
+def _build_four_curve_fig(cached):
+    """The pure Figure-building half of _render_four_curve_plot() -- split
+    out so a caller that isn't rendering to the screen (report_html-based
+    report generation) can embed the exact same figure without going
+    through st.pyplot(). `cached` is st.session_state["mimo_four_curve"]'s
+    own tuple shape."""
     rows, Am_used, t, xm_ref, plant_name = cached
-    st.subheader("4-curve comparison: Bryson / Output-weighted / Implicit / Explicit")
-    st.caption("Am (target model, auto-derived) =\n" +
-              np.array2string(Am_used, precision=4, separator=", "))
     ny = xm_ref.shape[1]
     t_max = max([auto_plot_window(t, xm_ref)] +
                [auto_plot_window(row.sim.t, row.sim.y) for row in rows])
@@ -472,6 +485,18 @@ def _render_four_curve_plot():
     axes[0].set_title(plant_name)
     axes[-1].set_xlabel("time (s)")
     fig.tight_layout()
+    return fig
+
+
+def _render_four_curve_plot():
+    cached = st.session_state.get("mimo_four_curve")
+    if cached is None:
+        return
+    _, Am_used, _, _, _ = cached
+    st.subheader("4-curve comparison: Bryson / Output-weighted / Implicit / Explicit")
+    st.caption("Am (target model, auto-derived) =\n" +
+              np.array2string(Am_used, precision=4, separator=", "))
+    fig = _build_four_curve_fig(cached)
     st.pyplot(fig)
 
 
@@ -606,15 +631,18 @@ def _crop_idx(t, t_max):
 
 
 # ── response plot ────────────────────────────────────────────────────────
-def _render_response_plot():
-    active = [e for e in gs.get_by_kind("mimo") if e.enabled and e.sim is not None]
+def _build_response_fig(active):
+    """The Figure-building half of _render_response_plot(), split out so
+    a caller that isn't rendering to the screen (report_html-based report
+    generation) can build the exact same figure without going through
+    st.pyplot() -- mirrors streamlit_siso_panel.py's own split. `active`
+    is already the enabled/sim-present filter the caller wants plotted."""
     fig = Figure(figsize=(9, 6), dpi=100)
     if not active:
         ax = fig.add_subplot(111)
         ax.set_title("No designed controllers shown — design a method or "
                      "tick one in the session list.")
-        st.pyplot(fig)
-        return
+        return fig
 
     if any(e.sim.tracking_metrics is not None for e in active):
         # Auto-cropped to whichever active design's own trajectory takes
@@ -651,7 +679,98 @@ def _render_response_plot():
         ax2.set_xlabel("time (s)")
         ax2.grid(True, alpha=0.3)
     fig.tight_layout()
+    return fig
+
+
+def _render_response_plot():
+    active = [e for e in gs.get_by_kind("mimo") if e.enabled and e.sim is not None]
+    fig = _build_response_fig(active)
     st.pyplot(fig)
+
+
+def build_entries_report_sections():
+    """(subtitle, [section_html, ...]) for every currently-enabled
+    session-list entry in this Track (any source -- mirrors streamlit_
+    siso_panel.py's own report scope, see its build_entries_report_
+    sections() docstring): a checks/metrics table (reusing format_
+    regulator_metrics(), the exact string already shown per-entry on
+    screen -- not a new metric schema), the response plot, and -- when
+    the user has actually run them -- the 4-curve comparison and the
+    per-channel step response. The latter two are NOT session-list
+    entries (see the comment below), so they're included independently,
+    each conditional on its own cache being populated, not on `active`.
+
+    Public and parameter-free for the same reason as streamlit_siso_
+    panel.py's own version -- streamlit_llm_panel.py/streamlit_judge_
+    panel.py call this directly to embed the same section in their own
+    reports."""
+    # entry.color isn't a stored field -- render_plots() assigns it by
+    # list position every run (gs.assign_colors()), but render_controls()
+    # (where this is called from) runs *before* render_plots() in
+    # streamlit_unified_panel.render()'s own column order -- see
+    # streamlit_siso_panel.py's identical comment on its own report
+    # builder for why this call is needed here too.
+    gs.assign_colors(gs.get_by_kind("mimo"))
+    active = [e for e in gs.get_by_kind("mimo") if e.enabled]
+    plants = sorted({e.plant for e in active if e.plant})
+    subtitle = "MIMO / LQR-LQG — " + ("; ".join(plants) if plants else "no plant selected")
+
+    headers = ["Method", "Checks", "Metrics"]
+    rows = []
+    for e in active:
+        all_checks = [c for cs in (e.checks or {}).values() for c in cs]
+        checks_str = "PASS" if all_checks and all(c.passed for c in all_checks) else "FAIL" if all_checks else "—"
+        metrics_str = format_regulator_metrics(e.sim.metrics) if e.sim is not None else "—"
+        rows.append([e.label, checks_str, metrics_str])
+    sections = [f"<h2>Compared methods</h2>{report_html.render_table(headers, rows)}"]
+
+    sim_active = [e for e in active if e.sim is not None]
+    if sim_active:
+        fig = _build_response_fig(sim_active)
+        img = report_html.fig_to_data_uri(fig)
+        sections.append(f'<h2>Response</h2><img src="{img}" style="max-width:100%">')
+
+    # The 4-curve and per-channel-step comparisons are NOT session-list
+    # entries -- "⊞ 4-curve comparison"/"⊞ Per-channel step response" each
+    # store their own single cached result in st.session_state (see
+    # _do_four_curve()/_do_per_channel_step()) rather than feeding
+    # gs.ControllerEntry, so the `active` loop above never sees them. Both
+    # render on screen whenever their cache is populated (see
+    # _render_four_curve_plot()/_render_per_channel_step_plot()) --
+    # included here on the same condition, so the report doesn't miss
+    # comparisons the user has actually run.
+    four_curve_cached = st.session_state.get("mimo_four_curve")
+    if four_curve_cached is not None:
+        fig = _build_four_curve_fig(four_curve_cached)
+        img = report_html.fig_to_data_uri(fig)
+        sections.append(
+            '<h2>4-curve comparison: Bryson / Output-weighted / Implicit / Explicit</h2>'
+            f'<img src="{img}" style="max-width:100%">')
+
+    per_channel_cached = st.session_state.get("mimo_per_channel_step")
+    if per_channel_cached is not None:
+        fig = _build_per_channel_step_fig(per_channel_cached)
+        img = report_html.fig_to_data_uri(fig)
+        sections.append(f'<h2>Per-channel step response</h2><img src="{img}" style="max-width:100%">')
+
+    return subtitle, sections
+
+
+def _build_report_html():
+    """Manual mode's own MIMO/LQG report -- just build_entries_report_
+    sections()'s sections, wrapped as a standalone document."""
+    subtitle, sections = build_entries_report_sections()
+    return report_html.build_report("PIDTuner MIMO/LQG Report", subtitle, sections)
+
+
+def _render_download_report_button():
+    if not any(e.enabled for e in gs.get_by_kind("mimo")):
+        return
+    st.download_button(
+        "Download report", data=_build_report_html(),
+        file_name=f"pidtuner-mimo-report-{datetime.date.today().isoformat()}.html",
+        mime="text/html", key="mimo_download_report",
+    )
 
 
 def _render_last_result():
@@ -736,6 +855,7 @@ def render_controls():
 
     gs.snapshot_widget_state(_PROTECTED_KEYS)
     _render_last_result()
+    _render_download_report_button()
 
 
 def render_plots():
