@@ -75,6 +75,28 @@ python test_pid_tuner.py
 
 Python 3.10+ is required for either path.
 
+To run the full project suite (all `test_*.py` across the PID and
+LQR/LQG tracks, CLI/GUI/supervisor coverage included) via `pytest`
+instead, install the dev-only extras first — kept out of
+`requirements.txt` so they never ship in the Docker/production image:
+
+```bash
+pip install -r requirements-dev.txt
+pytest                 # full suite, from the repo root
+pytest --testmon       # after the first full run above seeds its cache:
+                        # only re-runs tests whose covered code changed
+                        # since last run -- fast local edit/test loop
+```
+
+Invoke `--testmon` the same way every time (always the bare full-suite
+`pytest --testmon` from the repo root) — don't mix it with a
+file-scoped run like `pytest --testmon src/test_pid_tuner.py` on some
+invocations and the full suite on others. Testmon's dependency graph
+assumes a consistent invocation scope across runs; narrowing scope
+between runs has been observed to make its change-detection attribute
+"changed" to the wrong file and stop converging to "no tests ran" even
+once nothing further changes.
+
 ## What's included
 
 Plant input — two tabs:
