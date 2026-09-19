@@ -36,7 +36,7 @@ MODES = ["Manual", "LLM Supervisor", "LLM Judge"]
 
 
 def render():
-    st.title("PID / LQG Tuner")
+    st.title("Control System Designer")
 
     controls_col, plots_col = st.columns([35, 65])
 

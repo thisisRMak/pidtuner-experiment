@@ -22,7 +22,7 @@ import streamlit as st
 from streamlit_gui_state import init_state
 import streamlit_unified_panel as unified_panel
 
-st.set_page_config(page_title="PID/LQG Tuner", layout="wide")
+st.set_page_config(page_title="Control System Designer", layout="wide")
 init_state()
 
 unified_panel.render()
