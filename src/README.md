@@ -97,6 +97,19 @@ between runs has been observed to make its change-detection attribute
 "changed" to the wrong file and stop converging to "no tests ran" even
 once nothing further changes.
 
+For a full pre-merge run, parallelize instead of narrowing:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    pytest -n auto     # full suite, parallel across all cores
+```
+
+Measured on a 16-core box: 622s serial → 186s unpinned `-n auto` → 143s
+with the BLAS thread-count env vars above (numpy/scipy multithread
+internally by default, so unpinned xdist workers fight each other for
+cores — pinning each worker to one BLAS thread recovered ~23% more).
+Same pass/fail/skip counts as serial in every measurement.
+
 ## What's included
 
 Plant input — two tabs:
