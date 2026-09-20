@@ -33,9 +33,9 @@ from supervisor_session_judge_pid import JudgeSession
 import cli_supervisor_judge_pid as cli
 
 
-def _args(api_key_anthropic=None, api_key_openai=None, api_key_gemini=None):
+def _args(api_key_anthropic=None, api_key_openai=None, api_key_gemini=None, log_file=None):
     return argparse.Namespace(api_key_anthropic=api_key_anthropic, api_key_openai=api_key_openai,
-                               api_key_gemini=api_key_gemini)
+                               api_key_gemini=api_key_gemini, log_file=log_file)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

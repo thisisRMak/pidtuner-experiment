@@ -16,6 +16,8 @@ import sys
 
 from dotenv import load_dotenv
 
+import supervisor_cli_output as clio
+import supervisor_cli_plots as clip
 from supervisor_llm import DEFAULT_KEEP_ALIVE, DEFAULT_MODEL, DEFAULT_NUM_CTX, OllamaClient
 from supervisor_llm_anthropic import AnthropicClient, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
 from supervisor_llm_openai import OpenAIClient, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
@@ -27,7 +29,7 @@ LQG_TOOL = (RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark)
 
 
 def _new_session(client) -> LQGSession:
-    return LQGSession(client, lqg_tool=LQG_TOOL)
+    return LQGSession(client, lqg_tool=LQG_TOOL, capture_plots=True)
 
 
 def _resolve_anthropic_key(explicit_key):
@@ -113,13 +115,19 @@ def main():
                          help=f"Ollama context window (--provider ollama only; default: {DEFAULT_NUM_CTX})")
     parser.add_argument("--keep-alive", default=DEFAULT_KEEP_ALIVE,
                          help=f"Ollama keep_alive (--provider ollama only; default: {DEFAULT_KEEP_ALIVE})")
+    parser.add_argument("--log-file", default=None,
+                         help="Append the full session transcript (both what you type and every "
+                              "printed reply) to this file -- unlike `| tee`, this also captures "
+                              "what you type at an interactive prompt, which a pipe on stdout never sees")
     args = parser.parse_args()
 
     client = _build_client(args)
     session = _new_session(client)
+    run_paths = clio.RunPaths.new("supervisor-lqg")
+    log_fh = clio.open_session_log(args.log_file)
 
-    print("LQR/LQG supervisor. Tell me which preset plant you're working with "
-          "and what matters most to you. Type /reset to start over, /quit to exit.")
+    clio.log_print(log_fh, "LQR/LQG supervisor. Tell me which preset plant you're working with "
+                            "and what matters most to you. Type /reset to start over, /quit to exit.")
     while True:
         try:
             text = input("\nyou> ").strip()
@@ -128,18 +136,27 @@ def main():
             break
         if not text:
             continue
+        clio.log_user_input(log_fh, "you> ", text)
         if text in ("/quit", "/exit"):
             break
         if text == "/reset":
             session = _new_session(client)
-            print("(session reset)")
+            clio.log_print(log_fh, "(session reset)")
             continue
         try:
             reply = session.handle_user_message(text)
         except Exception as exc:  # noqa: BLE001 - keep the REPL alive on unexpected errors
-            print(f"(error talking to the model: {exc})", file=sys.stderr)
+            clio.log_print(log_fh, f"(error talking to the model: {exc})", file=sys.stderr)
             continue
-        print(f"\nsupervisor> {reply}")
+        clio.log_print(log_fh, f"\nsupervisor> {reply}")
+
+        run_paths.next_turn()
+        try:
+            calls, session.plot_calls = session.plot_calls, []
+            clip.save_lqg_turn_plots(calls, run_paths, log_fh=log_fh)
+            clio.write_supervisor_report(run_paths, "MIMO / LQG", session, log_fh=log_fh)
+        except Exception as exc:  # noqa: BLE001 - a save bug must not crash the REPL
+            clio.log_print(log_fh, f"(warning: failed to save plot/report: {exc})", file=sys.stderr)
 
 
 if __name__ == "__main__":

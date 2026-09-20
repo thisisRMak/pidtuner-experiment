@@ -145,6 +145,13 @@ sessions piped via stdin (Ollama only; there's no Anthropic equivalent
 demo script). The two are separate scripts/sessions, not one merged
 supervisor — see "Design notes" below for why.
 
+Every turn that produces a plottable result also saves a step-response
+(PID) or Response-overlay (LQG) PNG, and the full conversation is
+rewritten to an HTML report — both silently, into a per-session output
+folder in the current directory, no flag needed. See "Output files"
+below for exactly what gets written and why `--log-file` exists
+alongside this.
+
 ### Judge mode (multi-model arbitration)
 
 `cli_supervisor_judge_pid.py` (SISO/PID) and `cli_supervisor_judge_lqg.py`
@@ -200,12 +207,47 @@ message, which is safe since nothing about that failed round was recorded.
 Only the judge's reply prints by default; `--verbose` (or `/candidates`
 inside the REPL) also shows what each candidate actually did that round —
 the same data `streamlit_judge_panel.py`'s transparency expander shows, as
-plain text. Same `/reset`/`/quit` commands as the other supervisor CLIs. No
-plot/report/log saving here (or in `cli_supervisor_pid.py`/
-`cli_supervisor_lqg.py`) — that's currently GUI-only
-(`streamlit_judge_panel.py`'s "Download report" button); redirect stdout
-yourself (e.g. `python3 cli_supervisor_judge_pid.py ... | tee
-"judge-$(date +%Y%m%d-%H%M%S).log"`) if you want a saved transcript.
+plain text, and (when `--log-file` is given) lands in the log too. Same
+`/reset`/`/quit` commands as the other supervisor CLIs. Plots/report save
+the same way as the single-provider CLIs above — one file per candidate
+per turn, since N candidates routinely give different answers worth
+comparing side by side, unlike the GUI's session list (which dedupes
+identical results across candidates for its own persistent, cross-turn
+plot).
+
+### Output files
+
+All four conversational CLIs (`cli_supervisor_pid.py`,
+`cli_supervisor_lqg.py`, and the two Judge scripts above) save into one
+per-session folder of the current directory, created at startup and
+named `controldesign-<timestamp>-<track/mode>/` — timestamp first so a
+plain directory listing sorts chronologically. A `/reset` mid-session
+keeps writing into the same folder with fresh content, it doesn't start
+a new one. Example, two turns of `cli_supervisor_pid.py`:
+
+```
+controldesign-20260920-153042-supervisor-pid/
+  report.html                       # the whole conversation so far, rewritten every turn
+  turn001-01-1_90s_1.png            # one plot per plottable benchmark call
+  turn002-01-1_90s_1.png
+```
+
+The Judge scripts add a candidate slug and, for LQG, a plot-kind suffix,
+e.g. `turn001-01-anthropic_claude-haiku-4-5-aircraft_hall-response.png`
+(+ `-fourcurve.png` only on a turn that supplied `am_diag`). Every write
+prints a one-line confirmation (`saved plot: ...` / `saved report: ...`).
+This is all silent/automatic — no flag needed, and there's no way to turn
+it off.
+
+A full session transcript — both what you type and every printed reply —
+is available via `--log-file PATH` (all four scripts). This is *not* the
+same as `python3 cli_supervisor_pid.py ... | tee session.log`: piping
+stdout only captures what the script itself prints. When stdin is a real
+interactive terminal (not piped/heredoc), the terminal's own line-editing
+echo writes what you type directly to the tty, bypassing the pipe
+entirely — `tee` never sees your side of the conversation, only the
+replies. `--log-file` writes both sides explicitly instead, so it's the
+only way to get a complete transcript of an interactive session.
 
 ## Batch runs (produce a log file to review)
 

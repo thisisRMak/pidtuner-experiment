@@ -46,6 +46,8 @@ import sys
 
 from dotenv import load_dotenv
 
+import supervisor_cli_output as clio
+import supervisor_cli_plots as clip
 from supervisor_llm_anthropic import AnthropicClient, DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL
 from supervisor_llm_openai import OpenAIClient, DEFAULT_MODEL as OPENAI_DEFAULT_MODEL
 from supervisor_llm_gemini import GeminiClient, DEFAULT_MODEL as GEMINI_DEFAULT_MODEL
@@ -184,33 +186,34 @@ def _validate_selection(candidates, judge):
 
 def _new_judge_session(candidate_clients, judge_client) -> JudgeSession:
     candidate_sessions = [
-        (label, Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL))
+        (label, Session(client, whitebox_tool=WHITEBOX_TOOL, blackbox_tool=BLACKBOX_TOOL, capture_plots=True))
         for label, client in candidate_clients
     ]
     return JudgeSession(candidate_sessions, judge_client)
 
 
-def _print_candidate_rounds(rounds) -> None:
+def _print_candidate_rounds(rounds, log_fh=None) -> None:
     """Plain-text rendering of JudgeSession.last_round -- the CLI
     equivalent of streamlit_judge_panel._render_candidate_rounds's
-    transparency expander."""
+    transparency expander. Routed through log_print so /candidates and
+    --verbose output land in --log-file too, not just stdout."""
     if not rounds:
-        print("(no candidate data yet -- send a message first)")
+        clio.log_print(log_fh, "(no candidate data yet -- send a message first)")
         return
     for item in rounds:
         label = item["label"]
         if item.get("error"):
-            print(f"  {label}: FAILED to respond -- {item['error']}")
+            clio.log_print(log_fh, f"  {label}: FAILED to respond -- {item['error']}")
             continue
         header = f"  {label}"
         if item.get("finalized"):
             header += f" -> recommends {item['finalized']}"
-        print(header)
+        clio.log_print(log_fh, header)
         for name, call_args in item.get("calls", []):
             arg_text = ", ".join(f"{k}={v!r}" for k, v in call_args.items())
-            print(f"    called {name}({arg_text})")
+            clio.log_print(log_fh, f"    called {name}({arg_text})")
         if item.get("reply"):
-            print(f"    {item['reply']}")
+            clio.log_print(log_fh, f"    {item['reply']}")
 
 
 def main():
@@ -238,6 +241,10 @@ def main():
     parser.add_argument("--verbose", action="store_true",
                          help="Print each candidate's breakdown (tool calls, finalized pick, reply) "
                               "after every judge reply, not just on /candidates")
+    parser.add_argument("--log-file", default=None,
+                         help="Append the full session transcript (both what you type and every "
+                              "printed reply) to this file -- unlike `| tee`, this also captures "
+                              "what you type at an interactive prompt, which a pipe on stdout never sees")
     args = parser.parse_args()
 
     resolved_candidates, resolved_judge = _validate_selection(args.candidates, args.judge)
@@ -251,11 +258,13 @@ def main():
     judge_provider, judge_model = resolved_judge
     judge_client = _client_for(judge_provider, judge_model, keys[judge_provider])
     judge_session = _new_judge_session(candidate_clients, judge_client)
+    run_paths = clio.RunPaths.new("judge-pid")
+    log_fh = clio.open_session_log(args.log_file)
 
-    print(f"PIDTuner LLM judge. Candidates: {', '.join(label for label, _ in candidate_clients)}. "
-          f"Judge: {_label(*resolved_judge)}.")
-    print("Tell me about your plant and what matters most to you. Type /candidates to see what "
-          "each candidate said last round, /reset to start over, /quit to exit.")
+    clio.log_print(log_fh, f"PIDTuner LLM judge. Candidates: {', '.join(label for label, _ in candidate_clients)}. "
+                            f"Judge: {_label(*resolved_judge)}.")
+    clio.log_print(log_fh, "Tell me about your plant and what matters most to you. Type /candidates to see what "
+                            "each candidate said last round, /reset to start over, /quit to exit.")
     while True:
         try:
             text = input("\nyou> ").strip()
@@ -264,23 +273,33 @@ def main():
             break
         if not text:
             continue
+        clio.log_user_input(log_fh, "you> ", text)
         if text in ("/quit", "/exit"):
             break
         if text == "/reset":
             judge_session = _new_judge_session(candidate_clients, judge_client)
-            print("(session reset)")
+            clio.log_print(log_fh, "(session reset)")
             continue
         if text == "/candidates":
-            _print_candidate_rounds(judge_session.last_round)
+            _print_candidate_rounds(judge_session.last_round, log_fh=log_fh)
             continue
         try:
             reply = judge_session.handle_user_message(text)
         except Exception as exc:  # noqa: BLE001 - keep the REPL alive on unexpected errors
-            print(f"(error talking to the model: {exc})", file=sys.stderr)
+            clio.log_print(log_fh, f"(error talking to the model: {exc})", file=sys.stderr)
             continue
-        print(f"\njudge> {reply}")
+        clio.log_print(log_fh, f"\njudge> {reply}")
         if args.verbose:
-            _print_candidate_rounds(judge_session.last_round)
+            _print_candidate_rounds(judge_session.last_round, log_fh=log_fh)
+
+        run_paths.next_turn()
+        try:
+            for label, session in judge_session.candidates:
+                calls, session.plot_calls = session.plot_calls, []
+                clip.save_pid_turn_plots(calls, run_paths, candidate_label=label, log_fh=log_fh)
+            clio.write_judge_report(run_paths, "SISO / PID", judge_session, log_fh=log_fh)
+        except Exception as exc:  # noqa: BLE001 - a save bug must not crash the REPL
+            clio.log_print(log_fh, f"(warning: failed to save plot/report: {exc})", file=sys.stderr)
 
 
 if __name__ == "__main__":

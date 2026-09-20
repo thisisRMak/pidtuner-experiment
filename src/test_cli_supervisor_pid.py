@@ -30,9 +30,9 @@ from supervisor_llm_gemini import GeminiClient, DEFAULT_MODEL as GEMINI_DEFAULT_
 import cli_supervisor_pid as cli
 
 
-def _args(provider="ollama", model=None, api_key=None, host=None, num_ctx=8192, keep_alive="30m"):
+def _args(provider="ollama", model=None, api_key=None, host=None, num_ctx=8192, keep_alive="30m", log_file=None):
     return argparse.Namespace(provider=provider, model=model, api_key=api_key,
-                               host=host, num_ctx=num_ctx, keep_alive=keep_alive)
+                               host=host, num_ctx=num_ctx, keep_alive=keep_alive, log_file=log_file)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
