@@ -19,12 +19,13 @@ from lqg_compare import compare_regulator_methods, compare_model_following
 
 
 class TestCompareRegulatorMethods(unittest.TestCase):
-    def test_returns_four_rows_in_fixed_order(self):
+    def test_returns_five_rows_in_fixed_order(self):
         ex = load_example("aircraft_hall")
         rows = compare_regulator_methods(ex)
         self.assertEqual([r.name for r in rows],
                          ["LQR (suggested Q/R)", "Output-weighted LQR",
-                          "Bryson's rule", "LQG (Kalman filter)"])
+                          "Bryson's rule", "LQG (Kalman filter)",
+                          "Loop transfer recovery (LTR)"])
 
     def test_all_rows_share_a_time_axis(self):
         ex = load_example("aircraft_hall")
@@ -69,12 +70,13 @@ class TestCompareRegulatorMethods(unittest.TestCase):
 
 
 class TestCompareRegulatorMethodsCustomWeights(unittest.TestCase):
-    def test_Q_diag_R_diag_adds_fifth_row(self):
+    def test_Q_diag_R_diag_adds_sixth_row(self):
         ex = load_example("aircraft_hall")
         rows = compare_regulator_methods(ex, Q_diag=[1, 1, 1, 1, 1], R_diag=[0.1, 0.1])
         self.assertEqual([r.name for r in rows],
                          ["LQR (suggested Q/R)", "Output-weighted LQR", "Bryson's rule",
-                          "LQG (Kalman filter)", "Custom LQR (Q_diag/R_diag)"])
+                          "LQG (Kalman filter)", "Loop transfer recovery (LTR)",
+                          "Custom LQR (Q_diag/R_diag)"])
         self.assertTrue(rows[-1].result.is_stable())
 
     def test_Q_diag_without_R_diag_rejected(self):
@@ -108,19 +110,19 @@ class TestCompareRegulatorMethodsWeightSweep(unittest.TestCase):
         ex = load_example("aircraft_hall")
         rows = compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1], [5, 5, 1, 1, 1]],
                                           R_diag_list=[[1, 1], [1, 1]])
-        self.assertEqual([r.name for r in rows[:4]],
+        self.assertEqual([r.name for r in rows[:5]],
                          ["LQR (suggested Q/R)", "Output-weighted LQR", "Bryson's rule",
-                          "LQG (Kalman filter)"])
-        self.assertEqual(len(rows), 6)
-        self.assertIn("Custom LQR 1", rows[4].name)
-        self.assertIn("Custom LQR 2", rows[5].name)
-        self.assertTrue(all(r.result.is_stable() for r in rows[4:]))
+                          "LQG (Kalman filter)", "Loop transfer recovery (LTR)"])
+        self.assertEqual(len(rows), 7)
+        self.assertIn("Custom LQR 1", rows[5].name)
+        self.assertIn("Custom LQR 2", rows[6].name)
+        self.assertTrue(all(r.result.is_stable() for r in rows[5:]))
 
     def test_sweep_pairs_produce_different_gains(self):
         ex = load_example("aircraft_hall")
         rows = compare_regulator_methods(ex, Q_diag_list=[[1, 1, 1, 1, 1], [10, 10, 1, 1, 1]],
                                           R_diag_list=[[1, 1], [1, 1]])
-        self.assertFalse(np.allclose(rows[4].result.gains.K, rows[5].result.gains.K))
+        self.assertFalse(np.allclose(rows[5].result.gains.K, rows[6].result.gains.K))
 
     def test_sweep_row_names_embed_the_actual_weights(self):
         ex = load_example("aircraft_hall")

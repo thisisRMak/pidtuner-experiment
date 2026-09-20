@@ -40,6 +40,7 @@ from matplotlib.figure import Figure
 from lqg_examples import list_examples, load_example, LQGExample
 from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracking
 from lqg_bryson import BrysonLQR
+from lqg_ltr import LoopTransferRecovery
 from lqg_simulate import (
     simulate_state_feedback, simulate_per_channel_step, format_regulator_metrics, auto_t_end,
     auto_plot_window,
@@ -58,6 +59,7 @@ METHODS = [
     "Output-weighted LQR",
     "Bryson's rule",
     "LQG (Kalman filter)",
+    "Loop transfer recovery (LTR)",
 ]
 
 def _broadcast(text, n):
@@ -235,6 +237,7 @@ _METHOD_ARG_KEYS = [
     "mimo_Qy_scale", "mimo_ow_R_scale",
     "mimo_x_max", "mimo_u_max",
     "mimo_Qw_scale", "mimo_Rv_scale",
+    "mimo_ltr_q",
 ]
 
 
@@ -267,6 +270,11 @@ def _render_method_args(method, ex):
         st.session_state.setdefault("mimo_Rv_scale", 0.1)
         st.number_input("Rv scale (measurement-noise covariance = scale·I)",
                         key="mimo_Rv_scale")
+    elif method == "Loop transfer recovery (LTR)":
+        st.session_state.setdefault("mimo_ltr_q", 1e5)
+        st.number_input("q (recovery parameter; larger = closer recovery of the "
+                        "full-state-feedback loop, at the cost of a higher-bandwidth "
+                        "Kalman filter)", key="mimo_ltr_q", format="%.0f")
     gs.snapshot_widget_state(_METHOD_ARG_KEYS)
 
 
@@ -300,6 +308,9 @@ def _design_dispatch(method, ex):
         Qw = st.session_state["mimo_Qw_scale"] * np.eye(plant.nx)
         Rv = st.session_state["mimo_Rv_scale"] * np.eye(plant.ny)
         return LQG(plant, Q=Q, R=R, Qw=Qw, Rv=Rv).design()
+
+    if method == "Loop transfer recovery (LTR)":
+        return LoopTransferRecovery(plant, q=st.session_state["mimo_ltr_q"]).design()
 
     raise RuntimeError(f"unknown method {method}")
 
