@@ -24,6 +24,7 @@ from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracki
 from lqg_bryson import BrysonLQR
 from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing, ExplicitModelFollowingResult
+from lqg_ltr import LoopTransferRecovery
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
     simulate_per_channel_step, format_regulator_metrics, format_tracking_metrics, auto_t_end,
@@ -388,12 +389,15 @@ def main():
                             "Has no suggested Q/R (uses Q=R=I) since there's no textbook "
                             "default for a custom plant.")
     parser.add_argument("--method", default="lqr",
-                       choices=["lqr", "output_weighted", "bryson", "lqg", "implicit", "explicit",
-                                "all", "model_following_all", "four_curve"],
+                       choices=["lqr", "output_weighted", "bryson", "lqg", "ltr", "implicit",
+                                "explicit", "all", "model_following_all", "four_curve"],
                        help="Design method (default: lqr, using the preset's "
-                            "suggested Q/R). 'implicit'/'explicit' are the two "
+                            "suggested Q/R). 'ltr' is loop transfer recovery at the "
+                            "plant input (Doyle-Stein, matching LTR.m) -- fixes K via "
+                            "LQR then sweeps the Kalman filter gain via --ltr-q. "
+                            "'implicit'/'explicit' are the two "
                             "model-following techniques (AILQG.pdf §4) and require "
-                            "--am-diag. 'all' compares LQR/output_weighted/bryson/lqg "
+                            "--am-diag. 'all' compares LQR/output_weighted/bryson/lqg/ltr "
                             "on one plot/table (the regulator family — same objective, "
                             "directly comparable); 'model_following_all' compares "
                             "implicit vs. explicit given the same --am-diag (a "
@@ -418,6 +422,11 @@ def main():
                        help="lqg: process-noise covariance Qw = scale·I (default: 0.01).")
     parser.add_argument("--Rv-scale", type=float, default=0.1,
                        help="lqg: measurement-noise covariance Rv = scale·I (default: 0.1).")
+    parser.add_argument("--ltr-q", type=float, default=1e5,
+                       help="ltr/all: loop-transfer-recovery scalar recovery parameter "
+                            "(default: 1e5, LTR.m's own largest swept value). Larger q "
+                            "means better recovery of the K(sI-A)^-1 B target loop, at "
+                            "the cost of a higher-bandwidth Kalman filter.")
     parser.add_argument("--Q-diag", type=float, nargs="+", default=None,
                        help="lqr/all: custom diagonal Q weight per state (length nx), "
                             "overriding the preset's suggested Q. Must be given "
@@ -530,7 +539,7 @@ def main():
                 reference = _broadcast(ref_vals, plant.ny, "reference")
             rows = compare_regulator_methods(
                 ex, x_max=x_max, u_max=u_max, Qy_scale=args.Qy_scale, R_scale=args.R_scale,
-                Qw_scale=args.Qw_scale, Rv_scale=args.Rv_scale,
+                Qw_scale=args.Qw_scale, Rv_scale=args.Rv_scale, ltr_q=args.ltr_q,
                 Q_diag=Q_diag, R_diag=R_diag, reference=reference,
                 t_end=args.t_end, dt=args.dt)
             if args.json:
@@ -612,6 +621,8 @@ def main():
             Qw = args.Qw_scale * np.eye(plant.nx)
             Rv = args.Rv_scale * np.eye(plant.ny)
             res = LQG(plant, Q=Q, R=R, Qw=Qw, Rv=Rv).design()
+        elif args.method == "ltr":
+            res = LoopTransferRecovery(plant, q=args.ltr_q).design()
         elif args.method in ("implicit", "explicit"):
             if args.am_diag is None:
                 raise ValueError(

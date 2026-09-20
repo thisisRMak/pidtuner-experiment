@@ -20,12 +20,14 @@ import numpy as np
 from plant import TransferFunction, StateSpacePlant, tf_to_state_space
 from lqg_examples import list_examples, load_example
 from lqg_design_methods import (
-    LQR, OutputWeightedLQR, LQG,
+    LQR, OutputWeightedLQR, LQG, LQGDesignResult,
     add_reference_tracking, lqg_full_closed_loop_poles,
 )
 from lqg_bryson import BrysonLQR
 from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing
+from lqg_ltr import LoopTransferRecovery
+from lqg_frequency import loop_transfer_at_input
 from lqg_simulate import (
     simulate_state_feedback, simulate_output_feedback, simulate_explicit_model_following,
     simulate_per_channel_step, compute_tracking_metrics, auto_plot_window,
@@ -198,6 +200,91 @@ class TestLQG(unittest.TestCase):
         P = res.kalman.P
         np.testing.assert_allclose(P, P.T, atol=1e-8)
         self.assertTrue(np.all(np.linalg.eigvalsh(P) >= -1e-9))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Loop transfer recovery (LTR) — recovery at the plant input, matching
+# LTR.m's worked example (repo root, untracked). The fixture below is that
+# file's own A/B/C/D, copied verbatim.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def ltr_tutorial_system():
+    """LTR.m's own 4-state, 3-input, 3-output plant."""
+    A = np.array([[-6.4039e-3, -7.9860e-3, -1.0898e1, -1.2130e1],
+                 [-4.4450e-2, -2.2414e-1, 2.0794e2, -6.3285e-1],
+                 [4.8971e-4, -4.5957e-3, -1.9060e-1, 0],
+                 [0, 0, 3.7670e-1, 0]])
+    B = np.array([[0, -3.3903e-2, 1],
+                 [-3.5033e-1, -7.3080e-1, 0],
+                 [-1.1414e-1, -3.0852e-2, 0],
+                 [0, 0, 0]])
+    C = np.array([[0, 0, 0, 5.73e1],
+                 [0, -1.037e-1, 0, 5.73e1],
+                 [5.917e-1, 0, 0, 0]])
+    D = np.zeros((3, 3))
+    return StateSpacePlant(A=A, B=B, C=C, D=D)
+
+
+class TestLoopTransferRecovery(unittest.TestCase):
+    def setUp(self):
+        self.plant = ltr_tutorial_system()
+
+    def test_defaults_match_ltr_m(self):
+        # LTR.m: Q=C'*C; R=eye(3).
+        m = LoopTransferRecovery(self.plant, q=1e2)
+        np.testing.assert_array_equal(m.Q, self.plant.C.T @ self.plant.C)
+        np.testing.assert_array_equal(m.R, np.eye(self.plant.nu))
+
+    def test_stable_and_estimator_stable(self):
+        for q in (1e2, 1e4, 1e5):
+            res = LoopTransferRecovery(self.plant, q=q).design()
+            self.assertTrue(res.is_stable(), f"q={q}: LQR gain did not stabilize")
+            self.assertTrue(np.all(np.real(res.kalman.estimator_poles) < -1e-9),
+                            f"q={q}: estimator not stable")
+
+    def test_result_shape_matches_lqg(self):
+        res = LoopTransferRecovery(self.plant, q=1e3).design()
+        self.assertIsInstance(res, LQGDesignResult)
+        self.assertIsNotNone(res.kalman)
+        self.assertEqual(res.gains.K.shape, (self.plant.nu, self.plant.nx))
+        self.assertEqual(res.kalman.Kf.shape, (self.plant.nx, self.plant.ny))
+
+    def test_rejects_nonpositive_q(self):
+        with self.assertRaises(ValueError):
+            LoopTransferRecovery(self.plant, q=0)
+        with self.assertRaises(ValueError):
+            LoopTransferRecovery(self.plant, q=-1.0)
+
+    def test_recovery_gap_shrinks_as_q_increases(self):
+        """The actual loop-transfer-recovery property (Doyle-Stein), not
+        just "it runs": as q grows, the observer-based compensator's loop
+        transfer at the plant input, Kc(s)G(s) (loop_transfer_at_input on
+        an LTR result, since result.kalman is not None), should approach
+        the full-state-feedback target loop K(sI-A)^-1 B
+        (loop_transfer_at_input on a plain LQR result, kalman is None) in
+        singular values, at a sampled set of frequencies. Mirrors LTR.m's
+        own swept q values (1e2, 1e4, 1e5). Thresholds below are pinned to
+        the actual computed gaps for this fixture (~7.8, ~0.63, ~0.19),
+        not guessed."""
+        target = LQR(self.plant, Q=self.plant.C.T @ self.plant.C, R=np.eye(self.plant.nu)).design()
+        omega = np.logspace(-2, 3, 60)
+        target_sigma = np.array([
+            np.linalg.svd(loop_transfer_at_input(target, 1j * w), compute_uv=False)
+            for w in omega
+        ])
+
+        gaps = []
+        for q in (1e2, 1e4, 1e5):
+            res = LoopTransferRecovery(self.plant, q=q).design()
+            sigma = np.array([
+                np.linalg.svd(loop_transfer_at_input(res, 1j * w), compute_uv=False)
+                for w in omega
+            ])
+            gaps.append(np.max(np.abs(sigma - target_sigma)))
+
+        self.assertLess(gaps[1], gaps[0])
+        self.assertLess(gaps[2], gaps[1])
+        self.assertLess(gaps[2], 1.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -30,6 +30,7 @@ METHOD_CASES = [
     ("Output-weighted LQR", {"mimo_Qy_scale": 2.0, "mimo_ow_R_scale": 0.5}),
     ("Bryson's rule", {"mimo_x_max": "1.0", "mimo_u_max": "1.0"}),
     ("LQG (Kalman filter)", {"mimo_Qw_scale": 0.05, "mimo_Rv_scale": 0.2}),
+    ("Loop transfer recovery (LTR)", {"mimo_ltr_q": 1e4}),
 ]
 
 
@@ -64,7 +65,7 @@ def _set_widget(tab, key, value):
 
 
 class TestAllMethodsThroughUI(unittest.TestCase):
-    def test_all_five_methods(self):
+    def test_all_six_methods(self):
         at = _fresh_app()
         for method, args in METHOD_CASES:
             tab = _mimo_tab(at)
@@ -93,7 +94,7 @@ class TestCompareAll(unittest.TestCase):
         tab.button(key="mimo_compare_all").click()
         at.run(timeout=60)
         self.assertFalse(at.exception)
-        self.assertEqual(_n_entries(at), 4)  # LQR, output-weighted, Bryson, LQG
+        self.assertEqual(_n_entries(at), 5)  # LQR, output-weighted, Bryson, LQG, LTR
 
 
 class TestReferenceTracking(unittest.TestCase):

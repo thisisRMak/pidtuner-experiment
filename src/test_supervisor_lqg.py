@@ -29,12 +29,13 @@ from supervisor_tools_lqg import RUN_LQG_BENCHMARK_SCHEMA, run_lqg_benchmark
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestRunLqgBenchmark(unittest.TestCase):
-    def test_returns_four_rows(self):
+    def test_returns_five_rows(self):
         result = run_lqg_benchmark("aircraft_hall")
         self.assertTrue(result["ok"])
         self.assertEqual([r["name"] for r in result["rows"]],
                          ["LQR (suggested Q/R)", "Output-weighted LQR",
-                          "Bryson's rule", "LQG (Kalman filter)"])
+                          "Bryson's rule", "LQG (Kalman filter)",
+                          "Loop transfer recovery (LTR)"])
 
     def test_rows_are_json_safe_and_rounded(self):
         result = run_lqg_benchmark("aircraft_hall")
@@ -46,12 +47,16 @@ class TestRunLqgBenchmark(unittest.TestCase):
             self.assertNotIn("numpy", type(r["K"][0][0]).__module__)
 
     def test_lqg_row_has_kalman_flag(self):
+        # LQG and LTR both have a Kalman filter (kalman_estimator_stable);
+        # LQR/Output-weighted/Bryson (pure state feedback) don't.
         result = run_lqg_benchmark("aircraft_hall")
-        lqg_row = result["rows"][-1]
-        self.assertIn("kalman_estimator_stable", lqg_row)
-        self.assertTrue(lqg_row["kalman_estimator_stable"])
-        # non-LQG rows shouldn't claim a Kalman filter they don't have
-        for r in result["rows"][:-1]:
+        lqg_row, ltr_row = result["rows"][3], result["rows"][4]
+        self.assertEqual(lqg_row["name"], "LQG (Kalman filter)")
+        self.assertEqual(ltr_row["name"], "Loop transfer recovery (LTR)")
+        for row in (lqg_row, ltr_row):
+            self.assertIn("kalman_estimator_stable", row)
+            self.assertTrue(row["kalman_estimator_stable"])
+        for r in result["rows"][:3]:
             self.assertNotIn("kalman_estimator_stable", r)
 
     def test_custom_x_max_u_max_used_for_bryson(self):
@@ -75,7 +80,8 @@ class TestRunLqgBenchmark(unittest.TestCase):
         self.assertTrue(result["ok"], result.get("error"))
         self.assertEqual([r["name"] for r in result["rows"]],
                          ["LQR (suggested Q/R)", "Output-weighted LQR",
-                          "Bryson's rule", "LQG (Kalman filter)"])
+                          "Bryson's rule", "LQG (Kalman filter)",
+                          "Loop transfer recovery (LTR)"])
         self.assertEqual((result["nx"], result["nu"], result["ny"]), (2, 1, 1))
 
     def test_custom_plant_return_sim_carries_matrix_literals(self):
@@ -150,8 +156,9 @@ class TestRunLqgBenchmark(unittest.TestCase):
         names = [r["name"] for r in result["rows"]]
         self.assertEqual(names, ["LQR (suggested Q/R)", "Output-weighted LQR",
                                  "Bryson's rule", "LQG (Kalman filter)",
+                                 "Loop transfer recovery (LTR)",
                                  "Implicit model-following", "Explicit model-following"])
-        implicit_row, explicit_row = result["rows"][4], result["rows"][5]
+        implicit_row, explicit_row = result["rows"][5], result["rows"][6]
         self.assertTrue(implicit_row["stable"])
         self.assertTrue(explicit_row["stable"])
         self.assertIn("K", implicit_row)
@@ -222,7 +229,7 @@ class TestRunLqgBenchmark(unittest.TestCase):
                                     R_diag_list=[[1, 1], [1, 1]])
         self.assertTrue(result["ok"], result.get("error"))
         names = [r["name"] for r in result["rows"]]
-        self.assertEqual(len(names), 6)
+        self.assertEqual(len(names), 7)
         self.assertTrue(any("Custom LQR 1" in n for n in names))
         self.assertTrue(any("Custom LQR 2" in n for n in names))
 

@@ -3,8 +3,9 @@ analog of pid_compare.py. Pure data/logic, no plotting (same convention
 pid_compare.py follows — cli_pid.py owns all matplotlib code; cli_lqg.py does too).
 
 Two comparisons, not one, because they answer different questions:
-  - compare_regulator_methods: LQR / OutputWeightedLQR / BrysonLQR / LQG,
-    same plant, same objective (regulate x to 0 efficiently) — directly
+  - compare_regulator_methods: LQR / OutputWeightedLQR / BrysonLQR / LQG /
+    LoopTransferRecovery, same plant, same objective (regulate x to 0
+    efficiently) — directly
     comparable on ISU/settling_2pct/pole_margin, the regulator-family
     metrics lqg_simulate.py already computes. Mirrors
     compare.compare_all_methods bundling all 9 PID methods behind one call.
@@ -33,6 +34,7 @@ from lqg_design_methods import LQR, OutputWeightedLQR, LQG, add_reference_tracki
 from lqg_bryson import BrysonLQR
 from lqg_implicit import ImplicitModelFollowing
 from lqg_explicit import ExplicitModelFollowing
+from lqg_ltr import LoopTransferRecovery
 from lqg_checks import checks_for_result
 from lqg_simulate import simulate_state_feedback, simulate_explicit_model_following, auto_t_end
 
@@ -46,16 +48,21 @@ class ComparisonRow:
 
 
 def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=1.0,
-                              Qw_scale=0.01, Rv_scale=0.1, Q_diag=None, R_diag=None,
+                              Qw_scale=0.01, Rv_scale=0.1, ltr_q=1e5, Q_diag=None, R_diag=None,
                               Q_diag_list=None, R_diag_list=None,
                               reference=None, t_end=None, dt=0.01) -> list:
     """LQR (suggested Q/R) / OutputWeightedLQR / BrysonLQR / LQG (suggested
-    Q/R + Qw/Rv), all simulated as a regulator response (x0=ones(nx)) on a
-    shared time axis sized to the slowest of the four — so their
-    trajectories can be overlaid on one plot. Returns a list of 4
-    ComparisonRow, plus one more per custom weighting given (see below), in
-    that fixed order (fixed four first, custom rows after, in the order
-    given).
+    Q/R + Qw/Rv) / LoopTransferRecovery (suggested Q/R, ltr_q), all
+    simulated as a regulator response (x0=ones(nx)) on a shared time axis
+    sized to the slowest of the five — so their trajectories can be
+    overlaid on one plot. Returns a list of 5 ComparisonRow, plus one more
+    per custom weighting given (see below), in that fixed order (fixed
+    five first, custom rows after, in the order given).
+
+    ltr_q: LoopTransferRecovery's recovery parameter for this bundled
+    comparison, which has no per-method UI to ask the caller for one —
+    defaults to 1e5, LTR.m's own largest swept value (see lqg_ltr.py),
+    "recovered enough" for a default.
 
     Q_diag/R_diag: optional custom weights (one value per state/input) --
     given together, adds a 5th "Custom LQR" row using LQR(plant,
@@ -94,6 +101,7 @@ def compare_regulator_methods(ex, x_max=None, u_max=None, Qy_scale=1.0, R_scale=
         ("Bryson's rule", BrysonLQR(plant, x_max=x_max_, u_max=u_max_).design()),
         ("LQG (Kalman filter)",
          LQG(plant, Q=Q, R=R, Qw=Qw_scale * np.eye(plant.nx), Rv=Rv_scale * np.eye(plant.ny)).design()),
+        ("Loop transfer recovery (LTR)", LoopTransferRecovery(plant, q=ltr_q).design()),
     ]
 
     if Q_diag is not None or R_diag is not None:
