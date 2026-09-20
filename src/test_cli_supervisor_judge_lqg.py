@@ -39,9 +39,9 @@ from supervisor_prompts_judge_lqg import JUDGE_SYSTEM_PROMPT_LQG
 import cli_supervisor_judge_lqg as cli
 
 
-def _args(api_key_anthropic=None, api_key_openai=None, api_key_gemini=None):
+def _args(api_key_anthropic=None, api_key_openai=None, api_key_gemini=None, log_file=None):
     return argparse.Namespace(api_key_anthropic=api_key_anthropic, api_key_openai=api_key_openai,
-                               api_key_gemini=api_key_gemini)
+                               api_key_gemini=api_key_gemini, log_file=log_file)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
