@@ -37,20 +37,25 @@ def format_row_text(row: dict) -> str:
     gains = row["gains"]
     _, Ti, Td = gains.to_textbook()
     Ti_str = f"{Ti:.6g} s" if np.isfinite(Ti) else "∞"
+
+    def _m(key):
+        val = row.get(key)
+        return f"{val:.3f}" if np.isfinite(row.get(key, float('nan'))) else "N/A"
+
     return (
         f"Method: {row['name']}\n"
         f"  Gains: Kp={gains.Kp:.6g}, Ki={gains.Ki:.6g}, Kd={gains.Kd:.6g}"
         f"  (Ti={Ti_str}, Td={Td:.6g} s)\n"
         f"  Metrics:\n"
-        f"    Overshoot:          {row.get('OS%') if np.isfinite(row.get('OS%', float('nan'))) else 'N/A'}\n"
-        f"    Settling Time (2%): {row.get('ts') if np.isfinite(row.get('ts', float('nan'))) else 'N/A'} s\n"
-        f"    IAE (Setpoint):     {row.get('IAE') if np.isfinite(row.get('IAE', float('nan'))) else 'N/A'}\n"
-        f"    IAE (Load):         {row.get('IAE_load') if np.isfinite(row.get('IAE_load', float('nan'))) else 'N/A'}\n"
-        f"    Peak Sensitivity Ms:{row.get('Ms') if np.isfinite(row.get('Ms', float('nan'))) else 'N/A'}\n"
-        f"    Peak Comp Sens Mt:  {row.get('Mt') if np.isfinite(row.get('Mt', float('nan'))) else 'N/A'}\n"
-        f"    Gain Margin GM:     {row.get('GM_dB') if np.isfinite(row.get('GM_dB', float('nan'))) else 'N/A'} dB\n"
-        f"    Phase Margin PM:    {row.get('PM_deg') if np.isfinite(row.get('PM_deg', float('nan'))) else 'N/A'} deg\n"
-        f"    Control Effort TV:  {row.get('u_tv') if np.isfinite(row.get('u_tv', float('nan'))) else 'N/A'}\n"
+        f"    Overshoot:          {_m('OS%')}\n"
+        f"    Settling Time (2%): {_m('ts')} s\n"
+        f"    IAE (Setpoint):     {_m('IAE')}\n"
+        f"    IAE (Load):         {_m('IAE_load')}\n"
+        f"    Peak Sensitivity Ms:{_m('Ms')}\n"
+        f"    Peak Comp Sens Mt:  {_m('Mt')}\n"
+        f"    Gain Margin GM:     {_m('GM_dB')} dB\n"
+        f"    Phase Margin PM:    {_m('PM_deg')} deg\n"
+        f"    Control Effort TV:  {_m('u_tv')}\n"
     )
 
 
@@ -146,18 +151,18 @@ def main():
         description="PIDTuner Command-Line Interface. Tunes controller for a plant and prints/plots metrics."
     )
     parser.add_argument(
-        "--plant",
+        "-p", "--plant",
         required=True,
         help="Plant symbolic transfer function, e.g. '1000/((s+1)(10s+1))'"
     )
     parser.add_argument(
-        "--L", "--delay",
+        "-L", "--L", "--delay",
         type=float,
         default=0.0,
         help="Plant dead time delay L (default: 0.0)"
     )
     parser.add_argument(
-        "--method",
+        "-m", "--method",
         default="all",
         choices=[
             "all", "pole_cancellation", "zn1", "zn2", "amigo",
@@ -165,6 +170,8 @@ def main():
         ],
         help="Tuning method (default: all)"
     )
+    # Note: --p1/--p2 below are long-form-only (pole-cancellation poles);
+    # they don't collide with the -p/--plant short flag above.
     parser.add_argument("--p1", type=float, help="Pole cancellation: pole 1")
     parser.add_argument("--p2", type=float, help="Pole cancellation: pole 2")
     parser.add_argument("--Kd", type=float, help="Pole cancellation: controller integrator gain Kd")
