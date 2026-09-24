@@ -782,7 +782,7 @@ def _build_response_fig(active):
                       marker="o", markersize=3, linestyle="none", alpha=0.7)
         ax_e.plot(entry.sim.t, entry.sim.e, color=entry.color, linewidth=1.2, label=entry.label)
 
-    ax_y.legend(loc="lower right", bbox_to_anchor=(1.02, 1.0), fontsize=8)
+    ax_y.legend(loc="lower right", bbox_to_anchor=(1.02, 1.0), fontsize=8, ncol=3)
     if saturated_any:
         ax_u.plot([], [], marker="o", markersize=3, linestyle="none", color="#666",
                   label="saturated (u at u_min/u_max)")
